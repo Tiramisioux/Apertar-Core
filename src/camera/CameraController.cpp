@@ -1323,6 +1323,10 @@ int rawBitDepthValue(RawBitDepth bitDepth)
 
 RawBitDepth storageRawBitDepthForSettings(const CaptureSettings &settings)
 {
+    // Clear HDR: libcamera hands over linear 16-bit samples in both sensor modes (the 12-bit mode is
+    // decompanded in the CFE, black 3200, values up to ~65000). Keeping only 12 bits would wrap the highs.
+    if (settings.clearHdr)
+        return RawBitDepth::Bits16;
     switch (normalizeRawBitDepth(settings.rawBitDepth)) {
     case 8: return RawBitDepth::Bits8;
     case 10: return RawBitDepth::Bits10;
