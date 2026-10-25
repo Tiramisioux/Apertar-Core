@@ -2684,8 +2684,26 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
     return 1000.0;
 }
 
-double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
-                                        bool clearHdr = false)
+// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
+std::mutex probedSensorModesMutex;
+std::vector<CameraController::SensorMode> probedSensorModes;
+bool sensorModesProbed = false;
+
+std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
+{
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    for (const auto &mode : probedSensorModes) {
+        if (mode.clearHdr == clearHdr && mode.bitDepth == bitDepth && mode.maxFps > 0 &&
+            resolutionMatches(mode.size, sensorSize.width, sensorSize.height))
+            return mode.maxFps;
+    }
+    return std::nullopt;
+}
+
+// Core's own ceiling per mode. sensorLimitKnown: the probe supplies the sensor's real
+// limit, so the ceiling no longer has to be safe at every link frequency.
+double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth,
+                                    bool clearHdr, bool sensorLimitKnown)
 {
     const Resolution normalized = normalizedResolutionForSensor(sensorFamily, requested);
 
@@ -2727,7 +2745,8 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
         break;
     case SensorFamily::Imx585:
         if (normalized.width == 3840 && normalized.height == 2160)
-            return clearHdr ? 25.0 : 30.0;  // Clear HDR doubles VMAX; 25 is the safe figure, not yet measured
+            // Clear HDR doubles VMAX: 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
+            return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
         if (isImx585Raw12CropResolution(normalized))
             return 60.0;
         if ((normalized.width == 1920 && normalized.height == 1080) ||
@@ -2739,6 +2758,15 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
     }
 
     return 120.0;
+}
+
+double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
+                                        bool clearHdr = false)
+{
+    const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
+    const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
+    const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
+    return probed ? std::min(table, *probed) : table;
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -5411,6 +5439,107 @@ bool applyImx585HdrControls(const CaptureSettings &settings, std::string *error)
                                  error);
 }
 
+// Every sensor mode with the frame rate libcamera allows for it, in both
+// wide_dynamic_range states: configure() each mode and read FrameDurationLimits,
+// as rpicam-apps' --list-cameras does. It needs the camera to itself and the only
+// CameraManager in the process, so it runs before the first session's.
+std::vector<CameraController::SensorMode> probeSensorModes()
+{
+    std::vector<CameraController::SensorMode> modes;
+    const auto startedAt = std::chrono::steady_clock::now();
+    const int subdevFd = openImx585Subdev();
+    const bool hasClearHdr = subdevFd >= 0;
+    if (subdevFd >= 0)
+        ::close(subdevFd);
+
+    for (const bool clearHdr : {false, true}) {
+        if (clearHdr && !hasClearHdr)
+            break;
+        std::string error;
+        if (!setSensorWideDynamicRange(clearHdr, &error)) {
+            std::cerr << "ApertarCore sensor probe: " << error << "\n";
+            break;
+        }
+        libcamera::CameraManager manager;
+        if (manager.start() != 0) {
+            std::cerr << "ApertarCore sensor probe: CameraManager failed to start\n";
+            break;
+        }
+        {
+            const auto cameras = manager.cameras();
+            const auto selected = std::find_if(cameras.begin(), cameras.end(), [](const auto &camera) {
+                return camera && camera->id().find("/usb") == std::string::npos;
+            });
+            const std::shared_ptr<libcamera::Camera> camera = selected != cameras.end() ? *selected
+                : cameras.empty() ? nullptr : cameras.front();
+            if (camera && camera->acquire() == 0) {
+                auto config = camera->generateConfiguration({libcamera::StreamRole::Raw});
+                if (config && config->size() > 0) {
+                    const libcamera::StreamFormats formats = config->at(0).formats();
+                    for (const auto &pixelFormat : formats.pixelformats()) {
+                        RawBitDepth depth;
+                        PixelPacking packing;
+                        BayerPattern pattern;
+                        if (!formatToRawView(pixelFormat, &depth, &packing, &pattern))
+                            continue;
+                        for (const auto &size : formats.sizes(pixelFormat)) {
+                            config->at(0).pixelFormat = pixelFormat;
+                            config->at(0).size = size;
+                            config->sensorConfig = libcamera::SensorConfiguration();
+                            config->sensorConfig->outputSize = size;
+                            config->sensorConfig->bitDepth = rawBitDepthValue(depth);
+                            if (config->validate() == libcamera::CameraConfiguration::Invalid ||
+                                config->at(0).size != size || camera->configure(config.get()) != 0)
+                                continue;
+
+                            CameraController::SensorMode mode;
+                            mode.format = pixelFormat.toString();
+                            mode.bitDepth = static_cast<uint32_t>(rawBitDepthValue(depth));
+                            mode.size = Resolution{size.width, size.height};
+                            mode.clearHdr = clearHdr;
+                            const auto &controls = camera->controls();
+                            if (const auto limits = controls.find(&libcamera::controls::FrameDurationLimits);
+                                limits != controls.end() && limits->second.min().get<int64_t>() > 0)
+                                mode.maxFps = std::round(1e8 / double(limits->second.min().get<int64_t>())) / 100.0;
+                            if (const auto crop = camera->properties().get(libcamera::properties::ScalerCropMaximum))
+                                mode.crop = crop->toString();
+                            modes.push_back(std::move(mode));
+                        }
+                    }
+                }
+                camera->release();
+            } else {
+                std::cerr << "ApertarCore sensor probe: no camera to acquire\n";
+            }
+        }
+        manager.stop();
+    }
+
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startedAt).count();
+    for (const auto &mode : modes)
+        std::cerr << "ApertarCore sensor mode: " << mode.format << " " << mode.size.toString()
+                  << (mode.clearHdr ? " clear_hdr" : " sdr") << " max_fps=" << mode.maxFps
+                  << " crop=" << (mode.crop.empty() ? "-" : mode.crop) << "\n";
+    std::cerr << "ApertarCore sensor probe: " << modes.size() << " modes in " << elapsedMs << " ms\n";
+    return modes;
+}
+
+void probeSensorModesOnce()
+{
+    {
+        std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+        if (sensorModesProbed)
+            return;
+        sensorModesProbed = true;
+    }
+    if (!boolEnvValue("APERTAR_SENSOR_PROBE", true))
+        return;
+    auto modes = probeSensorModes();
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    probedSensorModes = std::move(modes);
+}
+
 #endif
 
 } // namespace
@@ -5470,6 +5599,7 @@ public:
         bool derivedTuningApplied = false;
         std::shared_ptr<PreviewExposureReference> exposureReference;
 
+        probeSensorModesOnce();
         if (!setSensorWideDynamicRange(settings.clearHdr, error))
             return false;
         if (settings.clearHdr && !applyImx585HdrControls(settings, error))
@@ -8922,6 +9052,12 @@ std::string CameraController::sensorName() const
     if (!session_)
         return "Unknown";
     return sensorFamilyName(session_->sensorFamily());
+}
+
+std::vector<CameraController::SensorMode> CameraController::sensorModes() const
+{
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    return probedSensorModes;
 }
 
 bool CameraController::isRecording() const

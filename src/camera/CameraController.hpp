@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace apertar {
 
@@ -26,6 +27,15 @@ public:
     struct MediaWriteStatus {
         bool pending = false;
         uint64_t revision = 0;
+    };
+    // One sensor mode as libcamera configured it in the startup probe.
+    struct SensorMode {
+        std::string format;         // e.g. "SRGGB12_CSI2P"
+        uint32_t bitDepth = 0;
+        Resolution size{};
+        bool clearHdr = false;      // listed with wide_dynamic_range on
+        double maxFps = 0;          // from FrameDurationLimits after configure()
+        std::string crop;           // ScalerCropMaximum, sensor pixels
     };
 
     CameraController(EventCallback eventCallback, PreviewCallback previewCallback);
@@ -86,6 +96,7 @@ public:
     CameraState state() const;
     CaptureSettings settings() const;
     std::string sensorName() const;
+    std::vector<SensorMode> sensorModes() const;
     bool isRecording() const;
     std::string lastError() const;
     std::string recordingError() const;
