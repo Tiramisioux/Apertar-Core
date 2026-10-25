@@ -1,0 +1,6 @@
+# Out-of-tree builds live in ~/ApertarCore-build on the Pi; ignore in-tree ones.
+build/
+
+# Editor state differs per machine (Mac vs Pi).
+.vscode/
+*.code-workspace
