@@ -169,6 +169,11 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"preview_exposure_reference\":" << previewExposureReferenceJson(settings.previewExposureReference.get())
         << ",\"tuning_file\":\"" << escapeJson(settings.tuningFile) << "\""
         << ",\"raw_bit_depth\":" << settings.rawBitDepth
+        << ",\"clear_hdr\":" << (settings.clearHdr ? "true" : "false")
+        << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
+        << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
+        << ",\"hdr_blend\":" << settings.hdrBlend
+        << ",\"hdr_gain_adder\":" << settings.hdrGainAdder
         << ",\"h264_resolution\":\"" << (settings.h264Resolution.width > 0 && settings.h264Resolution.height > 0
                                              ? settings.h264Resolution.toString()
                                              : "match") << "\""
@@ -246,6 +251,8 @@ uint32_t normalizeRawBitDepth(uint32_t bitDepth)
         return 8u;
     if (bitDepth == 10)
         return 10u;
+    if (bitDepth == 16)
+        return 16u;     // a legal value; which sensor and mode may use it is decided per sensor
     return 12u;
 }
 
@@ -379,7 +386,8 @@ bool isImx585FullHdCropResolution(const Resolution &resolution)
 bool isImx585HighResolutionAlias(const Resolution &resolution)
 {
     return resolutionMatches(resolution, 3840, 2160) ||
-           resolutionMatches(resolution, 3856, 2180);
+           resolutionMatches(resolution, 3856, 2180) ||
+           resolutionMatches(resolution, 3840, 2200);   // the 16-bit Clear HDR readout counts as 4K
 }
 
 bool isImx585Raw12CropResolution(const Resolution &resolution)
@@ -698,6 +706,16 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.tuningFile = normalizeTuningFilePath(value);
             else if (key == "raw_bit_depth")
                 settings.rawBitDepth = normalizeRawBitDepth(static_cast<uint32_t>(std::stoul(value)));
+            else if (key == "clear_hdr")
+                settings.clearHdr = (value == "true" || value == "1");
+            else if (key == "hdr_threshold_high")
+                settings.hdrThresholdHigh = std::min<uint32_t>(4095u, static_cast<uint32_t>(std::stoul(value)));
+            else if (key == "hdr_threshold_low")
+                settings.hdrThresholdLow = std::min<uint32_t>(4095u, static_cast<uint32_t>(std::stoul(value)));
+            else if (key == "hdr_blend")
+                settings.hdrBlend = std::min<uint32_t>(7u, static_cast<uint32_t>(std::stoul(value)));
+            else if (key == "hdr_gain_adder")
+                settings.hdrGainAdder = std::min<uint32_t>(5u, static_cast<uint32_t>(std::stoul(value)));
             else if (key == "h264_width")
                 settings.h264Resolution.width = static_cast<uint32_t>(std::stoul(value));
             else if (key == "h264_height")
@@ -762,6 +780,11 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
     output << prefix << "prores_profile=" << toString(s.proresProfile) << '\n';
     output << prefix << "prores_color_profile=" << toString(s.proresColorProfile) << '\n';
+    output << prefix << "clear_hdr=" << (s.clearHdr ? "true" : "false") << '\n';
+    output << prefix << "hdr_threshold_high=" << s.hdrThresholdHigh << '\n';
+    output << prefix << "hdr_threshold_low=" << s.hdrThresholdLow << '\n';
+    output << prefix << "hdr_blend=" << s.hdrBlend << '\n';
+    output << prefix << "hdr_gain_adder=" << s.hdrGainAdder << '\n';
     output << prefix << "cdng_preview_color_profile=" << toString(s.cdngPreviewColorProfile) << '\n';
     output << prefix << "raw_bit_depth=" << s.rawBitDepth << '\n';
     output << prefix << "h264_width=" << s.h264Resolution.width << '\n';
@@ -1303,6 +1326,7 @@ RawBitDepth storageRawBitDepthForSettings(const CaptureSettings &settings)
     switch (normalizeRawBitDepth(settings.rawBitDepth)) {
     case 8: return RawBitDepth::Bits8;
     case 10: return RawBitDepth::Bits10;
+    case 16: return RawBitDepth::Bits16;
     default: return RawBitDepth::Bits12;
     }
 }
@@ -2185,6 +2209,8 @@ libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
         return libcamera::formats::SRGGB8;
     case 10:
         return libcamera::formats::SRGGB10_CSI2P;
+    case 16:
+        return libcamera::formats::SRGGB16;
     default:
         return libcamera::formats::SRGGB12_CSI2P;
     }
@@ -2259,6 +2285,10 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
         } else {
             selection.rawResolution = Resolution{ 1920, 1080 };
         }
+        // The only 16-bit (Clear HDR) sensor mode is 3840x2200: 20 optical-black rows on top,
+        // cropped away by shouldUseRequestedActiveRawCrop().
+        if (selection.bitDepth == 16 && resolutionMatches(selection.rawResolution, 3840, 2160))
+            selection.rawResolution = Resolution{ 3840, 2200 };
         selection.dngModel = "IMX585-AAQJ1";
         break;
     case SensorFamily::Unknown:
@@ -2626,7 +2656,8 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
     return 1000.0;
 }
 
-double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12)
+double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
+                                        bool clearHdr = false)
 {
     const Resolution normalized = normalizedResolutionForSensor(sensorFamily, requested);
 
@@ -2668,7 +2699,7 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
         break;
     case SensorFamily::Imx585:
         if (normalized.width == 3840 && normalized.height == 2160)
-            return 30.0;
+            return clearHdr ? 25.0 : 30.0;  // Clear HDR doubles VMAX; 25 is the safe figure, not yet measured
         if (isImx585Raw12CropResolution(normalized))
             return 60.0;
         if ((normalized.width == 1920 && normalized.height == 1080) ||
@@ -2682,7 +2713,7 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
     return 120.0;
 }
 
-uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth)
+uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
 {
     const uint32_t bitDepth = normalizeRawBitDepth(requestedBitDepth);
 
@@ -2693,8 +2724,13 @@ uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t reque
             return bitDepth;
         break;
     case SensorFamily::Imx294:
+        if (bitDepth == 10 || bitDepth == 12)
+            return bitDepth;
+        break;
     case SensorFamily::Imx585:
         if (bitDepth == 10 || bitDepth == 12)
+            return bitDepth;
+        if (bitDepth == 16 && clearHdr)     // the 16-bit sensor mode exists only with Clear HDR on
             return bitDepth;
         break;
     case SensorFamily::Unknown:
@@ -2713,6 +2749,7 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     }
     if (!settings.photoModeEnabled && isProcessedVideoFormat(settings.recordingFormat)) {
         settings.rawBitDepth = 10;
+        settings.clearHdr = false;      // ProRes and H.264 are 10-bit by rule
     }
 
     if (sensorFamily == SensorFamily::Unknown) {
@@ -2721,15 +2758,22 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     }
 
     settings.resolution = normalizedResolutionForSensor(sensorFamily, settings.resolution);
+    if (sensorFamily != SensorFamily::Imx585)
+        settings.clearHdr = false;      // Clear HDR is an IMX585 feature
     if (!settings.photoModeEnabled && isProcessedVideoFormat(settings.recordingFormat))
         settings.rawBitDepth = 10;
     else
-        settings.rawBitDepth = supportedRawBitDepthForSensor(sensorFamily, settings.rawBitDepth);
+        settings.rawBitDepth = supportedRawBitDepthForSensor(sensorFamily, settings.rawBitDepth, settings.clearHdr);
+
+    // The only 16-bit sensor mode is 3840x2200, which we present as 4K (3840x2160 after the crop).
+    if (sensorFamily == SensorFamily::Imx585 && settings.rawBitDepth == 16)
+        settings.resolution = Resolution{ 3840, 2160 };
 
     if (sensorFamily == SensorFamily::Imx294)
         settings.resolution = normalizedImx294ResolutionForBitDepth(settings.resolution, settings.rawBitDepth);
 
-    double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth);
+    double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
+                                                     settings.clearHdr);
     if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
         settings.recordingFormat == RecordingFormat::Cdng &&
         settings.cdngCompression == CdngCompression::Uncompressed) {
@@ -2853,8 +2897,9 @@ bool shouldUseRequestedActiveRawCrop(SensorFamily sensorFamily,
                                      uint32_t configuredWidth,
                                      uint32_t configuredHeight)
 {
+    const bool imx585Clear16 = sensorFamily == SensorFamily::Imx585 && settings.rawBitDepth == 16;
     if (sensorFamily != SensorFamily::Imx477 && sensorFamily != SensorFamily::Imx577 &&
-        sensorFamily != SensorFamily::Imx294)
+        sensorFamily != SensorFamily::Imx294 && !imx585Clear16)
         return false;
     if (settings.resolution.width == 0 || settings.resolution.height == 0)
         return false;
@@ -5225,6 +5270,113 @@ private:
 
 #endif
 
+#if APERTARCORE_HAS_LIBCAMERA
+
+// Returns an open descriptor for the imx585 subdev, or -1.
+int openImx585Subdev()
+{
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
+        if (ec)
+            break;
+        const std::string node = entry.path().filename().string();
+        if (node.rfind("v4l-subdev", 0) != 0)
+            continue;
+        std::ifstream nameFile(entry.path() / "name");
+        std::string name;
+        std::getline(nameFile, name);
+        if (name.find("imx585") == std::string::npos)
+            continue;
+        return ::open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
+    }
+    return -1;
+}
+
+// Writes wide_dynamic_range and reads it back. Must run before libcamera's
+// CameraManager starts: libcamera reads the sensor mode list at that point.
+bool setSensorWideDynamicRange(bool enabled, std::string *error)
+{
+    const int fd = openImx585Subdev();
+    if (fd < 0) {
+        if (enabled && error)
+            *error = "No imx585 subdev found for Clear HDR.";
+        return !enabled;    // no WDR-capable sensor: fine when Clear HDR is off
+    }
+
+    v4l2_control ctrl{};
+    ctrl.id = V4L2_CID_WIDE_DYNAMIC_RANGE;
+    ctrl.value = enabled ? 1 : 0;
+    bool ok = false;
+    for (int attempt = 0; attempt < 4 && !ok; ++attempt) {
+        // EBUSY while the previous stream is still winding down.
+        if (::ioctl(fd, VIDIOC_S_CTRL, &ctrl) == 0) {
+            v4l2_control check{};
+            check.id = V4L2_CID_WIDE_DYNAMIC_RANGE;
+            ok = ::ioctl(fd, VIDIOC_G_CTRL, &check) == 0 && check.value == ctrl.value;
+        }
+        if (!ok)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ::close(fd);
+    if (!ok && error)
+        *error = "imx585 did not accept wide_dynamic_range=" + std::to_string(ctrl.value);
+    return ok;
+}
+
+constexpr uint32_t kImx585CidBase         = V4L2_CID_USER_BASE + 0x2000;   // imx585.c:31
+constexpr uint32_t kImx585CidHdrThreshold = kImx585CidBase + 0;            // u16[2] {high, low}
+constexpr uint32_t kImx585CidHdrBlend     = kImx585CidBase + 1;            // menu 0..7
+constexpr uint32_t kImx585CidHdrGainAdder = kImx585CidBase + 5;            // menu 0..5
+
+// Writes one imx585 ext control: a scalar, or a u16[2] pair when `pair` is set.
+bool writeImx585ExtControl(uint32_t id, int32_t value, const uint16_t *pair, std::string *error)
+{
+    const int fd = openImx585Subdev();
+    if (fd < 0) {
+        if (error)
+            *error = "No imx585 subdev found for HDR controls.";
+        return false;
+    }
+    uint16_t buf[2] = {0, 0};
+    v4l2_ext_control control{};
+    control.id = id;
+    if (pair) {
+        buf[0] = pair[0];
+        buf[1] = pair[1];
+        control.size = sizeof(buf);
+        control.p_u16 = buf;
+    } else {
+        control.value = value;
+    }
+    v4l2_ext_controls controls{};
+    controls.which = V4L2_CTRL_WHICH_CUR_VAL;
+    controls.count = 1;
+    controls.controls = &control;
+    const bool ok = ::ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0;
+    const int savedErrno = errno;
+    ::close(fd);
+    if (!ok && error)
+        *error = "imx585 rejected HDR control 0x" + [&] {
+            std::ostringstream hex;
+            hex << std::hex << id;
+            return hex.str();
+        }() + ": " + std::strerror(savedErrno);
+    return ok;
+}
+
+// Pushes the persisted merge knobs to the sensor. The driver caches them and re-applies at every stream start.
+bool applyImx585HdrControls(const CaptureSettings &settings, std::string *error)
+{
+    const uint16_t pair[2] = {static_cast<uint16_t>(settings.hdrThresholdHigh),
+                              static_cast<uint16_t>(settings.hdrThresholdLow)};
+    return writeImx585ExtControl(kImx585CidHdrThreshold, 0, pair, error) &&
+           writeImx585ExtControl(kImx585CidHdrBlend, static_cast<int32_t>(settings.hdrBlend), nullptr, error) &&
+           writeImx585ExtControl(kImx585CidHdrGainAdder, static_cast<int32_t>(settings.hdrGainAdder), nullptr,
+                                 error);
+}
+
+#endif
+
 } // namespace
 
 class CameraController::CameraSession {
@@ -5266,13 +5418,26 @@ public:
         const bool automaticTuning = settings.tuningFile.empty();
         const auto tuningPipeline = tuning::nativePipeline();
         const auto tuningDirectories = tuning::defaultDirectories(tuningPipeline);
+        // Automatic tuning only: a tuning file the user picked is used as given.
+        const auto automaticTuningPath = [&](std::string path) {
+            return settings.clearHdr ? tuning::clearHdrVariant(path, tuningPipeline) : path;
+        };
         std::string tuningPath = automaticTuning
-            ? tuning::preselectDefault(tuningDirectories, tuningPipeline) : settings.tuningFile;
+            ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline))
+            : settings.tuningFile;
+        if (automaticTuning && settings.clearHdr && tuningPath.find("_clearHDR") == std::string::npos)
+            std::cerr << "ApertarCore Clear HDR tuning variant (<sensor>_clearHDR.json) not found; "
+                         "the default tuning may give a black frame.\n";
         applyProcessTuningFile(tuningPath);
         const auto ispProfile = activeIspColorProfile(settings);
         const bool logPreview = ispProfile != ProresColorProfile::Standard;
         bool derivedTuningApplied = false;
         std::shared_ptr<PreviewExposureReference> exposureReference;
+
+        if (!setSensorWideDynamicRange(settings.clearHdr, error))
+            return false;
+        if (settings.clearHdr && !applyImx585HdrControls(settings, error))
+            return false;
 
         // Usually one pass: sysfs identifies the sensor before the IPA starts.
         // Multiple sensors need one restart after the actual camera is selected.
@@ -5322,8 +5487,9 @@ public:
             if (automaticTuning) {
                 const auto model = camera_->properties().get(libcamera::properties::Model);
                 const std::string defaultPath = model
-                    ? tuning::defaultForSensor(std::string(*model), tuningDirectories, tuningPipeline,
-                                               monochromeSensor_) : std::string{};
+                    ? automaticTuningPath(tuning::defaultForSensor(std::string(*model), tuningDirectories,
+                                                                    tuningPipeline, monochromeSensor_))
+                    : std::string{};
                 if (defaultPath != tuningPath) {
                     if (attempt != 0 || derivedTuningApplied) {
                         setError(error, "Camera selection changed while resolving default tuning.");
@@ -6256,7 +6422,8 @@ private:
                 };
                 const double maxFps = maximumSupportedFpsForResolution(sensorFamily_,
                                                                        effectiveSettings.resolution,
-                                                                       effectiveSettings.rawBitDepth);
+                                                                       effectiveSettings.rawBitDepth,
+                                                                       effectiveSettings.clearHdr);
                 if (effectiveSettings.fps > maxFps)
                     effectiveSettings.fps = maxFps;
                 settings_ = effectiveSettings;
@@ -8147,6 +8314,133 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
     return applySettingsLocked(next, true);
 }
 
+bool CameraController::setClearHdr(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_) {
+        setErrorLocked("Clear HDR changes are blocked while recording.");
+        return false;
+    }
+
+    const SensorFamily sensorFamily = (!simulateCamera_ && session_)
+        ? session_->sensorFamily()
+        : SensorFamily::Unknown;
+    CaptureSettings next = settings_;
+    next.clearHdr = enabled;
+    next = sanitizeSettingsForSensor(next, sensorFamily);
+    if (settings_.clearHdr == next.clearHdr && settings_.rawBitDepth == next.rawBitDepth) {
+        lastError_.clear();
+        emitSettingsEventLocked();
+        return true;
+    }
+
+    return applySettingsLocked(next, true);
+}
+
+namespace {
+
+const char *hdrKnobRefusal(const CaptureSettings &settings, bool recording)
+{
+    if (recording)
+        return "Clear HDR settings are blocked while recording.";
+    if (!settings.clearHdr)
+        return "Clear HDR settings require Clear HDR to be on.";
+    return nullptr;
+}
+
+} // namespace
+
+// Commits the knob change, then pushes it to the sensor. A failed sensor write keeps the stored value,
+// which is re-applied at the next camera start.
+bool CameraController::commitHdrKnobsLocked(const CaptureSettings &next)
+{
+    lastError_.clear();
+    if (!applySettingsLocked(next, false))
+        return false;
+#if APERTARCORE_HAS_LIBCAMERA
+    if (!simulateCamera_ && session_) {
+        std::string error;
+        if (!applyImx585HdrControls(settings_, &error)) {
+            setErrorLocked(error);
+            return false;
+        }
+    }
+#endif
+    return true;
+}
+
+bool CameraController::setHdrThresholdHigh(uint32_t value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (const char *refusal = hdrKnobRefusal(settings_, recording_)) {
+        setErrorLocked(refusal);
+        return false;
+    }
+    if (value > 4095) {
+        setErrorLocked("HDR high threshold must be 0-4095.");
+        return false;
+    }
+    if (value < settings_.hdrThresholdLow) {
+        setErrorLocked("HDR high threshold cannot be below the low threshold.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.hdrThresholdHigh = value;
+    return commitHdrKnobsLocked(next);
+}
+
+bool CameraController::setHdrThresholdLow(uint32_t value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (const char *refusal = hdrKnobRefusal(settings_, recording_)) {
+        setErrorLocked(refusal);
+        return false;
+    }
+    if (value > 4095) {
+        setErrorLocked("HDR low threshold must be 0-4095.");
+        return false;
+    }
+    if (value > settings_.hdrThresholdHigh) {
+        setErrorLocked("HDR low threshold cannot be above the high threshold.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.hdrThresholdLow = value;
+    return commitHdrKnobsLocked(next);
+}
+
+bool CameraController::setHdrBlend(uint32_t value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (const char *refusal = hdrKnobRefusal(settings_, recording_)) {
+        setErrorLocked(refusal);
+        return false;
+    }
+    if (value > 7) {
+        setErrorLocked("HDR blend must be 0-7.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.hdrBlend = value;
+    return commitHdrKnobsLocked(next);
+}
+
+bool CameraController::setHdrGainAdder(uint32_t value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (const char *refusal = hdrKnobRefusal(settings_, recording_)) {
+        setErrorLocked(refusal);
+        return false;
+    }
+    if (value > 5) {
+        setErrorLocked("HDR gain adder must be 0-5.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.hdrGainAdder = value;
+    return commitHdrKnobsLocked(next);
+}
+
 bool CameraController::setH264Resolution(Resolution resolution)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -8660,6 +8954,7 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
 {
     requiresReconfigure |= nextSettings.photoModeEnabled != settings_.photoModeEnabled;
     requiresReconfigure |= activeIspColorProfile(nextSettings) != activeIspColorProfile(settings_);
+    requiresReconfigure |= nextSettings.clearHdr != settings_.clearHdr;
     if (!nextSettings.photoModeEnabled) nextSettings.timelapseExposureLimitUs = 0;
     if (nextSettings.timelapseExposureLimitUs)
         nextSettings.shutterUs = std::min(nextSettings.shutterUs, nextSettings.timelapseExposureLimitUs);
@@ -8745,6 +9040,7 @@ void CameraController::restoreModeGeometryLocked(CaptureSettings &next) const
     if (!saved) saved = &fallback;
     next.resolution = saved->resolution;
     next.rawBitDepth = saved->rawBitDepth;
+    next.clearHdr = saved->clearHdr;
     next.fps = saved->fps;
 }
 

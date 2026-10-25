@@ -1037,6 +1037,8 @@ void writeDngRowBytes(const RawFrameView &frame,
             unpackPispCompressedRowToPacked8(src, dst, frame.width);
         else if (layout.bitDepth == RawBitDepth::Bits10)
             unpackPispCompressedRowToPacked10(src, dst, frame.width);
+        else if (layout.bitDepth == RawBitDepth::Bits16)
+            CdngEncoder::decodePispRowToMsb16(src, reinterpret_cast<uint16_t *>(dst), frame.width);
         else
             unpackPispCompressedRowToPacked12(src, dst, frame.width);
     } else if (frame.bitDepth == RawBitDepth::Bits16) {
@@ -1818,10 +1820,18 @@ CdngEncoder::EncodedRawLayout CdngEncoder::preparePispCompressedLayout(const Raw
         frame.bitDepth != RawBitDepth::Bits10 &&
         frame.bitDepth != RawBitDepth::Bits12 &&
         frame.bitDepth != RawBitDepth::Bits16) {
-        throw std::runtime_error("PiSP COMP1 conversion supports only 8-bit, 10-bit, and 12-bit storage.");
+        throw std::runtime_error("PiSP COMP1 conversion supports only 8-bit, 10-bit, 12-bit, and 16-bit storage.");
     }
 
     EncodedRawLayout layout;
+    if (frame.bitDepth == RawBitDepth::Bits16) {
+        // Clear HDR 16-bit: expand COMP1 to unpacked 16-bit samples.
+        layout.bitDepth = RawBitDepth::Bits16;
+        layout.packing = PixelPacking::Unpacked;
+        layout.rowBytes = static_cast<size_t>(frame.width) * 2u;
+        layout.byteCount = static_cast<uint64_t>(layout.rowBytes) * frame.height;
+        return layout;
+    }
     // PiSP COMP1 expands through a 16-bit working domain. The frame view carries
     // the selected storage depth so the saved DNG matches the camera bit-depth mode.
     if (frame.bitDepth == RawBitDepth::Bits8)

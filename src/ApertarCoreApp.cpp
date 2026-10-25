@@ -198,6 +198,11 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"cdng_preview_color_profile\":\"" << toString(settings.cdngPreviewColorProfile) << "\""
         << ",\"preview_exposure_reference\":" << previewExposureReferenceJson(settings.previewExposureReference.get())
         << ",\"tuning_file\":\"" << escapeJson(settings.tuningFile) << "\""
+        << ",\"clear_hdr\":" << (settings.clearHdr ? "true" : "false")
+        << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
+        << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
+        << ",\"hdr_blend\":" << settings.hdrBlend
+        << ",\"hdr_gain_adder\":" << settings.hdrGainAdder
         << ",\"raw_bit_depth\":" << settings.rawBitDepth
         << ",\"h264_resolution\":\"" << (settings.h264Resolution.width > 0 && settings.h264Resolution.height > 0
                                              ? settings.h264Resolution.toString()
@@ -874,6 +879,8 @@ uint32_t parseRawBitDepthValue(const std::string &value)
     }
     if (digits == "8")
         return 8u;
+    if (digits == "16")
+        return 16u;
     return digits == "10" ? 10u : 12u;
 }
 
@@ -881,6 +888,8 @@ std::string formatRawBitDepthValue(uint32_t value)
 {
     if (value == 8)
         return "8-bit";
+    if (value == 16)
+        return "16-bit";
     return value == 10 ? "10-bit" : "12-bit";
 }
 
@@ -4777,6 +4786,8 @@ double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::st
             return 8.0;
         if (settings.rawBitDepth == 10)
             return 10.0;
+        if (settings.rawBitDepth == 16)
+            return 16.0;
         return 12.0;
     };
 
@@ -7882,6 +7893,11 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"cdng_preview_color_profile\":\"" << toString(settings.cdngPreviewColorProfile) << "\""
         << ",\"preview_exposure_reference\":" << previewExposureReferenceJson(settings.previewExposureReference.get())
         << ",\"tuning_file\":\"" << escapeJson(settings.tuningFile) << "\""
+        << ",\"clear_hdr\":" << (settings.clearHdr ? "true" : "false")
+        << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
+        << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
+        << ",\"hdr_blend\":" << settings.hdrBlend
+        << ",\"hdr_gain_adder\":" << settings.hdrGainAdder
         << ",\"raw_bit_depth\":" << settings.rawBitDepth
         << ",\"h264_resolution\":\"" << (settings.h264Resolution.width > 0 && settings.h264Resolution.height > 0
                                              ? settings.h264Resolution.toString()
@@ -9213,7 +9229,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, "\"pong\":true");
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -9397,7 +9413,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (command.name == "set_raw_bit_depth") {
         uint32_t bitDepth = 12;
         if (const auto value = command.number("value")) {
-            bitDepth = *value == 8.0 ? 8u : (*value == 10.0 ? 10u : 12u);
+            bitDepth = *value == 8.0 ? 8u : (*value == 10.0 ? 10u : (*value == 16.0 ? 16u : 12u));
         } else if (const auto value = command.string("value")) {
             bitDepth = parseRawBitDepthValue(*value);
         } else {
@@ -9405,6 +9421,38 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         }
 
         return camera_.setRawBitDepth(bitDepth)
+            ? okReply(command.id, settingsBody(camera_.settings()))
+            : errorReply(command.id, camera_.lastError());
+    }
+
+    if (command.name == "set_clear_hdr") {
+        const auto enabled = command.string("enabled");
+        if (!enabled)
+            return errorReply(command.id, "set_clear_hdr requires enabled.");
+        return camera_.setClearHdr(*enabled == "true" || *enabled == "1")
+            ? okReply(command.id, settingsBody(camera_.settings()))
+            : errorReply(command.id, camera_.lastError());
+    }
+
+    struct HdrKnobCommand {
+        const char *name;
+        bool (CameraController::*setter)(uint32_t);
+    };
+    static const HdrKnobCommand kHdrKnobCommands[] = {
+        {"set_hdr_threshold_high", &CameraController::setHdrThresholdHigh},
+        {"set_hdr_threshold_low", &CameraController::setHdrThresholdLow},
+        {"set_hdr_blend", &CameraController::setHdrBlend},
+        {"set_hdr_gain_adder", &CameraController::setHdrGainAdder},
+    };
+    for (const HdrKnobCommand &knob : kHdrKnobCommands) {
+        if (command.name != knob.name)
+            continue;
+        const auto value = command.number("value");
+        if (!value)
+            return errorReply(command.id, std::string(knob.name) + " requires value.");
+        if (*value < 0.0)
+            return errorReply(command.id, std::string(knob.name) + " cannot be negative.");
+        return (camera_.*knob.setter)(static_cast<uint32_t>(*value))
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
     }
@@ -10334,7 +10382,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         }
         if (const auto value = command.string("cameraRawBitDepth")) {
             const auto bits = parseRawBitDepthValue(*value);
-            if (bits != 8 && bits != 10 && bits != 12)
+            if (bits != 8 && bits != 10 && bits != 12 && bits != 16)
                 return errorReply(command.id, "Invalid preset bit depth.");
             presetSettings.rawBitDepth = bits;
         }

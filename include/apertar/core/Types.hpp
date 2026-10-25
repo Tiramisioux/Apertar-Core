@@ -150,6 +150,13 @@ struct CaptureSettings {
     std::shared_ptr<const PreviewExposureReference> previewExposureReference; // Active ISP, not saved settings.
     std::string tuningFile;
     uint32_t rawBitDepth = 12;
+    bool clearHdr = false;
+    // Clear HDR merge knobs (IMX585). Blend 5 and gain adder 1 are Cinemate's measured operating point;
+    // the driver's own default of blend 0 gives a flat black-pedestal picture.
+    uint32_t hdrThresholdHigh = 4095;
+    uint32_t hdrThresholdLow = 0;
+    uint32_t hdrBlend = 5;
+    uint32_t hdrGainAdder = 1;
     Resolution h264Resolution{0, 0};
     TimecodeMode timecodeMode = TimecodeMode::FreeRun;
     AutofocusMode autofocusMode = AutofocusMode::Continuous;

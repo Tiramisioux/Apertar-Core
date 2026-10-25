@@ -55,6 +55,11 @@ public:
     bool setCdngPreviewColorProfile(ProresColorProfile profile);
     bool setTuningFile(const std::string &path);
     bool setRawBitDepth(uint32_t bitDepth);
+    bool setClearHdr(bool enabled);
+    bool setHdrThresholdHigh(uint32_t value);
+    bool setHdrThresholdLow(uint32_t value);
+    bool setHdrBlend(uint32_t value);
+    bool setHdrGainAdder(uint32_t value);
     bool setH264Resolution(Resolution resolution);
     bool setTimecodeMode(TimecodeMode mode);
     bool setAutofocusMode(AutofocusMode mode);
@@ -90,6 +95,7 @@ private:
     class CameraSession;
 
     bool applySettingsLocked(CaptureSettings nextSettings, bool requiresReconfigure, bool commit = true);
+    bool commitHdrKnobsLocked(const CaptureSettings &next);
     void persistSettingsLocked();
     void restoreModeGeometryLocked(CaptureSettings &next) const;
     bool validateResolution(Resolution resolution);

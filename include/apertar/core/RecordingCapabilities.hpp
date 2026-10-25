@@ -73,6 +73,9 @@ inline const char *unsupportedRecordingSettings(const CaptureSettings &settings,
         return caps.rawRecording
             ? "RAW compression requires Raspberry Pi 5-class hardware. Use uncompressed cDNG or MLV."
             : "RAW compression is not available on this board. Use H.264.";
+    if (!settings.photoModeEnabled && settings.recordingFormat == RecordingFormat::LossyDng &&
+        settings.clearHdr && settings.rawBitDepth == 16)
+        return "Lossy cDNG does not support 16-bit Clear HDR. Use lossless cDNG or MLV, or switch to 12-bit.";
     return nullptr;
 }
 

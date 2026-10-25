@@ -1,5 +1,6 @@
 #include "mlv/MlvEncoder.hpp"
 #include "audio/RecordingClock.hpp"
+#include "cdng/CdngEncoder.hpp"
 #include "color/ColorProfileConfig.hpp"
 
 #include <algorithm>
@@ -840,9 +841,13 @@ MlvEncoder::RawLayout MlvEncoder::prepareRawLayout(const RawFrameView &frame) co
             layout.bitDepth = RawBitDepth::Bits8;
         else if (frame.bitDepth == RawBitDepth::Bits10)
             layout.bitDepth = RawBitDepth::Bits10;
+        else if (frame.bitDepth == RawBitDepth::Bits16)
+            layout.bitDepth = RawBitDepth::Bits16;
         else
             layout.bitDepth = RawBitDepth::Bits12;
-        layout.rowBytes = packedRowBytes(frame.width, layout.bitDepth);
+        layout.rowBytes = layout.bitDepth == RawBitDepth::Bits16
+            ? frame.width * 2u
+            : packedRowBytes(frame.width, layout.bitDepth);
     } else {
         layout.bitDepth = frame.bitDepth;
         layout.rowBytes = frame.bitDepth == RawBitDepth::Bits16
@@ -896,6 +901,8 @@ bool MlvEncoder::writeRawPayload(const RawFrameView &frame)
                 unpackPispCompressedRowToMlvRaw8(src, dst, frame.width);
             else if (rawLayout_.bitDepth == RawBitDepth::Bits10)
                 unpackPispCompressedRowToMlvRaw10(src, dst, frame.width);
+            else if (rawLayout_.bitDepth == RawBitDepth::Bits16)
+                CdngEncoder::decodePispRowToMsb16(src, reinterpret_cast<uint16_t *>(dst), frame.width);
             else
                 unpackPispCompressedRowToMlvRaw12(src, dst, frame.width);
         } else if (frame.packing == PixelPacking::Csi2Packed) {

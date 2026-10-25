@@ -180,6 +180,23 @@ inline std::string defaultForSensor(const std::string &model,
     return {};
 }
 
+// Clear HDR needs its own tuning: the stock IMX585 file carries an rpi.hdr algorithm that pins exposure and
+// gain to the IPA defaults in Clear HDR, which gives a black-level frame. The variant is the same file
+// without it, named <sensor>_clearHDR.json beside the default. Returns the base path when none exists.
+inline std::string clearHdrVariant(const std::string &basePath, Pipeline pipeline)
+{
+    if (basePath.empty())
+        return basePath;
+    const std::filesystem::path base(basePath);
+    if (base.extension() != ".json" || base.stem().string().ends_with("_clearHDR"))
+        return basePath;
+    const auto variant = base.parent_path() / (base.stem().string() + "_clearHDR.json");
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(variant, ec) || ec || !compatibleFile(variant, pipeline))
+        return basePath;
+    return variant.string();
+}
+
 // Subdevice names are available before CameraManager loads its IPA tuning file.
 // Only preselect a unique candidate; verify against the selected camera afterward.
 inline std::string preselectDefault(const std::vector<std::filesystem::path> &directories,
