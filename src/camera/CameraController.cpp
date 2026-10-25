@@ -6519,8 +6519,11 @@ private:
 
         allocator_ = std::make_unique<libcamera::FrameBufferAllocator>(camera_);
         const bool cachedProres = !settings_.photoModeEnabled && settings_.recordingFormat == RecordingFormat::Prores && allocateCachedProresBuffers();
+        // Clear HDR delivers unpacked 16-bit raw. libcamera byte-swaps it and computes
+        // raw stats on the CPU every frame, which is too slow on the CFE's uncached buffers.
         const bool cachedRaw = rawStream_ && recordingCapabilities().rawCompression &&
-            rawStreamInfo_.packing == PixelPacking::PispCompressed1 &&
+            (rawStreamInfo_.packing == PixelPacking::PispCompressed1 ||
+             (settings_.clearHdr && rawStreamInfo_.packing == PixelPacking::Unpacked)) &&
             boolEnvValue("APERTAR_RAW_CACHED_DMABUF", true) &&
             allocateCachedBuffers(rawStream_, cachedRawBuffers_, "RAW");
         if (allocator_->allocate(previewStream_) < 0 ||
