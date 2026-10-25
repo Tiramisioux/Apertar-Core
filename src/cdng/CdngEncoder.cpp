@@ -1217,10 +1217,10 @@ void CdngEncoder::writeDngFile(const std::string &path,
     requireFrame(frame);
     const bool monochrome = frame.bayerPattern == BayerPattern::Monochrome;
 
+    // The table is independent of the compression: lossy cDNG and Clear HDR 12-bit both write one.
     if (!metadata.linearizationTable.empty() &&
-        (metadata.compression != CdngCompression::LosslessJpeg ||
-         metadata.linearizationTable.size() != (size_t{1} << bitsPerSample(frame.bitDepth))))
-        throw std::runtime_error("Invalid quantized RAW linearization table.");
+        metadata.linearizationTable.size() != (size_t{1} << bitsPerSample(frame.bitDepth)))
+        throw std::runtime_error("Invalid RAW linearization table.");
 
     if (!metadata.jpegSampleLookup.empty() &&
         (metadata.compression != CdngCompression::LosslessJpeg ||

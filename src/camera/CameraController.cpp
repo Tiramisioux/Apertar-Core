@@ -13,6 +13,7 @@
 #include "audio/AudioRecordingSession.hpp"
 #include "cdng/CdngEncoder.hpp"
 #include "cdng/BlackLevel.hpp"
+#include "cdng/ClearHdrCcmp.hpp"
 #include "color/ColorProfileConfig.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
 #include "ipc/ControlProtocol.hpp"
@@ -1321,12 +1322,35 @@ int rawBitDepthValue(RawBitDepth bitDepth)
     return 12;
 }
 
+// Clear HDR 12-bit mode written as cDNG: stored as the sensor's 12-bit codes plus the expansion as a
+// LinearizationTable. MLV has no table, so it keeps libcamera's linear 16-bit samples; so does the 16-bit
+// mode, which is linear at the sensor.
+bool clearHdrStoresCodes12(const CaptureSettings &settings)
+{
+    return settings.clearHdr && !settings.photoModeEnabled && settings.rawBitDepth == 12 &&
+           settings.recordingFormat == RecordingFormat::Cdng;
+}
+
+// Packs libcamera's linear Clear HDR samples (unpacked, 16-bit containers) back into 12-bit codes, in place.
+void compressClearHdrFrame(uint8_t *data, size_t size, uint32_t width, uint32_t height, uint32_t stride)
+{
+    const auto &lut = ccmp::compressionLut();
+    for (uint32_t y = 0; y < height; ++y) {
+        const size_t offset = static_cast<size_t>(y) * stride;
+        if (offset + static_cast<size_t>(width) * 2u > size)
+            break;
+        auto *row = reinterpret_cast<uint16_t *>(data + offset);
+        for (uint32_t x = 0; x < width; ++x)
+            row[x] = lut[row[x]];
+    }
+}
+
 RawBitDepth storageRawBitDepthForSettings(const CaptureSettings &settings)
 {
-    // Clear HDR: libcamera hands over linear 16-bit samples in both sensor modes (the 12-bit mode is
-    // decompanded in the CFE, black 3200, values up to ~65000). Keeping only 12 bits would wrap the highs.
+    // Clear HDR: libcamera hands over linear 16-bit samples in both sensor modes (it expands the 12-bit
+    // mode in software, black 3200, white 65520). Keeping only the low 12 bits would wrap the highs.
     if (settings.clearHdr)
-        return RawBitDepth::Bits16;
+        return clearHdrStoresCodes12(settings) ? RawBitDepth::Bits12 : RawBitDepth::Bits16;
     switch (normalizeRawBitDepth(settings.rawBitDepth)) {
     case 8: return RawBitDepth::Bits8;
     case 10: return RawBitDepth::Bits10;
@@ -2769,8 +2793,9 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     else
         settings.rawBitDepth = supportedRawBitDepthForSensor(sensorFamily, settings.rawBitDepth, settings.clearHdr);
 
-    // The only 16-bit sensor mode is 3840x2200, which we present as 4K (3840x2160 after the crop).
-    if (sensorFamily == SensorFamily::Imx585 && settings.rawBitDepth == 16)
+    // Clear HDR exists only at 4K on the driver: 3840x2160 in the 12-bit mode, 3840x2200 in the 16-bit
+    // mode (cropped to 3840x2160). Any other size is rejected by libcamera.
+    if (sensorFamily == SensorFamily::Imx585 && settings.clearHdr)
         settings.resolution = Resolution{ 3840, 2160 };
 
     if (sensorFamily == SensorFamily::Imx294)
@@ -3224,6 +3249,13 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
             blackLevels = *tuningLevels;
     }
     std::copy(blackLevels.begin(), blackLevels.end(), std::begin(out.blackLevels));
+    if (clearHdrStoresCodes12(settings) && sensorFamily == SensorFamily::Imx585) {
+        // Under a LinearizationTable the black and white levels describe the table's output.
+        out.linearizationTable = std::span<const uint16_t>(ccmp::expansionTable());
+        for (float &level : out.blackLevels)
+            level = static_cast<float>(ccmp::kBlack16);
+        out.blackLevelsOnContainerScale = true;
+    }
     out.colourGains[0] = whiteBalance.red;
     out.colourGains[1] = whiteBalance.blue;
     out.cameraLabel = cachedCameraLabel();
@@ -7105,6 +7137,9 @@ private:
             dropWarning_.markDropped();
             return;
         }
+        if (clearHdrStoresCodes12(settings_) && rawInfo.packing == PixelPacking::Unpacked &&
+            rawInfo.unpackedBytesPerSample == 2u && rawInfo.bitDepth == RawBitDepth::Bits12)
+            compressClearHdrFrame(rawCopy.data(), rawCopy.size(), rawInfo.width, rawInfo.height, rawInfo.stride);
 
         if (frameIndex == 0)
             gyroRecorder_.setVideoStartTimestampUs(static_cast<uint64_t>(std::max<int64_t>(0, timestampUs)), frameIndex);
@@ -8332,6 +8367,11 @@ bool CameraController::setClearHdr(bool enabled)
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
     next = sanitizeSettingsForSensor(next, sensorFamily);
+    if (enabled && !next.clearHdr) {
+        // The sanitiser clears it for ProRes/H.264 (10-bit by rule) and for sensors other than the IMX585.
+        setErrorLocked("Clear HDR needs an IMX585 and cDNG or MLV recording.");
+        return false;
+    }
     if (settings_.clearHdr == next.clearHdr && settings_.rawBitDepth == next.rawBitDepth) {
         lastError_.clear();
         emitSettingsEventLocked();
