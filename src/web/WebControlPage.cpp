@@ -4050,7 +4050,7 @@ std::string_view webControlPageHtml()
       { value: "ProRes 422", label: "ProRes 422", enabled: true },
       { value: "ProRes HQ", label: "ProRes HQ", enabled: true },
     ];
-    const rawBitDepthOptions = ["12-bit", "10-bit", "8-bit"];
+    const rawBitDepthOptions = ["16-bit", "12-bit", "10-bit", "8-bit"];
     const h264ResolutionOptions = ["Match Capture", "1920x1080", "2560x1440"];
     const h264BaseResolutionOptions = [
       { value: "1920x1080", label: "1920x1080" },
@@ -5289,7 +5289,26 @@ std::string_view webControlPageHtml()
         return imx294BaseResolutionOptions(snapshot);
       return sensorNameLower(snapshot).indexOf("imx477") !== -1
         ? imx477BaseResolutionOptions()
-        : imx585BaseResolutionOptions();
+        : imx585BaseResolutionOptions().concat([
+            { value: "clearhdr", label: "4K Clear HDR", enabled: clearHdrAvailableForSnapshot(snapshot) },
+          ]);
+    }
+
+    // 4K Clear HDR (IMX585, cDNG/MLV video) is a resolution choice of its own: Core forces 4K, has no
+    // crops, and records 12 or 16 bit.
+    function clearHdrAvailableForSnapshot(snapshot) {
+      const format = String((snapshot && snapshot.recording_format) || "").toLowerCase();
+      return sensorNameLower(snapshot).indexOf("imx585") !== -1 && !(snapshot && snapshot.photo_mode_enabled)
+        && (format === "cdng" || format === "mlv");
+    }
+
+    // Choosing "4K Clear HDR" turns it on; any other base size turns it off first.
+    function resolutionBaseCommands(snapshot, value) {
+      const clearHdr = !!(snapshot && snapshot.clear_hdr);
+      if (value === "clearhdr")
+        return clearHdr ? [] : [{ cmd: "set_clear_hdr", enabled: "true" }];
+      return (clearHdr ? [{ cmd: "set_clear_hdr", enabled: "false" }] : [])
+        .concat([resolutionBaseCommandPayload(snapshot, value)]);
     }
 
     function isImx585FourKResolution(resolutionValue) {
@@ -5353,7 +5372,8 @@ std::string_view webControlPageHtml()
         return imx294CropOptionsForBase(snapshot, baseValue, enabled);
       if (sensorNameLower(snapshot).indexOf("imx477") !== -1)
         return imx477CropOptionsForBase(baseValue, enabled);
-      return imx585CropRatioOptionsForSnapshot(snapshot);
+      const options = imx585CropRatioOptionsForSnapshot(snapshot);
+      return snapshot && snapshot.clear_hdr ? options.map((option) => Object.assign({}, option, { enabled: false })) : options;
     }
 
     function sensorResolutionForBaseAndRatio(snapshot, baseValue, ratioLabelOrValue) {
@@ -5396,6 +5416,8 @@ std::string_view webControlPageHtml()
     }
 
     function resolutionBaseValueFromSnapshot(snapshot) {
+      if (snapshot && snapshot.clear_hdr)
+        return "clearhdr";
       const resolution = resolutionLabelFromSnapshot(snapshot);
       return sensorCropControlsAvailableForSnapshot(snapshot)
         ? sensorBaseResolutionValueFromSnapshot(snapshot)
@@ -5658,6 +5680,8 @@ std::string_view webControlPageHtml()
       const digits = String(value || "").replace(/[^0-9]/g, "");
       if (digits === "8")
         return 8;
+      if (digits === "16")
+        return 16;
       return digits === "10" ? 10 : 12;
     }
 
@@ -5665,6 +5689,8 @@ std::string_view webControlPageHtml()
       const bitDepth = rawBitDepthNumber(value);
       if (bitDepth === 8)
         return "8-bit";
+      if (bitDepth === 16)
+        return "16-bit";
       return bitDepth === 10 ? "10-bit" : "12-bit";
     }
 
@@ -5685,6 +5711,11 @@ std::string_view webControlPageHtml()
     function rawBitDepthOptionEnabled(snapshot, value, fixedForH264) {
       if (fixedForH264)
         return false;
+      const clearHdr = !!(snapshot && snapshot.clear_hdr);
+      if (value === "16-bit")
+        return clearHdr;
+      if (clearHdr)
+        return value === "12-bit";
       const sensorLower = sensorNameLower(snapshot);
       if (value === "12-bit" || value === "10-bit")
         return true;
@@ -6810,7 +6841,7 @@ std::string_view webControlPageHtml()
       const resolutionBaseValue = h264RecordFormat ? h264BaseResolutionValueFromSnapshot(snapshot) : resolutionBaseValueFromSnapshot(snapshot);
       const cropRatioOptions = h264RecordFormat ? h264CropOptionsForBase(resolutionBaseValue) : sensorCropRatioOptionsForSnapshot(snapshot);
       const cropRatioValue = h264RecordFormat ? h264CropRatioValueFromSnapshot(snapshot) : cropRatioValueFromSnapshot(snapshot);
-      const cropRatioEnabled = h264RecordFormat || cropControlsAvailable;
+      const cropRatioEnabled = h264RecordFormat || (cropControlsAvailable && !snapshot.clear_hdr);
       const externalMonitorEnabled = !!uiState.external_monitor_enabled;
       const externalMonitorMode = uiState.external_monitor_mode || "Clean Feed";
       const externalMonitorInfoOverlay = uiState.external_monitor_info_overlay || "On";
@@ -7001,7 +7032,8 @@ std::string_view webControlPageHtml()
             const grid = createFavoriteFieldGrid();
             if (cropControlsVisible) {
               grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionBaseOptions, resolutionBaseValue, async (value) => {
-                await dispatchFavoriteCommand(resolutionBaseCommandPayload(snapshot, value));
+                for (const command of resolutionBaseCommands(snapshot, value))
+                  await dispatchFavoriteCommand(command);
               }, false, false));
               grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoCropLabel(recordFormatText) : "Crop Mode", cropRatioOptions, cropRatioValue, async (value) => {
                 await dispatchFavoriteCommand(cropRatioCommandPayload(snapshot, value));
@@ -9351,7 +9383,7 @@ std::string_view webControlPageHtml()
       const resolutionBaseValue = h264RecordFormat ? h264BaseResolutionValueFromSnapshot(snapshot) : resolutionBaseValueFromSnapshot(snapshot);
       const cropRatioOptions = h264RecordFormat ? h264CropOptionsForBase(resolutionBaseValue) : sensorCropRatioOptionsForSnapshot(snapshot);
       const cropRatioValue = h264RecordFormat ? h264CropRatioValueFromSnapshot(snapshot) : cropRatioValueFromSnapshot(snapshot);
-      const cropRatioEnabled = h264RecordFormat || cropControlsAvailable;
+      const cropRatioEnabled = h264RecordFormat || (cropControlsAvailable && !snapshot.clear_hdr);
       const isRecording = !!snapshot.recording;
       const isSoundRecording = !!snapshot.sound_recording;
       const isTimelapse = !!snapshot.timelapse_active;
@@ -9917,7 +9949,8 @@ std::string_view webControlPageHtml()
 
       buildOptionButtons("resolutionOptions", resolutionBaseOptions, resolutionBaseValue, async (value) => {
         try {
-          await sendCommand(resolutionBaseCommandPayload(snapshot, value));
+          for (const command of resolutionBaseCommands(snapshot, value))
+            await sendCommand(command);
         } catch (error) {
           showToast(error.message, true);
         }
@@ -10915,7 +10948,8 @@ std::string_view webControlPageHtml()
     async function applyRecordResolutionSelection() {
       const select = document.getElementById("settingsRecordResolutionSelect");
       try {
-        await sendCommand(resolutionBaseCommandPayload(state.snapshot, select.value));
+        for (const command of resolutionBaseCommands(state.snapshot, select.value))
+          await sendCommand(command);
       } catch (error) {
         showToast(error.message, true);
       }

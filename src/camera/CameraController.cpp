@@ -2756,9 +2756,9 @@ uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t reque
             return bitDepth;
         break;
     case SensorFamily::Imx585:
+        if (clearHdr)                       // Clear HDR has a 12-bit and a 16-bit sensor mode only
+            return bitDepth == 16 ? 16u : 12u;
         if (bitDepth == 10 || bitDepth == 12)
-            return bitDepth;
-        if (bitDepth == 16 && clearHdr)     // the 16-bit sensor mode exists only with Clear HDR on
             return bitDepth;
         break;
     case SensorFamily::Unknown:
