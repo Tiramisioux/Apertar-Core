@@ -716,6 +716,11 @@ void AudioRecordingSession::enqueueWrite(const char *data, size_t size)
 void AudioRecordingSession::writerLoop()
 {
     bool warnedBacklog = false;
+    // Once a second the raw capture goes to the card with its size: a pulled card
+    // otherwise kept audio_capture.raw at 0 bytes (C0011, 2026-10-26). It is
+    // headerless PCM in the format logged at start; finalizeWav needs the medium.
+    auto lastSync = std::chrono::steady_clock::now();
+    const auto syncEvery = std::chrono::milliseconds(1000);
     for (;;) {
         std::vector<char> block;
         {
@@ -738,6 +743,15 @@ void AudioRecordingSession::writerLoop()
             failure_.set("Audio capture write failed.");
             writeFailed_.store(true, std::memory_order_release);
             std::cerr << "ApertarCore audio capture write failed.\n";
+            continue;
+        }
+        if (const auto now = std::chrono::steady_clock::now(); now - lastSync >= syncEvery) {
+            lastSync = now;
+            rawStream_.flush();
+            if (const int fd = ::open(rawPath_.c_str(), O_RDONLY | O_CLOEXEC); fd >= 0) {
+                ::fsync(fd);
+                ::close(fd);
+            }
         }
     }
 }
