@@ -3043,6 +3043,19 @@ size_t activeRawFrameBytes(uint32_t stride, uint32_t activeHeight)
     return static_cast<size_t>(stride) * static_cast<size_t>(activeHeight);
 }
 
+// CPU-cached dma-bufs need a sync before and after the CPU reads them.
+bool dmabufCpuSync(int fd, bool begin)
+{
+    dma_buf_sync sync{};
+    sync.flags = DMA_BUF_SYNC_READ | (begin ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END);
+    int ret;
+    do { ret = ::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync); } while (ret < 0 && errno == EINTR);
+    if (ret < 0)
+        std::cerr << "ApertarCore DMA read sync " << (begin ? "START" : "END")
+                  << " failed: " << std::strerror(errno) << "\n";
+    return ret == 0;
+}
+
 std::array<float, 4> blackLevelsForSensor(SensorFamily sensorFamily)
 {
     float blackLevel = 200.0f;
@@ -6778,17 +6791,7 @@ private:
         return false;
     }
 
-    static bool syncCpuReadBuffer(int fd, bool begin)
-    {
-        dma_buf_sync sync{};
-        sync.flags = DMA_BUF_SYNC_READ | (begin ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END);
-        int ret;
-        do { ret = ::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync); } while (ret < 0 && errno == EINTR);
-        if (ret < 0)
-            std::cerr << "ApertarCore DMA read sync " << (begin ? "START" : "END")
-                      << " failed: " << std::strerror(errno) << "\n";
-        return ret == 0;
-    }
+    static bool syncCpuReadBuffer(int fd, bool begin) { return dmabufCpuSync(fd, begin); }
 
     const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &rawBuffers()
     {
