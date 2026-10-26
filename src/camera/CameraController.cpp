@@ -7149,7 +7149,11 @@ private:
         if (decision.rearmed) {
             phaseLockDurationUs_.reset();
             phaseLockSaturated_ = false;
+            // Requests already in flight carry Core's own pin (controlsForSettings: the
+            // truncated nominal period); their echoes are not saturation.
             recentPhaseLockPins_.fill(0);
+            recentPhaseLockPins_[0] = static_cast<int64_t>(1000000.0 / settings_.fps);
+            recentPhaseLockPinIndex_ = 1;
             std::cerr << "ApertarCore phase-lock: armed fps=" << settings_.fps
                       << " nominal_us=" << phaseLock_.nominalUs << " ref=boottime"
                       << " kp=" << phaseLock_.tuning.proportional << " ki=" << phaseLock_.tuning.integral
