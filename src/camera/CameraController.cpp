@@ -3775,6 +3775,7 @@ public:
         const uint8_t *source = nullptr; // first active byte of the mapped camera buffer
         size_t size = 0;                 // active frame bytes
         bool mapCodes12 = false;         // Clear HDR 12-bit cDNG: map samples back to codes
+        int64_t frameDurationUs = 0;     // reported with the frame once it is queued for writing
         RawFrameView view;               // data/size are filled by the worker
         CdngEncoder::Metadata metadata;
     };
@@ -3784,6 +3785,14 @@ public:
         std::lock_guard<std::mutex> lock(copyMutex_);
         releaseRequest_ = std::move(release);
         maxHeldRequests_ = std::max<size_t>(1, maxHeldRequests);
+    }
+
+    // Called by the copy worker for each frame the write queue accepted, so the
+    // audio end follows the frames that are written, not the frames handed over.
+    void setFrameQueued(std::function<void(int64_t timestampUs, int64_t frameDurationUs)> queued)
+    {
+        std::lock_guard<std::mutex> lock(copyMutex_);
+        frameQueued_ = std::move(queued);
     }
 
     // Completion-thread side. Returns false when the request was not taken: the
@@ -3844,7 +3853,15 @@ private:
                 compressClearHdrFrame(rawData, copy.size, copy.view.width, copy.view.height, copy.view.stride);
             copy.view.data = rawData;
             copy.view.size = copy.size;
-            enqueue(std::move(rawCopy), copy.view, std::move(copy.metadata));
+            if (!enqueue(std::move(rawCopy), copy.view, std::move(copy.metadata)))
+                continue;
+            std::function<void(int64_t, int64_t)> queued;
+            {
+                std::lock_guard<std::mutex> lock(copyMutex_);
+                queued = frameQueued_;
+            }
+            if (queued)
+                queued(copy.view.timestampUs, copy.frameDurationUs);
         }
     }
 
@@ -4177,6 +4194,7 @@ private:
     size_t heldRequests_ = 0;
     size_t maxHeldRequests_ = 1;
     std::function<void(libcamera::Request *)> releaseRequest_;
+    std::function<void(int64_t, int64_t)> frameQueued_;
     std::atomic<uint64_t> droppedNoRequestSlot_{0};
     std::atomic<uint64_t> losslessTimedJobs_{0};
     std::atomic<uint64_t> losslessWorkerWallUs_{0};
@@ -6855,6 +6873,9 @@ private:
                 return;
             requeueRequest(request);
         }, static_cast<size_t>(std::max(1, static_cast<int>(rawCameraBufferCount(settings_.clearHdr)) - 2)));
+        recorder_.setFrameQueued([this](int64_t timestampUs, int64_t frameDurationUs) {
+            audioRecorder_.observeVideoFrame(static_cast<uint64_t>(std::max<int64_t>(0, timestampUs)), frameDurationUs);
+        });
 
         libcamera::ControlList initialControls = controlsForSettings(settings_,
                                                                      sensorFamily_,
@@ -7450,13 +7471,13 @@ private:
         copy.view.packing = rawInfo.packing;
         copy.view.bayerPattern = rawInfo.pattern;
         copy.view.timestampUs = timestampUs;
+        copy.frameDurationUs = frameDurationUs;
         copy.metadata = std::move(metadata);
 
         if (!recorder_.enqueueCopy(std::move(copy)))
             return false;
         if (frameIndex == 0)
             gyroRecorder_.setVideoStartTimestampUs(static_cast<uint64_t>(std::max<int64_t>(0, timestampUs)), frameIndex);
-        audioRecorder_.observeVideoFrame(timestampUs, frameDurationUs);
         return true;
     }
 

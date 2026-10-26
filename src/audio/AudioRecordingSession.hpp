@@ -73,6 +73,8 @@ private:
     mutable std::mutex syncMutex_;
     uint64_t audioStartBootUs_ = 0;
     uint64_t videoFirstBootUs_ = 0;
+    uint64_t videoLastBootUs_ = 0;
+    int64_t videoLastDurationUs_ = 0;
     uint64_t videoEndBootUs_ = 0;
     uint64_t capturedBytes_ = 0;
     uint64_t audioEndBootUs_ = 0;

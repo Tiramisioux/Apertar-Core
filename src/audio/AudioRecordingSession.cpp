@@ -344,15 +344,20 @@ void AudioRecordingSession::observeVideoFrame(uint64_t sensorBootUs, int64_t fra
     if (!sessionActive_.load(std::memory_order_relaxed))
         return;
 
+    // Frames can arrive out of order when more than one copy worker reports
+    // them, so keep the earliest and latest and derive the end from both.
     std::lock_guard<std::mutex> lock(syncMutex_);
-    if (videoFirstBootUs_ == 0)
+    if (videoFirstBootUs_ == 0 || sensorBootUs < videoFirstBootUs_)
         videoFirstBootUs_ = sensorBootUs;
+    if (sensorBootUs >= videoLastBootUs_) {
+        videoLastBootUs_ = sensorBootUs;
+        videoLastDurationUs_ = std::max<int64_t>(0, frameDurationUs);
+    }
 
-    const uint64_t frameEndUs = options_.fps > 0
+    videoEndBootUs_ = options_.fps > 0
         ? videoFirstBootUs_ + uint64_t(std::llround((std::llround(
-            double(int64_t(sensorBootUs) - int64_t(videoFirstBootUs_)) * options_.fps / 1000000) + 1) * 1000000 / options_.fps))
-        : sensorBootUs + uint64_t(std::max<int64_t>(0, frameDurationUs));
-    videoEndBootUs_ = std::max(videoEndBootUs_, frameEndUs);
+            double(int64_t(videoLastBootUs_) - int64_t(videoFirstBootUs_)) * options_.fps / 1000000) + 1) * 1000000 / options_.fps))
+        : videoLastBootUs_ + uint64_t(videoLastDurationUs_);
 }
 
 void AudioRecordingSession::stop()
@@ -686,6 +691,8 @@ void AudioRecordingSession::resetState()
     std::lock_guard<std::mutex> lock(syncMutex_);
     audioStartBootUs_ = 0;
     videoFirstBootUs_ = 0;
+    videoLastBootUs_ = 0;
+    videoLastDurationUs_ = 0;
     videoEndBootUs_ = 0;
     capturedBytes_ = 0;
     audioEndBootUs_ = 0;
