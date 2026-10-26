@@ -6,7 +6,9 @@
 #include "util/RecordingFailure.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -39,6 +41,8 @@ public:
 
 private:
     void readerLoop();
+    void writerLoop();
+    void enqueueWrite(const char *data, size_t size);  // data == nullptr writes zeros
     void finalizeWav();
     void resetState();
     void emitLevel(int level);
@@ -67,6 +71,18 @@ private:
     AudioLevelCallback levelCallback_;
 
     std::thread readerThread_;
+    // The reader never touches the medium: it hands blocks to this queue and the
+    // writer thread drains them into rawStream_ (Cinemate ffb61fd: an exFAT
+    // write() under DNG pressure blocked the capture thread for hundreds of ms
+    // and the ALSA ring overran).
+    std::thread writerThread_;
+    std::mutex writeMutex_;
+    std::condition_variable writeCv_;
+    std::deque<std::vector<char>> writeQueue_;
+    size_t queuedWriteBytes_ = 0;
+    size_t peakQueuedWriteBytes_ = 0;
+    bool writerStop_ = false;
+    std::atomic<bool> writeFailed_{false};
     std::atomic<bool> running_{false};
     std::atomic<pid_t> playbackPid_{-1};
     int playbackWriteFd_ = -1;

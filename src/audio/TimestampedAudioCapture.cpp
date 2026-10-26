@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <regex>
 #include <sstream>
 
@@ -19,7 +20,9 @@ namespace apertar {
     X(snd_pcm_wait) X(snd_pcm_htimestamp) X(snd_pcm_readi) X(snd_pcm_recover) X(snd_strerror) \
     X(snd_pcm_hw_params_malloc) X(snd_pcm_hw_params_free) X(snd_pcm_hw_params_any) \
     X(snd_pcm_hw_params_set_access) X(snd_pcm_hw_params_set_format) \
-    X(snd_pcm_hw_params_set_rate) X(snd_pcm_hw_params_test_channels) X(snd_pcm_hw_params_set_channels)
+    X(snd_pcm_hw_params_set_rate) X(snd_pcm_hw_params_test_channels) X(snd_pcm_hw_params_set_channels) \
+    X(snd_pcm_hw_params_set_buffer_time_near) X(snd_pcm_hw_params_set_period_time_near) X(snd_pcm_hw_params) \
+    X(snd_pcm_hw_params_get_buffer_size) X(snd_pcm_hw_params_get_period_size)
 
 struct TimestampedAudioCapture::Impl {
     void *library = nullptr;
@@ -152,7 +155,8 @@ std::vector<AudioCaptureMode> TimestampedAudioCapture::probe(const std::string &
     return modes;
 }
 
-bool TimestampedAudioCapture::open(const std::string &device, AudioCaptureMode &mode, unsigned firstChannel, std::string *error)
+bool TimestampedAudioCapture::open(const std::string &device, AudioCaptureMode &mode, unsigned firstChannel, std::string *error,
+                                   unsigned bufferUs, unsigned periodUs)
 {
     close();
     const auto modes = probe(device, error);
@@ -185,9 +189,33 @@ bool TimestampedAudioCapture::open(const std::string &device, AudioCaptureMode &
     s.firstChannel = firstChannel - 1;
     s.outputBytes = audioSampleBytes(mode.format);
     s.nativeBytes = selected->nativeFormat == SND_PCM_FORMAT_S24_LE ? 4 : s.outputBytes;
-    if (!s.result(s.snd_pcm_open(&s.pcm, hardwareDevice(device).c_str(), SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK), error) ||
-        !s.result(s.snd_pcm_set_params(s.pcm, snd_pcm_format_t(mode.nativeFormat), SND_PCM_ACCESS_RW_INTERLEAVED,
-                                    s.nativeChannels, s.rate, 0, 100000), error)) return false;
+    if (!s.result(s.snd_pcm_open(&s.pcm, hardwareDevice(device).c_str(), SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK), error))
+        return false;
+    // Hardware parameters by hand rather than snd_pcm_set_params(): that helper
+    // derives the period from the buffer (latency / 4), so a one-second ring
+    // would wake the reader four times a second. The ring absorbs storage stalls
+    // (Cinemate 5021ba3: hundreds of ms under 4K writes), the period keeps the
+    // meter and the sample timestamps at 10 ms.
+    snd_pcm_hw_params_t *hw = nullptr;
+    if (!s.result(s.snd_pcm_hw_params_malloc(&hw), error)) return false;
+    unsigned bufferTime = bufferUs, periodTime = periodUs;
+    const bool hwOk = s.result(s.snd_pcm_hw_params_any(s.pcm, hw), error) &&
+        s.result(s.snd_pcm_hw_params_set_access(s.pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED), error) &&
+        s.result(s.snd_pcm_hw_params_set_format(s.pcm, hw, snd_pcm_format_t(mode.nativeFormat)), error) &&
+        s.result(s.snd_pcm_hw_params_set_channels(s.pcm, hw, s.nativeChannels), error) &&
+        s.result(s.snd_pcm_hw_params_set_rate(s.pcm, hw, s.rate, 0), error) &&
+        s.result(s.snd_pcm_hw_params_set_period_time_near(s.pcm, hw, &periodTime, nullptr), error) &&
+        s.result(s.snd_pcm_hw_params_set_buffer_time_near(s.pcm, hw, &bufferTime, nullptr), error) &&
+        s.result(s.snd_pcm_hw_params(s.pcm, hw), error);
+    snd_pcm_uframes_t bufferFrames = 0, periodFrames = 0;
+    if (hwOk) {
+        s.snd_pcm_hw_params_get_buffer_size(hw, &bufferFrames);
+        s.snd_pcm_hw_params_get_period_size(hw, &periodFrames, nullptr);
+    }
+    s.snd_pcm_hw_params_free(hw);
+    if (!hwOk) return false;
+    std::cerr << "ApertarCore audio capture: buffer_frames=" << bufferFrames << " period_frames=" << periodFrames
+              << " requested_ms=" << bufferUs / 1000 << "/" << periodUs / 1000 << "\n";
     snd_pcm_sw_params_t *sw = nullptr;
     if (!s.result(s.snd_pcm_sw_params_malloc(&sw), error)) return false;
     const bool configured = s.result(s.snd_pcm_sw_params_current(s.pcm, sw), error) &&

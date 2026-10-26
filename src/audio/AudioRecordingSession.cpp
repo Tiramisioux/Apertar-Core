@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -203,6 +204,18 @@ AudioRecordingSession::~AudioRecordingSession()
     stop();
 }
 
+namespace {
+// Capture ring on the record path: APERTAR_AUDIO_BUFFER_MS, default 1000, 100..4000.
+unsigned recordCaptureBufferUs()
+{
+    long ms = 1000;
+    if (const char *env = std::getenv("APERTAR_AUDIO_BUFFER_MS"); env && *env)
+        ms = std::strtol(env, nullptr, 10);
+    ms = std::max(100L, std::min(4000L, ms));
+    return static_cast<unsigned>(ms) * 1000u;
+}
+} // namespace
+
 bool AudioRecordingSession::start(const std::filesystem::path &clipFolder,
                                   const AudioRecordingOptions &options,
                                   AudioLevelCallback levelCallback,
@@ -248,7 +261,7 @@ bool AudioRecordingSession::start(const std::filesystem::path &clipFolder,
         return false;
     }
     AudioCaptureMode mode{options_.sampleFormat, options_.sampleRate, options_.channels};
-    if (!capture_.open(options_.inputDevice, mode, options_.firstChannel, error)) {
+    if (!capture_.open(options_.inputDevice, mode, options_.firstChannel, error, recordCaptureBufferUs(), 10000)) {
         capture_.close();
         resetState();
         return false;
@@ -335,6 +348,15 @@ bool AudioRecordingSession::start(const std::filesystem::path &clipFolder,
     stopRequested_.store(false, std::memory_order_relaxed);
     running_.store(true, std::memory_order_relaxed);
     sessionActive_.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(writeMutex_);
+        writeQueue_.clear();
+        queuedWriteBytes_ = 0;
+        peakQueuedWriteBytes_ = 0;
+        writerStop_ = false;
+    }
+    writeFailed_.store(false, std::memory_order_relaxed);
+    writerThread_ = std::thread(&AudioRecordingSession::writerLoop, this);
     readerThread_ = std::thread(&AudioRecordingSession::readerLoop, this);
     return true;
 }
@@ -366,6 +388,20 @@ void AudioRecordingSession::stop(bool finalize)
     if (readerThread_.joinable())
         readerThread_.join();
     capture_.close();
+
+    // Drain the writer (or, with the medium gone, let it discard) before the
+    // raw stream is closed; the reader has stopped, so nothing enqueues now.
+    if (!finalize)
+        writeFailed_.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(writeMutex_);
+        writerStop_ = true;
+    }
+    writeCv_.notify_all();
+    if (writerThread_.joinable())
+        writerThread_.join();
+    if (peakQueuedWriteBytes_ > 0 && !clipFolder_.empty())
+        std::cerr << "ApertarCore audio writer: peak_backlog_kb=" << peakQueuedWriteBytes_ / 1024 << "\n";
 
     if (rawStream_.is_open())
         rawStream_.close();
@@ -439,11 +475,7 @@ void AudioRecordingSession::readerLoop()
                 // rather than closing the gap and shifting the remaining take.
                 if (audioEndBootUs_ && sampleBootUs > int64_t(audioEndBootUs_) + 10000) {
                     const uint64_t gapBytes = framesForDurationUs(sampleBootUs - audioEndBootUs_, options_.sampleRate) * blockAlign;
-                    std::array<char,4096> zeros{};
-                    for (uint64_t left = gapBytes; left;) {
-                        const auto size = std::min<uint64_t>(left, zeros.size());
-                        rawStream_.write(zeros.data(), size);left -= size;
-                    }
+                    enqueueWrite(nullptr, static_cast<size_t>(gapBytes));
                     capturedBytes_ += gapBytes;
                     std::cerr << "ApertarCore audio discontinuity: padded_us=" << sampleBootUs - audioEndBootUs_ << "\n";
                 }
@@ -478,8 +510,8 @@ void AudioRecordingSession::readerLoop()
                     break;
                 }
             }
-            rawStream_.write(buffer.data(), bytesRead);
-            if (!rawStream_) { failure_.set("Audio capture write failed.");std::cerr << "ApertarCore audio capture write failed.\n"; break; }
+            enqueueWrite(buffer.data(), static_cast<size_t>(bytesRead));
+            if (writeFailed_.load(std::memory_order_acquire)) break;
             capturedBytes_ += static_cast<uint64_t>(bytesRead);
             if (shouldMeasureLevel)
                 emitLevel(meterLevel);
@@ -662,6 +694,49 @@ void AudioRecordingSession::finalizeWav()
         }
     }
     if (outputBytes64 & 1u) output.put('\0');
+}
+
+void AudioRecordingSession::enqueueWrite(const char *data, size_t size)
+{
+    if (size == 0)
+        return;
+    std::vector<char> block(size);
+    if (data)
+        std::memcpy(block.data(), data, size);
+    std::lock_guard<std::mutex> lock(writeMutex_);
+    writeQueue_.push_back(std::move(block));
+    queuedWriteBytes_ += size;
+    peakQueuedWriteBytes_ = std::max(peakQueuedWriteBytes_, queuedWriteBytes_);
+    writeCv_.notify_one();
+}
+
+void AudioRecordingSession::writerLoop()
+{
+    bool warnedBacklog = false;
+    for (;;) {
+        std::vector<char> block;
+        {
+            std::unique_lock<std::mutex> lock(writeMutex_);
+            writeCv_.wait(lock, [this] { return writerStop_ || !writeQueue_.empty(); });
+            if (writeQueue_.empty())
+                return;
+            block = std::move(writeQueue_.front());
+            writeQueue_.pop_front();
+            queuedWriteBytes_ -= std::min(queuedWriteBytes_, block.size());
+            if (!warnedBacklog && queuedWriteBytes_ > 16u * 1024u * 1024u) {
+                warnedBacklog = true;
+                std::cerr << "ApertarCore audio writer: backlog above 16 MB, the medium is stalling\n";
+            }
+        }
+        if (writeFailed_.load(std::memory_order_acquire))
+            continue;  // medium gone or failed: drain without touching it
+        rawStream_.write(block.data(), static_cast<std::streamsize>(block.size()));
+        if (!rawStream_) {
+            failure_.set("Audio capture write failed.");
+            writeFailed_.store(true, std::memory_order_release);
+            std::cerr << "ApertarCore audio capture write failed.\n";
+        }
+    }
 }
 
 void AudioRecordingSession::resetState()
