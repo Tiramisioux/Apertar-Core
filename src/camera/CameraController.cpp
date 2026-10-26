@@ -8208,7 +8208,10 @@ private:
     std::optional<int64_t> phaseLockDurationUs_;
     double lastPhaseErrorUs_ = 0.0;
     bool phaseLockSaturated_ = false;
-    std::array<int64_t, 4> recentPhaseLockPins_{};   // durations pinned on the last requests (in-flight depth)
+    // Durations pinned on the last requests. At least as deep as the requests in flight
+    // (one per raw buffer: 8 in Clear HDR, APERTAR_RAW_CAMERA_BUFFERS up to 16), or an echo
+    // of an older pin reads as saturation.
+    std::array<int64_t, 16> recentPhaseLockPins_{};
     size_t recentPhaseLockPinIndex_ = 0;
     mutable std::mutex whiteBalanceMutex_;
     WhiteBalanceMeasurement whiteBalanceMeasured_;
