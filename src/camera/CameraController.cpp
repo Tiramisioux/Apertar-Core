@@ -3513,17 +3513,23 @@ public:
                           : normalWorkerCount));
         workerCount_ = workerCount;
         workers_.reserve(workerCount);
-        for (unsigned int i = 0; i < workerCount; ++i)
-            spawnWorker([this] { workerLoop(); });
-        // Write the clip folder's directory entries once a second, so a pull or a
-        // crash leaves a readable folder; the frames themselves are already on
-        // their way (startWriteback). syncfs here waited for every page in flight
-        // and stalled the writers: 782 queue drops in 3 min (C0005, 2026-10-26).
+        // Once a second, fsync the files written since the last tick and then the
+        // clip folder, so a pull or a crash leaves readable frames up to about a
+        // second before it; the data is already on its way (startWriteback). syncfs
+        // here waited for every page in flight and stalled the writers: 782 queue
+        // drops in 3 min (C0005, 2026-10-26).
+        {
+            std::lock_guard<std::mutex> filesLock(writtenFilesMutex_);
+            writtenFiles_.clear();
+        }
+        // Opened before the writers start: they read mediaDirFd_ (noteWrittenFile).
         if (const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000); syncMs > 0) {
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
                 spawnWorker([this, syncMs, fd = mediaDirFd_] { syncLoop(fd, std::chrono::milliseconds(syncMs)); });
         }
+        for (unsigned int i = 0; i < workerCount; ++i)
+            spawnWorker([this] { workerLoop(); });
         {
             std::lock_guard<std::mutex> lock(copyMutex_);
             copyStopping_ = false;
@@ -3815,11 +3821,39 @@ public:
         ::close(fd);
     }
 
+    // Files written since the last sync tick. A DNG's size and first cluster sit
+    // in its exFAT directory entry, which only its own fsync (or the kernel's
+    // inode writeback, up to 30 s later) puts on the card: with the folder fsync
+    // alone a pulled take kept its file names at 0 bytes (C0010, 2026-10-26).
+    void noteWrittenFile(const std::string &path)
+    {
+        if (mediaDirFd_ < 0)
+            return;
+        std::lock_guard<std::mutex> lock(writtenFilesMutex_);
+        writtenFiles_.push_back(path);
+    }
+
     void syncLoop(int dirFd, std::chrono::milliseconds interval)
     {
         std::unique_lock<std::mutex> lock(mutex_);
         while (!cv_.wait_for(lock, interval, [this] { return stopping_; })) {
             lock.unlock();
+            std::vector<std::string> files;
+            {
+                std::lock_guard<std::mutex> filesLock(writtenFilesMutex_);
+                files.swap(writtenFiles_);
+            }
+            if (recordingFormat_ == RecordingFormat::Mlv)
+                files.push_back(mlvPathString_);
+            for (const std::string &path : files) {
+                if (mediumGone_.load(std::memory_order_acquire))
+                    break;
+                const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+                if (fd >= 0) {
+                    ::fsync(fd);
+                    ::close(fd);
+                }
+            }
             if (!mediumGone_.load(std::memory_order_acquire))
                 ::fsync(dirFd);
             lock.lock();
@@ -4248,6 +4282,7 @@ private:
                     encoder.writeDngFile(job.path, job.frame, job.metadata);
                     if (startWritebackPerFrame())
                         startWriteback(job.path);
+                    noteWrittenFile(job.path);
                 }
                 completed = true;
                 ++writtenFrames_;
@@ -4442,7 +4477,9 @@ private:
     // dead-medium stop (see stop()).
     std::atomic<unsigned int> liveWorkers_{0};
     std::atomic<int64_t> lastWriteProgressNs_{0};
-    int mediaDirFd_ = -1;   // the clip folder, for the once-a-second syncfs   // steady_clock, last frame written (or the take's start)
+    int mediaDirFd_ = -1;   // the clip folder, for the once-a-second sync
+    std::mutex writtenFilesMutex_;
+    std::vector<std::string> writtenFiles_;   // written since the last sync tick   // steady_clock, last frame written (or the take's start)
     std::mutex exitMutex_;
     std::condition_variable exitCv_;
     uint64_t discardedOnFailureFrames_ = 0;
