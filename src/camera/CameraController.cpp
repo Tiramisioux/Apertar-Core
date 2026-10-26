@@ -3479,6 +3479,15 @@ public:
         workers_.reserve(workerCount);
         for (unsigned int i = 0; i < workerCount; ++i)
             workers_.emplace_back(&DngRecordingQueue::workerLoop, this);
+        {
+            std::lock_guard<std::mutex> lock(copyMutex_);
+            copyStopping_ = false;
+            heldRequests_ = 0;
+        }
+        droppedNoRequestSlot_.store(0, std::memory_order_relaxed);
+        const unsigned int copyWorkers = unsignedEnvValue("APERTAR_RAW_COPY_WORKERS", 1, 1, 2);
+        for (unsigned int i = 0; i < copyWorkers; ++i)
+            copyThreads_.emplace_back(&DngRecordingQueue::copyLoop, this);
         active_.store(true, std::memory_order_release);
 
         std::cerr << "ApertarCore recording clip: " << folderPath_.string()
@@ -3527,6 +3536,7 @@ public:
         }
         const auto stopStarted = std::chrono::steady_clock::now();
         active_.store(false, std::memory_order_release);
+        stopCopyWorkers();
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stopping_ = true;
@@ -3538,6 +3548,8 @@ public:
                 worker.join();
         }
         workers_.clear();
+        if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
+            std::cerr << "ApertarCore recording stats: dropped_copy_slot=" << dropped << "\n";
         if (recordingFormat_ == RecordingFormat::LossyDng)
             LossyDngEncoder::drainWrites();
 
@@ -6835,6 +6847,14 @@ private:
 
         if (!makeRequests(error))
             return false;
+        // Raw frames are copied on a recorder worker; the worker gives the request
+        // back here. Hold at most buffers-2 so the CFE always has two queued.
+        recorder_.setRequestRelease([this](libcamera::Request *request) {
+            std::shared_lock settingsLock(sessionSettingsMutex_);
+            if (!running_.load())
+                return;
+            requeueRequest(request);
+        }, static_cast<size_t>(std::max(1, static_cast<int>(rawCameraBufferCount(settings_.clearHdr)) - 2)));
 
         libcamera::ControlList initialControls = controlsForSettings(settings_,
                                                                      sensorFamily_,
@@ -7146,7 +7166,7 @@ private:
                 }
                 if (ready) {
                     if (recordProcessedPreviewFrame(request)) return;
-                    recordRawFrame(request, whiteBalance);
+                    if (recordRawFrame(request, whiteBalance)) return;
                 }
             }
         }
@@ -7335,21 +7355,21 @@ private:
             ? sensorTimestampUs : clockMicroseconds(CLOCK_BOOTTIME));
     }
 
-    void recordRawFrame(libcamera::Request *request, const WhiteBalanceMeasurement &whiteBalance)
+    bool recordRawFrame(libcamera::Request *request, const WhiteBalanceMeasurement &whiteBalance)
     {
         if (!recorder_.active() || !rawStream_)
-            return;
+            return false;
         if (!whiteBalance.valid()) {
             if (!warnedMissingWhiteBalance_) {
                 std::cerr << "ApertarCore RAW frame missing measured white balance; not writing guessed metadata.\n";
                 warnedMissingWhiteBalance_ = true;
             }
-            return;
+            return false;
         }
 
         const CachedRawStreamInfo &rawInfo = rawStreamInfo_;
         if (!rawInfo.valid)
-            return;
+            return false;
         if (!rawInfo.supported) {
             if (!warnedUnsupportedRaw_) {
                 warnedUnsupportedRaw_ = true;
@@ -7357,16 +7377,16 @@ private:
                           << rawInfo.formatName
                           << ". Expected a supported Bayer or monochrome RAW format.\n";
             }
-            return;
+            return false;
         }
 
         libcamera::FrameBuffer *buffer = request->findBuffer(rawStream_);
         if (!buffer)
-            return;
+            return false;
 
         auto mappedIt = mappedRawBuffers_.find(buffer);
         if (mappedIt == mappedRawBuffers_.end())
-            return;
+            return false;
 
         const MappedPlane &mapped = mappedIt->second;
         const size_t bytesUsed = !buffer->metadata().planes().empty()
@@ -7377,12 +7397,12 @@ private:
         const size_t activeOffsetBytes = static_cast<size_t>(rawInfo.stride) *
                                          static_cast<size_t>(rawInfo.activeTopRows) + rawInfo.activeLeftBytes;
         if (activeOffsetBytes >= candidateRawSize)
-            return;
+            return false;
         const size_t rawSize = activeFrameSize > 0
             ? std::min(candidateRawSize - activeOffsetBytes, activeFrameSize)
             : candidateRawSize - activeOffsetBytes;
         if (rawSize == 0 || rawSize > mapped.length)
-            return;
+            return false;
 
         int64_t timestampUs = 0;
         if (auto ts = request->metadata().get(libcamera::controls::SensorTimestamp))
@@ -7410,37 +7430,34 @@ private:
             dngModel_, whiteBalance, rawInfo.pattern == BayerPattern::Monochrome);
 
         // The completion callback is the only producer. If workers are already
-        // behind, reject before copying a full RAW frame that cannot be queued.
+        // behind, reject before handing over a frame that cannot be queued.
         if (!recorder_.hasCapacityForFrame(frameIndex))
-            return;
+            return false;
 
-        std::vector<uint8_t> rawCopy = recorder_.acquireRawBuffer(rawSize);
-        if (!copyRawBytes(buffer, rawCopy.data(), mapped.data + activeOffsetBytes, rawSize)) {
-            dropWarning_.markDropped();
-            return;
-        }
-        if (clearHdrStoresCodes12(settings_) && rawInfo.packing == PixelPacking::Unpacked &&
-            rawInfo.unpackedBytesPerSample == 2u && rawInfo.bitDepth == RawBitDepth::Bits12)
-            compressClearHdrFrame(rawCopy.data(), rawCopy.size(), rawInfo.width, rawInfo.height, rawInfo.stride);
+        DngRecordingQueue::PendingCopy copy;
+        copy.request = request;
+        copy.syncFd = cachedRawBuffers_.empty() ? -1 : buffer->planes().front().fd.get();
+        copy.source = mapped.data + activeOffsetBytes;
+        copy.size = rawSize;
+        copy.mapCodes12 = clearHdrStoresCodes12(settings_) && rawInfo.packing == PixelPacking::Unpacked &&
+            rawInfo.unpackedBytesPerSample == 2u && rawInfo.bitDepth == RawBitDepth::Bits12;
+        copy.view.width = rawInfo.width;
+        copy.view.height = rawInfo.height;
+        copy.view.stride = rawInfo.stride;
+        copy.view.bitDepth = rawInfo.bitDepth;
+        copy.view.unpackedBytesPerSample = rawInfo.unpackedBytesPerSample;
+        copy.view.sampleBits = settings_.rawBitDepth;
+        copy.view.packing = rawInfo.packing;
+        copy.view.bayerPattern = rawInfo.pattern;
+        copy.view.timestampUs = timestampUs;
+        copy.metadata = std::move(metadata);
 
+        if (!recorder_.enqueueCopy(std::move(copy)))
+            return false;
         if (frameIndex == 0)
             gyroRecorder_.setVideoStartTimestampUs(static_cast<uint64_t>(std::max<int64_t>(0, timestampUs)), frameIndex);
-
-        RawFrameView view;
-        view.data = rawCopy.data();
-        view.size = rawCopy.size();
-        view.width = rawInfo.width;
-        view.height = rawInfo.height;
-        view.stride = rawInfo.stride;
-        view.bitDepth = rawInfo.bitDepth;
-        view.unpackedBytesPerSample = rawInfo.unpackedBytesPerSample;
-        view.sampleBits = settings_.rawBitDepth;
-        view.packing = rawInfo.packing;
-        view.bayerPattern = rawInfo.pattern;
-        view.timestampUs = timestampUs;
-
-        if (recorder_.enqueue(std::move(rawCopy), view, std::move(metadata)))
-            audioRecorder_.observeVideoFrame(timestampUs, frameDurationUs);
+        audioRecorder_.observeVideoFrame(timestampUs, frameDurationUs);
+        return true;
     }
 
     void capturePhotoFrame(libcamera::Request *request, const WhiteBalanceMeasurement &whiteBalance)
