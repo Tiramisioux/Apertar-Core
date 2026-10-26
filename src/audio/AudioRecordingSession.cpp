@@ -205,10 +205,13 @@ AudioRecordingSession::~AudioRecordingSession()
 }
 
 namespace {
-// Capture ring on the record path: APERTAR_AUDIO_BUFFER_MS, default 1000, 100..4000.
+// Capture ring on the record path: APERTAR_AUDIO_BUFFER_MS, default 100, 100..4000.
+// With a 1 s ring the whole-take drift figure went from +1339 to -201 ppm between
+// a 30 s and a 3 min take (2026-10-26); the writer thread already keeps disk stalls
+// off the capture, so the old ring is the default again.
 unsigned recordCaptureBufferUs()
 {
-    long ms = 1000;
+    long ms = 100;
     if (const char *env = std::getenv("APERTAR_AUDIO_BUFFER_MS"); env && *env)
         ms = std::strtol(env, nullptr, 10);
     ms = std::max(100L, std::min(4000L, ms));

@@ -134,7 +134,9 @@ inline MediaWriterSettings writerSettingsFor(MediaFilesystem filesystem, MediaCl
 {
     switch (filesystem) {
     case MediaFilesystem::Ext4: return {4, 12, 0, true};
-    case MediaFilesystem::Exfat: return {2, 16, 2, true};
+    // exFAT: Core's pre-profile values. Cinemate's {2, 16, +2} dropped frames at
+    // 16-bit 4K25 on the CFE NVMe (C0106, 2026-10-26); 4/12 held 10 min (C0101).
+    case MediaFilesystem::Exfat: return {4, 12, 0, true};
     case MediaFilesystem::Vfat: return {2, 16, 2, true};
     case MediaFilesystem::Ntfs: return {2, 16, 2, true};
     case MediaFilesystem::NtfsFuse: return {2, 16, 2, false};
