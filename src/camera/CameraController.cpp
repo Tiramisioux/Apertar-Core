@@ -1045,7 +1045,10 @@ constexpr uint32_t kPreviewHeight = 720;
 constexpr uint32_t kDefaultH264EncodeWidth = 2560;
 constexpr uint32_t kDefaultH264EncodeHeight = 1440;
 constexpr unsigned int kConfiguredBufferCount = 4;
-constexpr unsigned int kActiveRequestCount = 3;
+// Clear HDR raw is unpacked 16-bit (16.9 MB per buffer on the CPU-cached heap).
+// libcamera's thread holds one buffer for its byte swap and stats, the completion
+// callback holds one for the copy, so the CFE needs more than two left to queue.
+constexpr unsigned int kClearHdrBufferCount = 8;
 constexpr int kPhotoJpegQuality = 92;
 
 unsigned int unsignedEnvValue(const char *name,
@@ -1155,6 +1158,14 @@ unsigned int proresCameraBufferCount()
 {
     // Cover frame-thread borrows, the worker/queue, and camera pipeline headroom.
     return unsignedEnvValue("APERTAR_PRORES_CAMERA_BUFFERS", 12, 8, 32);
+}
+
+// Raw (cDNG/MLV) camera buffers. Every buffer is attached to its own libcamera
+// request, so this is also the number of requests in flight.
+unsigned int rawCameraBufferCount(bool clearHdr)
+{
+    return unsignedEnvValue("APERTAR_RAW_CAMERA_BUFFERS",
+                            clearHdr ? kClearHdrBufferCount : kConfiguredBufferCount, 3, 16);
 }
 
 bool photoFormatWritesDng(PhotoCaptureFormat format)
@@ -3414,8 +3425,6 @@ public:
         maxObservedQueueDepth_ = 0;
         active_.store(false, std::memory_order_release);
         stopping_ = false;
-        pooledRawBytes_ = 0;
-        expectedRawBufferSize_ = 0;
 
         try {
             folderPath_ = folderPath;
@@ -3593,9 +3602,8 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
         queue_.clear();
-        rawPool_.clear();
-        pooledRawBytes_ = 0;
-        expectedRawBufferSize_ = 0;
+        // The raw copy pool survives the take: the next take's first frames would
+        // otherwise allocate and page in 16.6 MB each on libcamera's completion thread.
         workerCount_ = 0;
         stopping_ = false;
     }
@@ -3676,6 +3684,16 @@ public:
             : 0;
         buffer.resize(size);
         return buffer;
+    }
+
+    // Drop the pooled raw copy buffers. The pool survives takes, so the camera
+    // session calls this when it is (re)configured: the frame size may have changed.
+    void clearRawPool()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rawPool_.clear();
+        pooledRawBytes_ = 0;
+        expectedRawBufferSize_ = 0;
     }
 
     bool enqueue(std::vector<uint8_t> rawBytes,
@@ -6410,7 +6428,7 @@ private:
                     : previewSizeForSensorMode(activePreviewReference);
                 const unsigned int configuredBufferCount = proresMode ? proresCameraBufferCount() : processedYuvMode
                     ? h264CameraBufferCount()
-                    : kConfiguredBufferCount;
+                    : rawCameraBufferCount(sanitized.clearHdr);
 
                 previewConfig.pixelFormat = libcamera::formats::YUV420;
                 previewConfig.size = previewSize;
@@ -6647,6 +6665,7 @@ private:
             return false;
         }
 
+        recorder_.clearRawPool();
         allocator_ = std::make_unique<libcamera::FrameBufferAllocator>(camera_);
         const bool cachedProres = !settings_.photoModeEnabled && settings_.recordingFormat == RecordingFormat::Prores && allocateCachedProresBuffers();
         // Clear HDR delivers unpacked 16-bit raw. libcamera byte-swaps it and computes
@@ -6793,8 +6812,9 @@ private:
             ? &processedBuffers(h264Stream_)
             : nullptr;
         const bool processedYuvMode = !settings_.photoModeEnabled && isProcessedVideoFormat(settings_.recordingFormat);
+        // One request per buffer: a buffer without a request can never reach the CFE.
         const size_t activeRequestLimit = processedYuvMode && settings_.recordingFormat == RecordingFormat::Prores ? proresCameraBufferCount()
-            : processedYuvMode ? h264CameraBufferCount() : kActiveRequestCount;
+            : processedYuvMode ? h264CameraBufferCount() : rawCameraBufferCount(settings_.clearHdr);
         size_t requestCount = std::min<size_t>(previewBuffers.size(), activeRequestLimit);
         if (rawBuffers)
             requestCount = std::min(requestCount, rawBuffers->size());
