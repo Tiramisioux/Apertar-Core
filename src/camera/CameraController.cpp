@@ -3515,8 +3515,10 @@ public:
         workers_.reserve(workerCount);
         for (unsigned int i = 0; i < workerCount; ++i)
             spawnWorker([this] { workerLoop(); });
-        // Push the take to the card once a second (data and the exFAT directory
-        // entries), so a pull loses the last second or two, not the whole clip.
+        // Write the clip folder's directory entries once a second, so a pull or a
+        // crash leaves a readable folder; the frames themselves are already on
+        // their way (startWriteback). syncfs here waited for every page in flight
+        // and stalled the writers: 782 queue drops in 3 min (C0005, 2026-10-26).
         if (const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000); syncMs > 0) {
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
@@ -3819,7 +3821,7 @@ public:
         while (!cv_.wait_for(lock, interval, [this] { return stopping_; })) {
             lock.unlock();
             if (!mediumGone_.load(std::memory_order_acquire))
-                ::syncfs(dirFd);
+                ::fsync(dirFd);
             lock.lock();
         }
     }
