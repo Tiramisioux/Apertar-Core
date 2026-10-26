@@ -124,6 +124,7 @@ struct WhiteBalanceMeasurement {
 struct CaptureSettings {
     Resolution resolution{};
     double fps = 24.0;
+    bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
     uint32_t iso = 800;
     bool isoAuto = false;
     uint32_t shutterUs = 20833;

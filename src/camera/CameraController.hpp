@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camera/FramePhaseLock.hpp"
 #include <apertar/core/Types.hpp>
 #include "util/RecordingDropWarning.hpp"
 
@@ -82,6 +83,7 @@ public:
     bool setHdrGainAdder(uint32_t value);
     bool setH264Resolution(Resolution resolution);
     bool setTimecodeMode(TimecodeMode mode);
+    bool setFpsPhaseLock(bool enabled);
     bool setAutofocusMode(AutofocusMode mode);
     bool setAutofocusRange(AutofocusRange range);
     bool setAutofocusSpeed(AutofocusSpeed speed);
@@ -111,6 +113,7 @@ public:
     bool isRecording() const;
     std::string lastError() const;
     std::string recordingError() const;
+    PhaseLockStatus phaseLockStatus() const;
     bool recordingHasDroppedFrames() const { return recordingDropWarning_.dropped(); }
 
 private:
