@@ -3754,7 +3754,123 @@ public:
         return folderPath_.string();
     }
 
+    // A frame handed over by libcamera's completion thread without copying it.
+    // The copy worker syncs the dma-buf, copies, gives the request back to the
+    // camera through the release callback, then queues the frame for writing.
+    struct PendingCopy {
+        libcamera::Request *request = nullptr;
+        int syncFd = -1;                 // CPU-cached dma-buf to sync around the read, -1 if none
+        const uint8_t *source = nullptr; // first active byte of the mapped camera buffer
+        size_t size = 0;                 // active frame bytes
+        bool mapCodes12 = false;         // Clear HDR 12-bit cDNG: map samples back to codes
+        RawFrameView view;               // data/size are filled by the worker
+        CdngEncoder::Metadata metadata;
+    };
+
+    void setRequestRelease(std::function<void(libcamera::Request *)> release, size_t maxHeldRequests)
+    {
+        std::lock_guard<std::mutex> lock(copyMutex_);
+        releaseRequest_ = std::move(release);
+        maxHeldRequests_ = std::max<size_t>(1, maxHeldRequests);
+    }
+
+    // Completion-thread side. Returns false when the request was not taken: the
+    // caller must requeue it itself. Never blocks, never copies.
+    bool enqueueCopy(PendingCopy copy)
+    {
+        std::lock_guard<std::mutex> lock(copyMutex_);
+        if (!active_.load(std::memory_order_acquire) || copyThreads_.empty() || !releaseRequest_)
+            return false;
+        if (heldRequests_ >= maxHeldRequests_) {
+            const uint64_t dropped = droppedNoRequestSlot_.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (dropWarning_) dropWarning_->markDropped();
+            if (dropped == 1 || (dropped % 30) == 0)
+                std::cerr << "ApertarCore drop[copy-slot]: frame=" << copy.metadata.frameIndex
+                          << " held=" << heldRequests_ << "/" << maxHeldRequests_
+                          << " dropped_total=" << dropped << "\n";
+            return false;
+        }
+        ++heldRequests_;
+        copyQueue_.push_back(std::move(copy));
+        copyCv_.notify_one();
+        return true;
+    }
+
 private:
+    void copyLoop()
+    {
+        while (true) {
+            PendingCopy copy;
+            {
+                std::unique_lock<std::mutex> lock(copyMutex_);
+                copyCv_.wait(lock, [this]() { return copyStopping_ || !copyQueue_.empty(); });
+                if (copyQueue_.empty()) {
+                    if (copyStopping_)
+                        return;
+                    continue;
+                }
+                copy = std::move(copyQueue_.front());
+                copyQueue_.pop_front();
+            }
+
+            std::vector<uint8_t> rawCopy = acquireRawBuffer(copy.size);
+            uint8_t *const rawData = rawCopy.data();
+            const bool copied = copy.syncFd < 0 || dmabufCpuSync(copy.syncFd, true);
+            if (copied) {
+                std::memcpy(rawData, copy.source, copy.size);
+                if (copy.syncFd >= 0)
+                    dmabufCpuSync(copy.syncFd, false);
+            }
+            // The camera buffer is free from here on; everything below works on the copy.
+            releaseHeldRequest(copy.request);
+            if (!copied) {
+                recycleRawBuffer(std::move(rawCopy));
+                if (dropWarning_) dropWarning_->markDropped();
+                continue;
+            }
+            if (copy.mapCodes12)
+                compressClearHdrFrame(rawData, copy.size, copy.view.width, copy.view.height, copy.view.stride);
+            copy.view.data = rawData;
+            copy.view.size = copy.size;
+            enqueue(std::move(rawCopy), copy.view, std::move(copy.metadata));
+        }
+    }
+
+    void releaseHeldRequest(libcamera::Request *request)
+    {
+        std::function<void(libcamera::Request *)> release;
+        {
+            std::lock_guard<std::mutex> lock(copyMutex_);
+            if (heldRequests_ > 0)
+                --heldRequests_;
+            release = releaseRequest_;
+        }
+        if (release && request)
+            release(request);
+    }
+
+    void stopCopyWorkers()
+    {
+        {
+            std::lock_guard<std::mutex> lock(copyMutex_);
+            copyStopping_ = true;
+        }
+        copyCv_.notify_all();
+        for (std::thread &worker : copyThreads_) {
+            if (worker.joinable())
+                worker.join();
+        }
+        copyThreads_.clear();
+        // Frames still waiting for a copy are lost with the take; their requests go back.
+        std::deque<PendingCopy> leftover;
+        {
+            std::lock_guard<std::mutex> lock(copyMutex_);
+            leftover.swap(copyQueue_);
+        }
+        for (PendingCopy &copy : leftover)
+            releaseHeldRequest(copy.request);
+    }
+
     struct FrameJob {
         std::vector<uint8_t> rawBytes;
         RawFrameView frame;
@@ -4040,6 +4156,16 @@ private:
     std::atomic<uint64_t> writtenFrames_{0};
     RecordingFailure failure_;
     std::atomic<uint64_t> writeFailures_{0};
+    // Copy workers (completion-thread hand-off).
+    std::mutex copyMutex_;
+    std::condition_variable copyCv_;
+    std::deque<PendingCopy> copyQueue_;
+    std::vector<std::thread> copyThreads_;
+    bool copyStopping_ = false;
+    size_t heldRequests_ = 0;
+    size_t maxHeldRequests_ = 1;
+    std::function<void(libcamera::Request *)> releaseRequest_;
+    std::atomic<uint64_t> droppedNoRequestSlot_{0};
     std::atomic<uint64_t> losslessTimedJobs_{0};
     std::atomic<uint64_t> losslessWorkerWallUs_{0};
     std::atomic<uint64_t> losslessWorkerCpuUs_{0};
