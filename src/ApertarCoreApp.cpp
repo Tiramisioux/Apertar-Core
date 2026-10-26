@@ -11212,6 +11212,7 @@ void ApertarCoreApp::publishEvent(const std::string &eventJson)
     // the command's requester. These events cannot be collected into its reply.
     if (eventJson.find("\"event\":\"settings\"") != std::string::npos ||
         eventJson.find("\"event\":\"recording_health\"") != std::string::npos ||
+        eventJson.find("\"event\":\"recording\"") != std::string::npos ||
         eventJson.find("\"event\":\"media\"") != std::string::npos ||
         eventJson.find("\"event\":\"standby\"") != std::string::npos ||
         eventJson.find("\"event\":\"still_exposure\"") != std::string::npos ||
