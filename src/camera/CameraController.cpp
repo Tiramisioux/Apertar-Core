@@ -4042,14 +4042,8 @@ private:
                 });
 
                 if (queue_.empty()) {
-                    if (stopping_) {
-                        // On a dead medium the destructor's header patch (seek +
-                        // write) must not run; abandon() closes the fd and keeps
-                        // the frame count the header had at open.
-                        if (mediumGone_.load(std::memory_order_acquire))
-                            encoder.abandon();
+                    if (stopping_)
                         return;
-                    }
                     continue;
                 }
 
@@ -4152,8 +4146,14 @@ private:
                 });
 
                 if (queue_.empty()) {
-                    if (stopping_)
+                    if (stopping_) {
+                        // On a dead medium the destructor's header patch (seek +
+                        // write) must not run; abandon() closes the fd and keeps
+                        // the frame count the header had at open.
+                        if (mediumGone_.load(std::memory_order_acquire))
+                            encoder.abandon();
                         return;
+                    }
                     continue;
                 }
 
