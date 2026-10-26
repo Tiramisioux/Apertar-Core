@@ -6495,6 +6495,22 @@ public:
 #endif
     }
 
+    PhaseLockStatus phaseLockStatus()
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        std::lock_guard<std::mutex> lock(controlsMutex_);
+        PhaseLockStatus status;
+        status.active = phaseLock_.active;
+        status.errorUs = lastPhaseErrorUs_;
+        status.durationUs = phaseLockDurationUs_.value_or(0);
+        status.pushes = phaseLock_.pushes;
+        status.saturated = phaseLockSaturated_;
+        return status;
+#else
+        return {};
+#endif
+    }
+
 private:
     static void setError(std::string *error, const std::string &message)
     {
@@ -7166,18 +7182,6 @@ private:
                       << " err_us=" << std::lround(decision.phaseErrorUs)
                       << " dur_us=" << decision.durationUs
                       << " pushes=" << phaseLock_.pushes << "\n";
-    }
-
-    PhaseLockStatus phaseLockStatus()
-    {
-        std::lock_guard<std::mutex> lock(controlsMutex_);
-        PhaseLockStatus status;
-        status.active = phaseLock_.active;
-        status.errorUs = lastPhaseErrorUs_;
-        status.durationUs = phaseLockDurationUs_.value_or(0);
-        status.pushes = phaseLock_.pushes;
-        status.saturated = phaseLockSaturated_;
-        return status;
     }
 
     void requeueRequest(libcamera::Request *request)
