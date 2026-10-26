@@ -2,6 +2,7 @@
 #include "lossydng/LossyDngEncoder.hpp"
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <condition_variable>
@@ -181,6 +182,24 @@ public:
         });
     }
 
+    // Drop every queued item and give its buffer back; the write in progress (if
+    // any) finishes or fails on its own. For a medium that is gone.
+    void abandon()
+    {
+        std::deque<Item> dropped;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            dropped.swap(queue_);
+            queuedBytes_ = 0;
+        }
+        for (Item &item : dropped)
+            give(item.data, item.capacity);
+        drainCv_.notify_all();
+    }
+
+    uint64_t failures() const { return failures_.load(std::memory_order_acquire); }
+    int lastErrno() const { return lastErrno_.load(std::memory_order_acquire); }
+
 private:
     struct Item {
         std::string path;
@@ -228,8 +247,11 @@ private:
             }
 
             if (!writeFile(item.path, item.data, item.size)) {
+                const int err = errno ? errno : EIO;
+                lastErrno_.store(err, std::memory_order_relaxed);
+                failures_.fetch_add(1, std::memory_order_release);
                 std::cerr << "ApertarCore LossyDng write failed for "
-                          << item.path << ": " << std::strerror(errno) << "\n";
+                          << item.path << ": " << std::strerror(err) << " errno=" << err << "\n";
             }
             give(item.data, item.capacity);
 
@@ -248,6 +270,8 @@ private:
     std::deque<Item> queue_;
     size_t queuedBytes_ = 0;
     bool writing_ = false;
+    std::atomic<uint64_t> failures_{0};
+    std::atomic<int> lastErrno_{0};
     bool stopping_ = false;
     std::thread thread_;
 
@@ -369,6 +393,21 @@ void LossyDngEncoder::invalidateTables()
 void LossyDngEncoder::drainWrites()
 {
     LossyDngDiskWriter::instance().drain();
+}
+
+uint64_t LossyDngEncoder::diskWriteFailures()
+{
+    return LossyDngDiskWriter::instance().failures();
+}
+
+int LossyDngEncoder::lastDiskWriteErrno()
+{
+    return LossyDngDiskWriter::instance().lastErrno();
+}
+
+void LossyDngEncoder::abandonWrites()
+{
+    LossyDngDiskWriter::instance().abandon();
 }
 
 void LossyDngEncoder::writeDngFile(const std::string &path, const RawFrameView &frame,

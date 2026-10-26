@@ -24,6 +24,10 @@ public:
                     const CdngEncoder::Metadata &metadata,
                     std::string *error);
     void close();
+    // Close without patching the header: for a medium that is gone.
+    void abandon();
+    // errno behind the last open()/writeFrame() failure, 0 when it carried none.
+    int lastErrno() const { return lastErrno_; }
 
     bool isOpen() const { return fd_ >= 0; }
     uint32_t frameCount() const { return frameCount_; }
@@ -60,6 +64,7 @@ private:
     std::vector<uint8_t> payloadScratch_;
     std::vector<uint16_t> rowScratch_;
     int fd_ = -1;
+    int lastErrno_ = 0;
     uint64_t fileGuid_ = 0;
     int64_t firstTimestampUs_ = 0;
     uint32_t frameCount_ = 0;

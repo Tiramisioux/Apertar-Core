@@ -24,6 +24,7 @@
 #include "video/LibavH264EncoderClient.hpp"
 #include "video/H264Hardware.hpp"
 #include "util/RecordingFailure.hpp"
+#include "util/MediaFault.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
@@ -3394,6 +3395,8 @@ public:
         uint64_t droppedQueueFull = 0;
         uint64_t discardedOnStop = 0;
         uint64_t writeFailures = 0;
+        uint64_t discardedOnFailure = 0;   // queued frames thrown away when the first write failed
+        uint64_t skippedAfterFailure = 0;  // frames the camera offered after the failure latched
         uint64_t currentQueueDepth = 0;
         uint64_t peakQueueDepth = 0;
         uint64_t maxQueueDepth = 0;
@@ -3428,6 +3431,12 @@ public:
         writtenFrames_ = 0;
         writeFailures_ = 0;
         failure_.reset();
+        failed_.store(false, std::memory_order_relaxed);
+        fault_.store(MediaFault::None, std::memory_order_relaxed);
+        mediumGone_.store(false, std::memory_order_relaxed);
+        discardedOnFailureFrames_ = 0;
+        skippedAfterFailure_.store(0, std::memory_order_relaxed);
+        lossyFailuresSeen_.store(LossyDngEncoder::diskWriteFailures(), std::memory_order_relaxed);
         losslessTimedJobs_ = 0;
         losslessWorkerWallUs_ = 0;
         losslessWorkerCpuUs_ = 0;
@@ -3533,13 +3542,17 @@ public:
         return allocateClipFolder(mediaRoot, settings);
     }
 
-    void stop()
+    // mediumDead: the medium is gone (yank, unmount under us). Nothing that would
+    // reopen, rename or fsync a file on it runs; the workers just drain and exit.
+    void stop(bool mediumDead = false)
     {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!active_.load(std::memory_order_acquire) && workers_.empty() && !stopping_)
                 return;
         }
+        if (mediumDead)
+            mediumGone_.store(true, std::memory_order_release);
         const auto stopStarted = std::chrono::steady_clock::now();
         active_.store(false, std::memory_order_release);
         stopCopyWorkers();
@@ -3556,18 +3569,26 @@ public:
         workers_.clear();
         if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
             std::cerr << "ApertarCore recording stats: dropped_copy_slot=" << dropped << "\n";
-        if (recordingFormat_ == RecordingFormat::LossyDng)
-            LossyDngEncoder::drainWrites();
+        if (recordingFormat_ == RecordingFormat::LossyDng) {
+            if (mediumGone_.load(std::memory_order_acquire))
+                LossyDngEncoder::abandonWrites();
+            else
+                LossyDngEncoder::drainWrites();
+        }
 
         const Stats summary = stats();
         if (summary.enqueued > 0 || summary.written > 0 || summary.droppedQueueFull > 0 ||
-            summary.discardedOnStop > 0 || summary.writeFailures > 0) {
+            summary.discardedOnStop > 0 || summary.writeFailures > 0 ||
+            summary.discardedOnFailure > 0 || summary.skippedAfterFailure > 0) {
             std::cerr << "ApertarCore recording stats: "
                       << "enqueued=" << summary.enqueued
                       << " written=" << summary.written
                       << " dropped_queue_full=" << summary.droppedQueueFull
                       << " discarded_on_stop=" << summary.discardedOnStop
                       << " write_failures=" << summary.writeFailures
+                      << " discarded_on_failure=" << summary.discardedOnFailure
+                      << " skipped_after_failure=" << summary.skippedAfterFailure
+                      << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
                       << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth
                       << "\n";
         }
@@ -3650,11 +3671,13 @@ public:
         out.enqueued = enqueuedFrames_.load(std::memory_order_relaxed);
         out.written = writtenFrames_.load(std::memory_order_relaxed);
         out.writeFailures = writeFailures_.load(std::memory_order_relaxed);
+        out.skippedAfterFailure = skippedAfterFailure_.load(std::memory_order_relaxed);
         out.maxQueueDepth = maxQueuedFrames_;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             out.droppedQueueFull = droppedFrames_;
             out.discardedOnStop = discardedOnStopFrames_;
+            out.discardedOnFailure = discardedOnFailureFrames_;
             out.currentQueueDepth = queue_.size();
             out.peakQueueDepth = maxObservedQueueDepth_;
         }
@@ -3662,6 +3685,7 @@ public:
     }
 
     std::string error() const { return failure_.message(); }
+    MediaFault fault() const { return fault_.load(std::memory_order_acquire); }
 
     uint64_t nextFrameIndex(int64_t timestampUs)
     {
@@ -3676,8 +3700,13 @@ public:
     bool hasCapacityForFrame(uint64_t frameIndex)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || !active() || workers_.empty())
+        if (stopping_ || !active() || workers_.empty()) {
+            // After a latched failure the completion thread keeps offering frames;
+            // count them so the stop line says how much of the take never reached disk.
+            if (failed_.load(std::memory_order_acquire))
+                skippedAfterFailure_.fetch_add(1, std::memory_order_relaxed);
             return false;
+        }
         if (queue_.size() < maxQueuedFrames_)
             return true;
 
@@ -4013,8 +4042,14 @@ private:
                 });
 
                 if (queue_.empty()) {
-                    if (stopping_)
+                    if (stopping_) {
+                        // On a dead medium the destructor's header patch (seek +
+                        // write) must not run; abandon() closes the fd and keeps
+                        // the frame count the header had at open.
+                        if (mediumGone_.load(std::memory_order_acquire))
+                            encoder.abandon();
                         return;
+                    }
                     continue;
                 }
 
@@ -4029,17 +4064,28 @@ private:
             const uint64_t cpuStartedUs = timeLossless ? currentThreadCpuTimeUs() : 0;
             bool completed = false;
             try {
-                if (lossyEncoder)
+                if (lossyEncoder) {
                     lossyEncoder->writeDngFile(job.path, job.frame, job.metadata);
-                else
+                    // The lossy writer stores asynchronously and only logged its
+                    // failures; surface them here (one frame late) so a dead medium
+                    // ends a lossy take like any other.
+                    const uint64_t lossyFailures = LossyDngEncoder::diskWriteFailures();
+                    if (lossyFailures != lossyFailuresSeen_.exchange(lossyFailures, std::memory_order_acq_rel)) {
+                        const int err = LossyDngEncoder::lastDiskWriteErrno();
+                        throw std::system_error(err ? err : EIO, std::generic_category(),
+                                                "LossyDng background write failed");
+                    }
+                } else {
                     encoder.writeDngFile(job.path, job.frame, job.metadata);
+                }
                 completed = true;
                 ++writtenFrames_;
             } catch (const std::exception &e) {
                 ++writeFailures_;
-                failRecording(e.what());
-                std::cerr << "ApertarCore DNG write failed for "
-                          << job.path << ": " << e.what() << "\n";
+                const MediaFault fault = classifyMediaException(e);
+                failRecording(mediaFaultMessage(fault, e.what()), fault);
+                std::cerr << "ApertarCore DNG write failed for " << job.path << ": " << e.what()
+                          << " fault=" << mediaFaultName(fault) << " errno=" << errnoFromException(e) << "\n";
             }
             if (timeLossless) {
                 if (completed)
@@ -4120,30 +4166,49 @@ private:
                 std::string mlvError;
                 if (!encoder.isOpen() &&
                     !encoder.open(job.path, settings_, job.frame, job.metadata, &mlvError)) {
+                    if (encoder.lastErrno() != 0)
+                        throw std::system_error(encoder.lastErrno(), std::generic_category(),
+                                                mlvError.empty() ? "failed to open MLV file" : mlvError);
                     throw std::runtime_error(mlvError.empty() ? "failed to open MLV file" : mlvError);
                 }
 
-                if (!encoder.writeFrame(job.frame, job.metadata, &mlvError))
+                if (!encoder.writeFrame(job.frame, job.metadata, &mlvError)) {
+                    // writeFrame reports text; the errno it saw decides the class.
+                    if (encoder.lastErrno() != 0)
+                        throw std::system_error(encoder.lastErrno(), std::generic_category(),
+                                                mlvError.empty() ? "failed to write MLV frame" : mlvError);
                     throw std::runtime_error(mlvError.empty() ? "failed to write MLV frame" : mlvError);
+                }
                 ++writtenFrames_;
             } catch (const std::exception &e) {
                 ++writeFailures_;
-                failRecording(e.what());
-                std::cerr << "ApertarCore MLV write failed for "
-                          << job.path << ": " << e.what() << "\n";
+                const MediaFault fault = classifyMediaException(e);
+                failRecording(mediaFaultMessage(fault, e.what()), fault);
+                std::cerr << "ApertarCore MLV write failed for " << job.path << ": " << e.what()
+                          << " fault=" << mediaFaultName(fault) << " errno=" << errnoFromException(e) << "\n";
             }
 
             recycleRawBuffer(std::move(job.rawBytes));
         }
     }
 
-    void failRecording(const std::string &error)
+    // First failure wins (message and class), like RecordingFailure itself. The
+    // queued frames are lost with the take: count them, they are neither written
+    // nor write failures. A removal also marks the medium gone so stop() and the
+    // MLV worker skip everything that would touch it.
+    void failRecording(const std::string &error, MediaFault fault = MediaFault::Other)
     {
         failure_.set(error);
+        MediaFault expected = MediaFault::None;
+        fault_.compare_exchange_strong(expected, fault, std::memory_order_acq_rel);
+        if (mediaFaultMeansGone(fault))
+            mediumGone_.store(true, std::memory_order_release);
+        failed_.store(true, std::memory_order_release);
         active_.store(false, std::memory_order_release);
         {
             std::lock_guard lock(mutex_);
             stopping_ = true;
+            discardedOnFailureFrames_ += queue_.size();
             queue_.clear();
         }
         cv_.notify_all();
@@ -4191,6 +4256,12 @@ private:
     std::atomic<uint64_t> writtenFrames_{0};
     RecordingFailure failure_;
     std::atomic<uint64_t> writeFailures_{0};
+    std::atomic<bool> failed_{false};
+    std::atomic<MediaFault> fault_{MediaFault::None};
+    std::atomic<bool> mediumGone_{false};
+    uint64_t discardedOnFailureFrames_ = 0;
+    std::atomic<uint64_t> skippedAfterFailure_{0};
+    std::atomic<uint64_t> lossyFailuresSeen_{0};
     // Copy workers (completion-thread hand-off).
     std::mutex copyMutex_;
     std::condition_variable copyCv_;
@@ -4530,6 +4601,9 @@ public:
 
     std::string error() const { return failure_.message(); }
     bool finalizing() const { return finalizing_.load(std::memory_order_acquire); }
+    // Set before stop() when the medium is gone: finalizeStop() then leaves the
+    // .mp4.writing file where it is instead of renaming or copying on a dead mount.
+    void setMediumDead(bool dead) { mediumDead_.store(dead, std::memory_order_release); }
 
     bool active() const
     {
@@ -5053,7 +5127,9 @@ private:
         }
 
         std::error_code ec;
-        if (!tempPath_.empty() && std::filesystem::exists(tempPath_, ec)) {
+        if (mediumDead_.load(std::memory_order_acquire)) {
+            std::cerr << "ApertarCore H.264: medium gone, leaving " << tempPath_ << " unfinalised\n";
+        } else if (!tempPath_.empty() && std::filesystem::exists(tempPath_, ec)) {
             ec.clear();
             if (std::filesystem::file_size(tempPath_, ec) > 0) {
                 ec.clear();
@@ -5298,6 +5374,7 @@ private:
     std::vector<std::thread> copyWorkers_;
     std::thread worker_;
     std::thread finalizer_;
+    std::atomic<bool> mediumDead_{false};
     std::filesystem::path folderPath_;
     std::filesystem::path finalPath_;
     std::filesystem::path tempPath_;
@@ -6219,7 +6296,10 @@ public:
 #endif
     }
 
-    void stopRecording()
+    // mediumGone: the recording medium is no longer there. Every recorder then
+    // skips the finalisation that would reopen it (MLV header patch, H.264
+    // rename, lossy drain, WAV finalise) so the stop cannot hang on a dead mount.
+    void stopRecording(bool mediumGone = false)
     {
 #if APERTARCORE_HAS_LIBCAMERA
         recordingStopInProgress_.store(true, std::memory_order_release);
@@ -6240,11 +6320,15 @@ public:
                           << " duration_pushes=" << phaseLock_.pushes << "\n";
             phaseLock_.resetTelemetry();
         }
+        if (mediumGone)
+            std::cerr << "ApertarCore recording stop: medium gone, finalisation that would reopen it is skipped\n";
         gyroRecorder_.stop();
+        h264Recorder_.setMediumDead(mediumGone);
         h264Recorder_.stop();
-        recorder_.stop();
+        h264Recorder_.setMediumDead(false);
+        recorder_.stop(mediumGone);
         proresRecorder_.stop();
-        audioRecorder_.stop();
+        audioRecorder_.stop(/*finalize=*/!mediumGone);
         haveLastRecordingSensorTimestamp_ = false;
         lastRecordingSensorTimestampUs_ = 0;
         h264FrameCounter_.store(0, std::memory_order_relaxed);
@@ -6468,6 +6552,18 @@ public:
         return recorder_.error();
 #else
         return {};
+#endif
+    }
+
+    // The class of the latched recorder failure (none while everything is fine).
+    MediaFault recordingFault() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        if (lastRecordingFormat_ == RecordingFormat::H264 || lastRecordingFormat_ == RecordingFormat::Prores)
+            return MediaFault::None;
+        return recorder_.fault();
+#else
+        return MediaFault::None;
 #endif
     }
 
@@ -9124,6 +9220,9 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     recording_ = true;
     recordingFailureReported_ = false;
     recordingFailureMessage_.clear();
+    externalFailureMessage_.clear();
+    externalMediumGone_ = false;
+    recordingFaultName_.clear();
     state_ = CameraState::Recording;
     lastError_.clear();
     emitRecordingEventLocked();
@@ -9377,6 +9476,7 @@ bool CameraController::stopRecording()
     if (!simulateCamera_ && session_)
         session_->stopRecording();
     lastError_ = !simulateCamera_ && session_ ? session_->recordingError() : std::string();
+    recordingFaultName_ = !simulateCamera_ && session_ ? mediaFaultName(session_->recordingFault()) : "";
     recordingFailureReported_ = !lastError_.empty();
     recordingFailureMessage_ = lastError_;
     emitRecordingEventLocked();
@@ -9388,16 +9488,40 @@ bool CameraController::checkRecordingFailure()
     std::lock_guard lock(mutex_);
     if (simulateCamera_ || !session_ || recordingFailureReported_ ||
         (state_ != CameraState::Ready && state_ != CameraState::Recording)) return false;
-    const auto error = session_->recordingError();
+    const MediaFault sessionFault = session_->recordingFault();
+    const std::string error = externalFailureMessage_.empty() ? session_->recordingError() : externalFailureMessage_;
     if (error.empty()) return false;
+    const bool mediumGone = externalMediumGone_ || mediaFaultMeansGone(sessionFault);
     recordingFailureReported_ = true;
-    session_->stopRecording();
+    recordingFaultName_ = mediumGone ? mediaFaultName(MediaFault::Removed) : mediaFaultName(sessionFault);
+    std::cerr << "ApertarCore recording failure: fault=" << (recordingFaultName_.empty() ? "write_error" : recordingFaultName_)
+              << " medium_gone=" << (mediumGone ? 1 : 0) << " message=" << error << "\n";
+    session_->stopRecording(mediumGone);
     recording_ = false;
     state_ = CameraState::Ready;
     lastError_ = error;
     recordingFailureMessage_ = error;
     emitRecordingEventLocked();
     return true;
+}
+
+// Called by the media watcher when the mount root stops answering while a take
+// runs. The supervisor (checkRecordingFailure) then ends the take through the
+// same path a failed write takes, with the medium marked gone.
+bool CameraController::flagMediaFault(const std::string &message, bool mediumGone)
+{
+    std::lock_guard lock(mutex_);
+    if (!recording_ || recordingFailureReported_ || !externalFailureMessage_.empty())
+        return false;
+    externalFailureMessage_ = message.empty() ? std::string("Media removed during recording.") : message;
+    externalMediumGone_ = mediumGone;
+    return true;
+}
+
+std::string CameraController::recordingFaultName() const
+{
+    std::lock_guard lock(mutex_);
+    return recordingFaultName_;
 }
 
 bool CameraController::mediaWritesPending() const
@@ -9682,7 +9806,8 @@ void CameraController::emitRecordingEventLocked()
     std::ostringstream out;
     out << "{\"event\":\"recording\",\"active\":" << (recording_ ? "true" : "false")
         << ",\"recording_has_dropped_frames\":" << (recordingDropWarning_.dropped() ? "true" : "false")
-        << ",\"error\":\"" << apertar::escapeJson(lastError_) << "\"}";
+        << ",\"error\":\"" << apertar::escapeJson(lastError_) << "\""
+        << ",\"fault\":\"" << recordingFaultName_ << "\"}";
     eventCallback_(out.str());
 }
 

@@ -6794,7 +6794,7 @@ std::string_view webControlPageHtml()
       const systemState = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : {};
       const deviceState = snapshot && snapshot.device && typeof snapshot.device === "object" ? snapshot.device : {};
       const audioOptions = currentAudioOptions(snapshot);
-      const hasMedia = !!(snapshot && snapshot.media_mounted);
+      const hasMedia = !!(snapshot && (snapshot.media_alive !== undefined ? snapshot.media_alive : snapshot.media_mounted));
       const recordFormatText = recordingFormatLabel(snapshot && snapshot.recording_format);
       const h264RecordFormat = processedVideoRecordFormatForSnapshot(snapshot);
       const fixedTenBitRecordFormat = fixedTenBitRecordingFormat(snapshot && snapshot.recording_format, snapshot);
@@ -9128,6 +9128,7 @@ std::string_view webControlPageHtml()
         case "eject_media":
           if (!optimistic && result && result.media_ejected) {
             snapshot.media_mounted = false;
+            snapshot.media_alive = false;
             snapshot.capture.storage = "No Media Mounted";
           }
           break;
@@ -9387,7 +9388,9 @@ std::string_view webControlPageHtml()
       const isRecording = !!snapshot.recording;
       const isSoundRecording = !!snapshot.sound_recording;
       const isTimelapse = !!snapshot.timelapse_active;
-      const hasMedia = !!snapshot.media_mounted;
+      // media_alive comes from the media watcher and goes false on a pull; media_mounted
+      // only says the mount table still lists the drive.
+      const hasMedia = snapshot.media_alive !== undefined ? !!snapshot.media_alive : !!snapshot.media_mounted;
       const whiteBalanceAuto = !!snapshot.wb_auto;
       const whiteBalanceAvailable = snapshot.wb_available === true;
       const displayWhiteBalance = nearestWhiteBalance(snapshot.wb_kelvin);
@@ -9520,7 +9523,7 @@ std::string_view webControlPageHtml()
       setText("networkHost", snapshot.network_host || window.location.host || window.location.hostname);
       setText("networkTransport", snapshot.network_transport || "Wi-Fi / Ethernet");
       setText("webDateTimePill", formatWebDateTimePill(localDateTimeValue));
-      setText("recordingStatus", !hasMedia ? "NO MEDIA" : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
+      setText("recordingStatus", !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
       setText("resolutionBadge", h264RecordFormat ? h264OutputResolutionLabel(snapshot) : resolutionLabel);
       setText("fpsBadge", String(Math.round(snapshot.fps)) + " FPS");
       const isoLabel = snapshot.iso_auto ? "Auto" : String(snapshot.iso);
@@ -9835,7 +9838,7 @@ std::string_view webControlPageHtml()
 
       const recordButton = document.getElementById("recordButton");
       recordButton.disabled = !(isRecording || isTimelapse || isSoundRecording) &&
-        (!!snapshot.media_writes_pending || state.photoCaptureInProgress || state.commandInFlightCount > 0);
+        (!hasMedia || !!snapshot.media_writes_pending || state.photoCaptureInProgress || state.commandInFlightCount > 0);
       const recordIcon = document.getElementById("recordIcon");
       recordButton.classList.toggle("recording", isRecording && hasMedia && !stillModeEnabled);
       recordButton.classList.toggle("photo-mode", stillModeEnabled);

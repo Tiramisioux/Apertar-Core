@@ -13,6 +13,7 @@
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
+#include "util/MediaProbe.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -98,6 +99,10 @@ private:
     bool startMediaSpeedTest(std::string *errorMessage);
     void runMediaSpeedTest(uint64_t testMiB, std::string mountPath);
     void joinMediaSpeedTest();
+    void runMediaWatcher();
+    void stopMediaWatcher();
+    MediaSnapshot mediaSnapshot() const;
+    std::string mediaGateError() const;
     void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
     void handleSingleHardwareInputAction(const std::string &action);
@@ -174,6 +179,15 @@ private:
     double mediaSpeedLastWriteSpeedMBps_ = 0.0;
     std::string mediaSpeedError_;
     std::thread mediaSpeedThread_;
+
+    // Media watcher: probes the mount root on its own thread (statvfs can block
+    // on a hung device) and publishes the result; see runMediaWatcher().
+    std::thread mediaWatcherThread_;
+    std::atomic<bool> mediaWatcherRunning_{false};
+    mutable std::mutex mediaStateMutex_;
+    std::condition_variable mediaWatcherCv_;
+    MediaSnapshot mediaSnapshot_;
+    bool mediaSnapshotValid_ = false;
 };
 
 } // namespace apertar

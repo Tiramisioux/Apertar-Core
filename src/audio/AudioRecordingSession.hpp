@@ -30,7 +30,9 @@ public:
                std::string *error,
                const RecordingClock *clock = nullptr);
     void observeVideoFrame(uint64_t sensorBootUs, int64_t frameDurationUs);
-    void stop();
+    // finalize=false: the medium is gone; the WAV is not written and the raw PCM
+    // capture file is left where it is.
+    void stop(bool finalize = true);
 
     bool active() const;
     std::string error() const { return failure_.message(); }

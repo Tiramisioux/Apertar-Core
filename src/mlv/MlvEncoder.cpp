@@ -1,3 +1,4 @@
+#include "util/MediaFault.hpp"
 #include "mlv/MlvEncoder.hpp"
 #include "audio/RecordingClock.hpp"
 #include "cdng/CdngEncoder.hpp"
@@ -989,6 +990,7 @@ bool MlvEncoder::open(const std::string &path,
         writeWhiteBalanceBlock(metadata);
         return true;
     } catch (const std::exception &e) {
+        lastErrno_ = errnoFromException(e);
         if (error)
             *error = e.what();
         close();
@@ -1038,10 +1040,21 @@ bool MlvEncoder::writeFrame(const RawFrameView &frame,
         ++frameCount_;
         return true;
     } catch (const std::exception &e) {
+        lastErrno_ = errnoFromException(e);
         if (error)
             *error = e.what();
         return false;
     }
+}
+
+void MlvEncoder::abandon()
+{
+    if (fd_ < 0)
+        return;
+    std::cerr << "ApertarCore MLV: medium gone, leaving " << path_ << " with its header frame count\n";
+    ::close(fd_);
+    fd_ = -1;
+    path_.clear();
 }
 
 void MlvEncoder::close()

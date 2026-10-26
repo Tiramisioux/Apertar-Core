@@ -23,6 +23,11 @@ public:
     void writeDngFile(const std::string &path, const RawFrameView &frame,
                       const CdngEncoder::Metadata &metadata);
     static void drainWrites();
+    // Background writer telemetry: failures since process start and the errno of
+    // the last one; abandonWrites() drops the queue without waiting (dead medium).
+    static uint64_t diskWriteFailures();
+    static int lastDiskWriteErrno();
+    static void abandonWrites();
 
 private:
     void ensureBuf(size_t need, size_t used);

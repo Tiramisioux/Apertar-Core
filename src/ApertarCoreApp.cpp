@@ -1,4 +1,5 @@
 #include "ApertarCoreApp.hpp"
+#include "util/MediaIntent.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
@@ -3706,6 +3707,7 @@ bool mountMediaDeviceAtPath(const std::string &devicePath,
 
     std::string commandError;
     if (mountDeviceAtMediaPath(normalizedDevicePath, mountPath, fsType, &commandError)) {
+        clearEjectIntent(normalizedDevicePath);
         scanMountableMediaDrives(mountPath, true);
         return true;
     }
@@ -3736,6 +3738,12 @@ bool ejectMediaAtPath(const std::string &mountPath, std::string *errorMessage)
         return false;
     }
 
+    // Tell the automounter this unmount is deliberate before the kernel's udev
+    // "change" event can make it remount the drive (Cinemate f01b6cd).
+    std::string intentError;
+    if (!writeEjectIntent(devicePath, &intentError))
+        std::cerr << "ApertarCore media: eject intent not recorded (" << intentError
+                  << "); an automounter may remount the drive\n";
     flushMediaPath(mountPath, devicePath);
     const bool isNvme = devicePath.rfind("/dev/nvme", 0) == 0;
     bool unmounted = false;
@@ -6845,6 +6853,8 @@ bool ApertarCoreApp::start()
         previewPublisherRunning_ = true;
     }
     previewThread_ = std::thread(&ApertarCoreApp::runPreviewPublisher, this);
+    mediaWatcherRunning_.store(true, std::memory_order_release);
+    mediaWatcherThread_ = std::thread(&ApertarCoreApp::runMediaWatcher, this);
 
 #if APERTARCORE_HAS_JPEG
     if (options_.webPort != 0) {
@@ -6860,6 +6870,7 @@ bool ApertarCoreApp::start()
     if (!camera_.start(options_.mediaRoot, options_.simulateCamera)) {
         stopMjpegEncoder();
         stopPreviewPublisher();
+        stopMediaWatcher();
         running_ = false;
         return false;
     }
@@ -6884,6 +6895,7 @@ bool ApertarCoreApp::start()
         camera_.stop();
         stopMjpegEncoder();
         stopPreviewPublisher();
+        stopMediaWatcher();
         running_ = false;
         return false;
     }
@@ -6896,6 +6908,7 @@ bool ApertarCoreApp::start()
         camera_.stop();
         stopMjpegEncoder();
         stopPreviewPublisher();
+        stopMediaWatcher();
         running_ = false;
         return false;
     }
@@ -6945,6 +6958,7 @@ void ApertarCoreApp::stop()
     camera_.stop();
     stopMjpegEncoder();
     stopPreviewPublisher();
+    stopMediaWatcher();
     webServer_.stop();
     controlServer_.stop();
     syncRecordingTracking(false);
@@ -7743,6 +7757,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const std::string sensorName = camera_.sensorName();
     const auto sensorBinning = camera_.sensorBinning();
     const bool mediaMounted = isMountedPath(options_.mediaRoot);
+    const MediaSnapshot mediaSnap = mediaSnapshot();
     const std::string mountedDevice = mediaMounted ? mountedDeviceForPath(options_.mediaRoot) : std::string();
     const std::string mountedVolumeLabel = mediaMounted ? volumeLabelForDevicePath(mountedDevice) : std::string();
     const std::string mediaTypeLabel = mediaMounted
@@ -7932,6 +7947,11 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"af_window_w\":" << jsonNumber(settings.autofocusWindowWidth, 3)
         << ",\"af_window_h\":" << jsonNumber(settings.autofocusWindowHeight, 3)
         << ",\"media_mounted\":" << (mediaMounted ? "true" : "false")
+        << ",\"media_state\":\"" << mediaSnap.stateName() << "\""
+        << ",\"media_alive\":" << (mediaSnap.mounted() ? "true" : "false")
+        << ",\"media_device\":\"" << escapeJson(mediaSnap.device) << "\""
+        << ",\"media_fstype\":\"" << escapeJson(mediaSnap.fstype) << "\""
+        << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
         << ",\"network_transport\":\"" << escapeJson(network.transport) << "\""
         << ",\"network_host\":\"" << escapeJson(network.hostLabel) << "\""
         << ",\"system\":{"
@@ -9124,6 +9144,122 @@ void ApertarCoreApp::joinMediaSpeedTest()
         mediaSpeedThread_.join();
 }
 
+namespace {
+std::string mediaEventJson(const MediaSnapshot &snapshot)
+{
+    std::ostringstream out;
+    out << "{\"event\":\"media\",\"state\":\"" << snapshot.stateName() << "\""
+        << ",\"mounted\":" << (snapshot.mounted() ? "true" : "false")
+        << ",\"device\":\"" << escapeJson(snapshot.device) << "\""
+        << ",\"fstype\":\"" << escapeJson(snapshot.fstype) << "\""
+        << ",\"free_bytes\":" << snapshot.freeBytes
+        << ",\"total_bytes\":" << snapshot.totalBytes
+        << ",\"errno\":" << snapshot.statvfsErrno << "}";
+    return out.str();
+}
+} // namespace
+
+// The media watcher. Two independent questions every cycle, as Cinemate asks
+// them: is the media root still a mount point (/proc/mounts), and does statvfs
+// on the mount root answer. A yanked drive stays in /proc/mounts until something
+// unmounts it, and statvfs then fails with EIO/ENODEV; the writer would find out
+// only on its next frame, and the UI never. 1 s idle, 250 ms while recording.
+// This thread holds no lock anyone else waits for while it probes, so a probe
+// that blocks on a hung device blocks only this thread.
+void ApertarCoreApp::runMediaWatcher()
+{
+    MediaSnapshot previous;
+    bool havePrevious = false;
+    while (mediaWatcherRunning_.load(std::memory_order_acquire)) {
+        const MediaSnapshot current = probeMediaRoot(options_.mediaRoot);
+        updateCachedMediaSnapshot(current);
+        {
+            std::lock_guard<std::mutex> lock(mediaStateMutex_);
+            mediaSnapshot_ = current;
+            mediaSnapshotValid_ = true;
+        }
+        if (!havePrevious || !current.sameMedium(previous)) {
+            std::cerr << "ApertarCore media: state=" << current.stateName()
+                      << " device=" << current.device << " fstype=" << current.fstype
+                      << " free_mb=" << current.freeBytes / (1024 * 1024)
+                      << " errno=" << current.statvfsErrno
+                      << " node=" << (current.deviceNodePresent ? 1 : 0)
+                      << " nvme_state=" << (current.nvmeState.empty() ? "-" : current.nvmeState) << "\n";
+            publishEvent(mediaEventJson(current));
+            const bool lost = havePrevious && previous.mounted() &&
+                (current.state == MediaSnapshot::State::Removed || current.state == MediaSnapshot::State::None);
+            if (lost) {
+                if (!blockDeviceNodeExists(previous.device))
+                    clearEjectIntent(previous.device);   // a real removal, like udev "remove"
+                const std::string why = current.state == MediaSnapshot::State::Removed
+                    ? "Media removed during recording." : "Media was unmounted during recording.";
+                if (camera_.isRecording() && camera_.flagMediaFault(why, true)) {
+                    std::lock_guard<std::mutex> commandLock(commandMutex_);
+                    if (camera_.checkRecordingFailure())
+                        syncRecordingTracking(false);
+                }
+            }
+        }
+        previous = current;
+        havePrevious = true;
+        std::unique_lock<std::mutex> lock(mediaStateMutex_);
+        mediaWatcherCv_.wait_for(lock, std::chrono::milliseconds(camera_.isRecording() ? 250 : 1000),
+                                 [this] { return !mediaWatcherRunning_.load(std::memory_order_acquire); });
+    }
+}
+
+void ApertarCoreApp::stopMediaWatcher()
+{
+    mediaWatcherRunning_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(mediaStateMutex_);
+    }
+    mediaWatcherCv_.notify_all();
+    if (mediaWatcherThread_.joinable())
+        mediaWatcherThread_.join();
+}
+
+MediaSnapshot ApertarCoreApp::mediaSnapshot() const
+{
+    {
+        std::lock_guard<std::mutex> lock(mediaStateMutex_);
+        if (mediaSnapshotValid_)
+            return mediaSnapshot_;
+    }
+    // Before the watcher's first cycle answer from a direct probe (start-up only).
+    return cachedMediaSnapshotOrProbe(options_.mediaRoot);
+}
+
+// The record gate: mounted, alive and not full. One gate in handleCommand covers
+// the socket, the WebUI and the hardware buttons. APERTAR_MEDIA_REQUIRE_MOUNT=0
+// disables it for a development machine whose media root is a plain directory.
+std::string ApertarCoreApp::mediaGateError() const
+{
+    if (options_.simulateCamera)
+        return {};
+    if (const char *env = std::getenv("APERTAR_MEDIA_REQUIRE_MOUNT"); env && env[0] == '0')
+        return {};
+    const MediaSnapshot snapshot = mediaSnapshot();
+    switch (snapshot.state) {
+    case MediaSnapshot::State::Mounted:
+        break;
+    case MediaSnapshot::State::Removed:
+        return "Media was removed. Insert or mount media before recording.";
+    case MediaSnapshot::State::Error:
+        return "Media is not answering (errno " + std::to_string(snapshot.statvfsErrno) + "). Check the drive.";
+    case MediaSnapshot::State::None:
+        return "No media mounted at " + options_.mediaRoot + ".";
+    }
+    // One second of 16-bit 4K at 25 fps is ~415 MB; the floor is a last line, not
+    // a time-left estimate (critic Y11). Per-format floors are the next step.
+    uint64_t minFreeMiB = 1024;
+    if (const char *env = std::getenv("APERTAR_MEDIA_MIN_FREE_MB"); env && *env)
+        minFreeMiB = static_cast<uint64_t>(std::max(0L, std::strtol(env, nullptr, 10)));
+    if (snapshot.totalBytes > 0 && snapshot.freeBytes < minFreeMiB * 1024 * 1024)
+        return "Media is full (" + std::to_string(snapshot.freeBytes / (1024 * 1024)) + " MB free).";
+    return {};
+}
+
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
     std::lock_guard<std::mutex> commandLock(commandMutex_);
@@ -9131,6 +9267,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if ((command.name == "capture_photo" || command.name == "record_start" ||
          (command.name == "timelapse_start" && !camera_.timelapseActive())) && camera_.mediaWritesPending())
         return errorReply(command.id, "Wait for the current capture to finish writing to media.");
+    if (command.name == "capture_photo" || command.name == "record_start" ||
+        (command.name == "timelapse_start" && !camera_.timelapseActive())) {
+        if (const std::string gate = mediaGateError(); !gate.empty())
+            return errorReply(command.id, gate);
+    }
     const bool mediaAction = command.name == "format_media" || command.name == "eject_media" ||
         command.name == "mount_media" || command.name == "run_media_speed_test";
     bool speedTestActive;
@@ -9281,6 +9422,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"standby\":" << (camera_.state() == CameraState::Standby ? "true" : "false")
              << ",\"recording\":" << (recording ? "true" : "false")
              << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
+             << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
+             << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
              << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
              << ",\"timelapse_active\":" << (camera_.timelapseActive() ? "true" : "false")
@@ -10927,6 +11070,7 @@ void ApertarCoreApp::publishEvent(const std::string &eventJson)
     // the command's requester. These events cannot be collected into its reply.
     if (eventJson.find("\"event\":\"settings\"") != std::string::npos ||
         eventJson.find("\"event\":\"recording_health\"") != std::string::npos ||
+        eventJson.find("\"event\":\"media\"") != std::string::npos ||
         eventJson.find("\"event\":\"standby\"") != std::string::npos ||
         eventJson.find("\"event\":\"still_exposure\"") != std::string::npos ||
         eventJson.find("\"event\":\"media_write_state\"") != std::string::npos ||

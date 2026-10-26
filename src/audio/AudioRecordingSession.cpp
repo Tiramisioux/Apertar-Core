@@ -360,7 +360,7 @@ void AudioRecordingSession::observeVideoFrame(uint64_t sensorBootUs, int64_t fra
         : videoLastBootUs_ + uint64_t(videoLastDurationUs_);
 }
 
-void AudioRecordingSession::stop()
+void AudioRecordingSession::stop(bool finalize)
 {
     stopRequested_.store(true, std::memory_order_relaxed);
     if (readerThread_.joinable())
@@ -370,12 +370,16 @@ void AudioRecordingSession::stop()
     if (rawStream_.is_open())
         rawStream_.close();
 
-    if (capturedBytes_ > 0)
+    if (!finalize) {
+        if (!clipFolder_.empty())
+            std::cerr << "ApertarCore audio: medium gone, WAV not finalised; raw PCM left at " << rawPath_ << "\n";
+    } else if (capturedBytes_ > 0) {
         finalizeWav();
-    else if (!clipFolder_.empty())
+    } else if (!clipFolder_.empty()) {
         std::cerr << "ApertarCore audio capture produced no samples.\n";
+    }
 
-    if (!rawPath_.empty()) {
+    if (finalize && !rawPath_.empty()) {
         std::error_code ec;
         std::filesystem::remove(rawPath_, ec);
     }

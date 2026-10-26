@@ -90,6 +90,8 @@ public:
     bool setAutofocusWindow(double x, double y, double width, double height);
     bool applyCapturePreset(const CaptureSettings &settings, const std::function<bool()> &commitUi = {});
     bool checkRecordingFailure();
+    bool flagMediaFault(const std::string &message, bool mediumGone);
+    std::string recordingFaultName() const;
     bool mediaWritesPending() const;
     MediaWriteStatus mediaWriteStatus() const;
     StillExposureStatus stillExposureStatus() const;
@@ -152,6 +154,9 @@ private:
     bool recording_ = false;
     bool recordingFailureReported_ = false;
     std::string recordingFailureMessage_;
+    std::string externalFailureMessage_;
+    bool externalMediumGone_ = false;
+    std::string recordingFaultName_;
     bool timelapseStopRequested_ = false;
     bool timelapseActive_ = false;
     double timelapseIntervalSeconds_ = 0;
