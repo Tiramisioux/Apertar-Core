@@ -1,4 +1,5 @@
 #include "ApertarCoreApp.hpp"
+#include "util/CfeHat.hpp"
 #include "util/MediaIntent.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
@@ -4530,6 +4531,57 @@ Ina219HardwareConfig loadIna219HardwareConfig()
         return config;
     }
 
+    return config;
+}
+
+// [cfexpress_hat] enabled/bus/address, as the automounter and the eject-time
+// reinsert watcher read it. Off when no hardware config has the section.
+CfeHatConfig loadCfeHatConfig()
+{
+    CfeHatConfig config;
+    std::error_code ec;
+    for (const auto &path : hardwareConfigCandidatePaths()) {
+        if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec))
+            continue;
+        std::ifstream input(path);
+        if (!input.is_open())
+            continue;
+        bool inSection = false;
+        std::string line;
+        while (std::getline(input, line)) {
+            std::string trimmed = trimAscii(line);
+            if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == ';')
+                continue;
+            if (trimmed.front() == '[' && trimmed.back() == ']') {
+                inSection = lowerAscii(trimmed) == "[cfexpress_hat]";
+                if (inSection)
+                    config.enabled = true;
+                continue;
+            }
+            if (!inSection)
+                continue;
+            const std::size_t eq = trimmed.find('=');
+            if (eq == std::string::npos)
+                continue;
+            const std::string key = lowerAscii(trimAscii(trimmed.substr(0, eq)));
+            const std::string value = trimmed.substr(eq + 1);
+            if (key == "enabled") {
+                config.enabled = parseConfigBool(value, config.enabled);
+                continue;
+            }
+            const auto parsed = parseConfigInteger(value);
+            if (!parsed.has_value())
+                continue;
+            if (key == "bus" || key == "channel" || key == "i2c_bus") {
+                if (*parsed >= 0 && *parsed <= 255)
+                    config.bus = *parsed;
+            } else if (key == "address" || key == "addr") {
+                if (*parsed >= 0x03 && *parsed <= 0x77)
+                    config.address = *parsed;
+            }
+        }
+        return config;
+    }
     return config;
 }
 
@@ -9170,8 +9222,12 @@ void ApertarCoreApp::runMediaWatcher()
 {
     MediaSnapshot previous;
     bool havePrevious = false;
+    const CfeHatConfig hatConfig = loadCfeHatConfig();
+    CfeHatReader hat(hatConfig);
+    std::cerr << "ApertarCore media: cfexpress hat " << (hatConfig.enabled ? "on" : "off")
+              << " bus=" << hatConfig.bus << " address=0x" << std::hex << hatConfig.address << std::dec << "\n";
     while (mediaWatcherRunning_.load(std::memory_order_acquire)) {
-        const MediaSnapshot current = probeMediaRoot(options_.mediaRoot);
+        const MediaSnapshot current = probeMediaRoot(options_.mediaRoot, hat.cardPresence());
         updateCachedMediaSnapshot(current);
         {
             std::lock_guard<std::mutex> lock(mediaStateMutex_);
@@ -9184,7 +9240,8 @@ void ApertarCoreApp::runMediaWatcher()
                       << " free_mb=" << current.freeBytes / (1024 * 1024)
                       << " errno=" << current.statvfsErrno
                       << " node=" << (current.deviceNodePresent ? 1 : 0)
-                      << " nvme_state=" << (current.nvmeState.empty() ? "-" : current.nvmeState) << "\n";
+                      << " nvme_state=" << (current.nvmeState.empty() ? "-" : current.nvmeState)
+                      << " hat_card=" << cardPresenceName(current.card) << "\n";
             publishEvent(mediaEventJson(current));
             const bool lost = havePrevious && previous.mounted() &&
                 (current.state == MediaSnapshot::State::Removed || current.state == MediaSnapshot::State::None);

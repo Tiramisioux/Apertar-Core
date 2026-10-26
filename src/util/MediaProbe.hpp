@@ -23,6 +23,20 @@ namespace apertar {
 //
 // The decision is a pure function (evaluateMediaProbe) so it can be tested on
 // the host; probeMediaRoot() is the thin syscall wrapper around it.
+// What the CFexpress HAT's status byte says about the card slot (CfeHat.hpp).
+// Unknown when there is no HAT, it is disabled, or its reads disagree.
+enum class CardPresence { Unknown, Present, Absent };
+
+inline const char *cardPresenceName(CardPresence card)
+{
+    switch (card) {
+    case CardPresence::Present: return "in";
+    case CardPresence::Absent: return "out";
+    case CardPresence::Unknown: break;
+    }
+    return "-";
+}
+
 struct MediaSnapshot {
     enum class State { None, Mounted, Removed, Error };
     State state = State::None;
@@ -34,6 +48,7 @@ struct MediaSnapshot {
     int statvfsErrno = 0;    // the errno statvfs returned, 0 when it succeeded
     bool deviceNodePresent = true;   // /sys/class/block/<root> still exists (USB: gone at once on a pull)
     std::string nvmeState;           // /sys/block/<root>/device/state for NVMe ("live", "dead", ...), else empty
+    CardPresence card = CardPresence::Unknown;   // CFexpress HAT slot, for an NVMe medium
 
     bool mounted() const { return state == State::Mounted; }
     const char *stateName() const
@@ -140,11 +155,15 @@ inline std::string rootDiskForDevice(const std::string &devicePath)
 // keep "answering" (critic Y1). Two device-level facts settle it the way
 // Cinemate's udev-remove and NVMe-state watchdogs do: the block device node is
 // gone (USB: immediately), or the NVMe controller reports "dead" (after its
-// I/O timeout). Order: not mounted -> None; node gone or NVMe dead -> Removed;
-// statvfs yank errno -> Removed; other errno -> Error; else Mounted.
+// I/O timeout). A CFexpress card pulled from the HAT keeps both for that whole
+// timeout (the controller stays "live" until an I/O times out), so for an NVMe
+// medium the HAT's slot bit is asked first. Order: not mounted -> None; NVMe and
+// HAT slot empty, node gone or NVMe dead -> Removed; statvfs yank errno ->
+// Removed; other errno -> Error; else Mounted.
 inline MediaSnapshot evaluateMediaProbe(const MountTableEntry &entry, int statvfsErrno,
                                         uint64_t freeBytes, uint64_t totalBytes,
-                                        bool deviceNodePresent = true, const std::string &nvmeState = {})
+                                        bool deviceNodePresent = true, const std::string &nvmeState = {},
+                                        CardPresence card = CardPresence::Unknown)
 {
     MediaSnapshot snapshot;
     if (!entry.found) {
@@ -157,7 +176,9 @@ inline MediaSnapshot evaluateMediaProbe(const MountTableEntry &entry, int statvf
     snapshot.statvfsErrno = statvfsErrno;
     snapshot.deviceNodePresent = deviceNodePresent;
     snapshot.nvmeState = nvmeState;
-    if (!deviceNodePresent || nvmeState == "dead") {
+    const bool nvme = rootDiskForDevice(entry.device).rfind("nvme", 0) == 0;
+    snapshot.card = nvme ? card : CardPresence::Unknown;
+    if ((nvme && card == CardPresence::Absent) || !deviceNodePresent || nvmeState == "dead") {
         snapshot.state = MediaSnapshot::State::Removed;
         return snapshot;
     }
@@ -182,11 +203,15 @@ inline std::string readSysfsWord(const std::filesystem::path &path)
     return word;
 }
 
-inline MediaSnapshot probeMediaRoot(const std::string &mountPath)
+inline MediaSnapshot probeMediaRoot(const std::string &mountPath, CardPresence card = CardPresence::Unknown)
 {
     const MountTableEntry entry = findMountEntry(mountPath);
     if (!entry.found)
         return evaluateMediaProbe(entry, 0, 0, 0);
+    // An empty CFexpress slot settles it before statvfs, which can block on the
+    // vanished device.
+    if (card == CardPresence::Absent && rootDiskForDevice(entry.device).rfind("nvme", 0) == 0)
+        return evaluateMediaProbe(entry, 0, 0, 0, true, {}, card);
     bool nodePresent = true;
     std::string nvmeState;
     if (entry.device.rfind("/dev/", 0) == 0) {
@@ -199,10 +224,10 @@ inline MediaSnapshot probeMediaRoot(const std::string &mountPath)
     }
     struct statvfs vfs {};
     if (::statvfs(mountPath.c_str(), &vfs) != 0)
-        return evaluateMediaProbe(entry, errno ? errno : EIO, 0, 0, nodePresent, nvmeState);
+        return evaluateMediaProbe(entry, errno ? errno : EIO, 0, 0, nodePresent, nvmeState, card);
     const uint64_t frsize = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
     return evaluateMediaProbe(entry, 0, uint64_t(vfs.f_bavail) * frsize, uint64_t(vfs.f_blocks) * frsize,
-                              nodePresent, nvmeState);
+                              nodePresent, nvmeState, card);
 }
 
 // The watcher's latest result, for code that must not block on a dead device

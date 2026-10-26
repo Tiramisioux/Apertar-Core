@@ -3421,6 +3421,14 @@ public:
     bool startAtFolder(const std::filesystem::path &folderPath, const CaptureSettings &settings, std::string *error)
     {
         stop();
+        // Writers left behind by a dead-medium stop still use this queue's state
+        // until the kernel fails their I/O; a new take must not share it with them.
+        if (const unsigned int stranded = liveWorkers_.load(std::memory_order_acquire); stranded > 0) {
+            if (error)
+                *error = "The previous take's writers are still blocked on the removed medium (" +
+                    std::to_string(stranded) + "). Try again in a moment.";
+            return false;
+        }
 
         settings_ = settings;
         recordingFormat_ = settings.recordingFormat;
@@ -3492,8 +3500,23 @@ public:
                           : normalWorkerCount));
         workerCount_ = workerCount;
         workers_.reserve(workerCount);
-        for (unsigned int i = 0; i < workerCount; ++i)
-            workers_.emplace_back(&DngRecordingQueue::workerLoop, this);
+        for (unsigned int i = 0; i < workerCount; ++i) {
+            liveWorkers_.fetch_add(1, std::memory_order_acq_rel);
+            workers_.emplace_back([this] {
+                struct Exit {
+                    DngRecordingQueue *queue;
+                    ~Exit()
+                    {
+                        {
+                            std::lock_guard<std::mutex> lock(queue->exitMutex_);
+                            queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
+                        }
+                        queue->exitCv_.notify_all();
+                    }
+                } exit{this};
+                workerLoop();
+            });
+        }
         {
             std::lock_guard<std::mutex> lock(copyMutex_);
             copyStopping_ = false;
@@ -3562,9 +3585,28 @@ public:
         }
         cv_.notify_all();
 
-        for (std::thread &worker : workers_) {
-            if (worker.joinable())
-                worker.join();
+        // On a dead medium a writer can sit in write() until the kernel gives up
+        // on the device (NVMe: its I/O timeout and reset), and joining it would
+        // hold every lock above this call that long. Wait a bounded time, then
+        // leave the stuck ones behind; startAtFolder refuses until they are gone.
+        bool joinAll = true;
+        if (mediumGone_.load(std::memory_order_acquire)) {
+            const auto limit = std::chrono::milliseconds(unsignedEnvValue("APERTAR_DEAD_MEDIUM_STOP_MS", 2000, 100, 600000));
+            std::unique_lock<std::mutex> lock(exitMutex_);
+            joinAll = exitCv_.wait_for(lock, limit, [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; });
+        }
+        if (joinAll) {
+            for (std::thread &worker : workers_) {
+                if (worker.joinable())
+                    worker.join();
+            }
+        } else {
+            std::cerr << "ApertarCore recording stop: " << liveWorkers_.load(std::memory_order_acquire)
+                      << " writer(s) still blocked on the removed medium, left behind\n";
+            for (std::thread &worker : workers_) {
+                if (worker.joinable())
+                    worker.detach();
+            }
         }
         workers_.clear();
         if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
@@ -4259,6 +4301,11 @@ private:
     std::atomic<bool> failed_{false};
     std::atomic<MediaFault> fault_{MediaFault::None};
     std::atomic<bool> mediumGone_{false};
+    // Writer threads that have not returned yet, including any left behind by a
+    // dead-medium stop (see stop()).
+    std::atomic<unsigned int> liveWorkers_{0};
+    std::mutex exitMutex_;
+    std::condition_variable exitCv_;
     uint64_t discardedOnFailureFrames_ = 0;
     std::atomic<uint64_t> skippedAfterFailure_{0};
     std::atomic<uint64_t> lossyFailuresSeen_{0};
@@ -6322,13 +6369,25 @@ public:
         }
         if (mediumGone)
             std::cerr << "ApertarCore recording stop: medium gone, finalisation that would reopen it is skipped\n";
-        gyroRecorder_.stop();
+        // On a dead medium every recorder that writes to it can block; time each
+        // so the log shows which one held the stop.
+        std::ostringstream stageTimes;
+        auto timed = [&](const char *name, auto &&stopFn) {
+            const auto started = std::chrono::steady_clock::now();
+            stopFn();
+            if (mediumGone)
+                stageTimes << ' ' << name << '=' << std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started).count();
+        };
+        timed("gyro_ms", [&] { gyroRecorder_.stop(); });
         h264Recorder_.setMediumDead(mediumGone);
-        h264Recorder_.stop();
+        timed("h264_ms", [&] { h264Recorder_.stop(); });
         h264Recorder_.setMediumDead(false);
-        recorder_.stop(mediumGone);
-        proresRecorder_.stop();
-        audioRecorder_.stop(/*finalize=*/!mediumGone);
+        timed("raw_ms", [&] { recorder_.stop(mediumGone); });
+        timed("prores_ms", [&] { proresRecorder_.stop(); });
+        timed("audio_ms", [&] { audioRecorder_.stop(/*finalize=*/!mediumGone); });
+        if (mediumGone)
+            std::cerr << "ApertarCore recording stop: dead-medium stages" << stageTimes.str() << "\n";
         haveLastRecordingSensorTimestamp_ = false;
         lastRecordingSensorTimestampUs_ = 0;
         h264FrameCounter_.store(0, std::memory_order_relaxed);
