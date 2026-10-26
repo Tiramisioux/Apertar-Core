@@ -3793,6 +3793,26 @@ public:
         });
     }
 
+    // Start the kernel writing this frame to the card now, without waiting for it
+    // (SYNC_FILE_RANGE_WRITE is asynchronous). The data then leaves the page cache
+    // one file at a time, so the once-a-second syncfs is left with the directory
+    // entries instead of a second's worth of frames in one burst, which cost
+    // capture frames (C0001, 2026-10-26). APERTAR_DNG_WRITEBACK=0 turns it off.
+    static bool startWritebackPerFrame()
+    {
+        static const bool enabled = boolEnvValue("APERTAR_DNG_WRITEBACK", true);
+        return enabled;
+    }
+
+    static void startWriteback(const std::string &path)
+    {
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+            return;
+        ::sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE);
+        ::close(fd);
+    }
+
     void syncLoop(int dirFd, std::chrono::milliseconds interval)
     {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -4224,6 +4244,8 @@ private:
                     }
                 } else {
                     encoder.writeDngFile(job.path, job.frame, job.metadata);
+                    if (startWritebackPerFrame())
+                        startWriteback(job.path);
                 }
                 completed = true;
                 ++writtenFrames_;
