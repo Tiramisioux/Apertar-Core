@@ -3513,22 +3513,14 @@ public:
                           : normalWorkerCount));
         workerCount_ = workerCount;
         workers_.reserve(workerCount);
-        for (unsigned int i = 0; i < workerCount; ++i) {
-            liveWorkers_.fetch_add(1, std::memory_order_acq_rel);
-            workers_.emplace_back([this] {
-                struct Exit {
-                    DngRecordingQueue *queue;
-                    ~Exit()
-                    {
-                        {
-                            std::lock_guard<std::mutex> lock(queue->exitMutex_);
-                            queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
-                        }
-                        queue->exitCv_.notify_all();
-                    }
-                } exit{this};
-                workerLoop();
-            });
+        for (unsigned int i = 0; i < workerCount; ++i)
+            spawnWorker([this] { workerLoop(); });
+        // Push the take to the card once a second (data and the exFAT directory
+        // entries), so a pull loses the last second or two, not the whole clip.
+        if (const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000); syncMs > 0) {
+            mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (mediaDirFd_ >= 0)
+                spawnWorker([this, syncMs, fd = mediaDirFd_] { syncLoop(fd, std::chrono::milliseconds(syncMs)); });
         }
         {
             std::lock_guard<std::mutex> lock(copyMutex_);
@@ -3642,6 +3634,10 @@ public:
             }
         }
         workers_.clear();
+        // A sync thread left behind may still use its descriptor.
+        if (mediaDirFd_ >= 0 && joinAll)
+            ::close(mediaDirFd_);
+        mediaDirFd_ = -1;
         if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
             std::cerr << "ApertarCore recording stats: dropped_copy_slot=" << dropped << "\n";
         if (recordingFormat_ == RecordingFormat::LossyDng) {
@@ -3774,6 +3770,56 @@ public:
         const auto index = std::max(frameIndex_.load(std::memory_order_relaxed), timeIndex);
         frameIndex_.store(index + 1, std::memory_order_relaxed);
         return index;
+    }
+
+    // A thread counted in liveWorkers_ until it returns (see stop()).
+    template <typename Fn>
+    void spawnWorker(Fn fn)
+    {
+        liveWorkers_.fetch_add(1, std::memory_order_acq_rel);
+        workers_.emplace_back([this, fn] {
+            struct Exit {
+                DngRecordingQueue *queue;
+                ~Exit()
+                {
+                    {
+                        std::lock_guard<std::mutex> lock(queue->exitMutex_);
+                        queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
+                    }
+                    queue->exitCv_.notify_all();
+                }
+            } exit{this};
+            fn();
+        });
+    }
+
+    void syncLoop(int dirFd, std::chrono::milliseconds interval)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (!cv_.wait_for(lock, interval, [this] { return stopping_; })) {
+            lock.unlock();
+            if (!mediumGone_.load(std::memory_order_acquire))
+                ::syncfs(dirFd);
+            lock.lock();
+        }
+    }
+
+    // After a normal stop (and the WAV): the take is on the card when this
+    // returns. Not on a dead medium, where it would block.
+    void syncToMedium()
+    {
+        if (mediumGone_.load(std::memory_order_acquire) || folderPathString_.empty())
+            return;
+        const int fd = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (fd < 0)
+            return;
+        const auto started = std::chrono::steady_clock::now();
+        const int result = ::syncfs(fd);
+        const int savedErrno = errno;
+        ::close(fd);
+        std::cerr << "ApertarCore recording stop: synced to the medium in "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+                  << " ms" << (result != 0 ? std::string(" (failed: ") + std::strerror(savedErrno) + ")" : std::string()) << "\n";
     }
 
     bool hasCapacityForFrame(uint64_t frameIndex)
@@ -4371,7 +4417,8 @@ private:
     // Writer threads that have not returned yet, including any left behind by a
     // dead-medium stop (see stop()).
     std::atomic<unsigned int> liveWorkers_{0};
-    std::atomic<int64_t> lastWriteProgressNs_{0};   // steady_clock, last frame written (or the take's start)
+    std::atomic<int64_t> lastWriteProgressNs_{0};
+    int mediaDirFd_ = -1;   // the clip folder, for the once-a-second syncfs   // steady_clock, last frame written (or the take's start)
     std::mutex exitMutex_;
     std::condition_variable exitCv_;
     uint64_t discardedOnFailureFrames_ = 0;
@@ -6462,6 +6509,8 @@ public:
         haveLastRecordingSensorTimestamp_ = false;
         lastRecordingSensorTimestampUs_ = 0;
         h264FrameCounter_.store(0, std::memory_order_relaxed);
+        if (!mediumGone)
+            recorder_.syncToMedium();
         recordingStopInProgress_.store(false, std::memory_order_release);
         emitMediaWriteState();
 #endif
