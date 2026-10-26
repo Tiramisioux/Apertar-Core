@@ -5626,6 +5626,35 @@ bool applyImx585HdrControls(const CaptureSettings &settings, std::string *error)
                                  error);
 }
 
+// Binning from the window the driver reports for the configured mode (ScalerCropMaximum,
+// native pixels) over the output width. A driver whose crop is just the output size, or
+// none, says nothing about binning: then a whole ratio of active width to output width
+// of 2 or more counts as binning, and the source says it was inferred.
+CameraController::SensorBinning binningFromProperties(const libcamera::ControlList &properties,
+                                                      uint32_t outputWidth)
+{
+    CameraController::SensorBinning binning;
+    if (outputWidth == 0)
+        return binning;
+    uint32_t activeWidth = 0;
+    if (const auto areas = properties.get(libcamera::properties::PixelArrayActiveAreas); areas && !areas->empty())
+        activeWidth = (*areas)[0].width;
+    else if (const auto size = properties.get(libcamera::properties::PixelArraySize))
+        activeWidth = size->width;
+    const auto crop = properties.get(libcamera::properties::ScalerCropMaximum);
+    if (crop)
+        binning.crop = crop->toString();
+    if (crop && (crop->width != outputWidth || outputWidth == activeWidth)) {
+        binning.factor = std::max<uint32_t>(1, (crop->width + outputWidth / 2) / outputWidth);
+        binning.source = "driver";
+    } else if (activeWidth > 0) {
+        binning.factor = activeWidth >= 2 * outputWidth && activeWidth % outputWidth == 0
+            ? activeWidth / outputWidth : 1;
+        binning.source = "inferred";
+    }
+    return binning;
+}
+
 // Every sensor mode with the frame rate libcamera allows for it, in both
 // wide_dynamic_range states: configure() each mode and read FrameDurationLimits,
 // as rpicam-apps' --list-cameras does. It needs the camera to itself and the only
@@ -5688,8 +5717,10 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                             if (const auto limits = controls.find(&libcamera::controls::FrameDurationLimits);
                                 limits != controls.end() && limits->second.min().get<int64_t>() > 0)
                                 mode.maxFps = std::round(1e8 / double(limits->second.min().get<int64_t>())) / 100.0;
-                            if (const auto crop = camera->properties().get(libcamera::properties::ScalerCropMaximum))
-                                mode.crop = crop->toString();
+                            const auto binning = binningFromProperties(camera->properties(), size.width);
+                            mode.crop = binning.crop;
+                            mode.binning = binning.factor;
+                            mode.binningSource = binning.source;
                             modes.push_back(std::move(mode));
                         }
                     }
@@ -5707,7 +5738,8 @@ std::vector<CameraController::SensorMode> probeSensorModes()
     for (const auto &mode : modes)
         std::cerr << "ApertarCore sensor mode: " << mode.format << " " << mode.size.toString()
                   << (mode.clearHdr ? " clear_hdr" : " sdr") << " max_fps=" << mode.maxFps
-                  << " crop=" << (mode.crop.empty() ? "-" : mode.crop) << "\n";
+                  << " crop=" << (mode.crop.empty() ? "-" : mode.crop)
+                  << " binning=" << mode.binning << "(" << mode.binningSource << ")\n";
     std::cerr << "ApertarCore sensor probe: " << modes.size() << " modes in " << elapsedMs << " ms\n";
     return modes;
 }
@@ -6434,6 +6466,15 @@ public:
         return sensorFamily_;
     }
 
+    SensorBinning sensorBinning() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        return sensorBinning_;
+#else
+        return {};
+#endif
+    }
+
 private:
     static void setError(std::string *error, const std::string &message)
     {
@@ -6722,6 +6763,7 @@ private:
                                                                                     configuredRawHeight);
                 configuredSensorWidth_ = configuredRawWidth;
                 configuredSensorHeight_ = configuredRawHeight;
+                sensorBinning_ = binningFromProperties(camera_->properties(), configuredRawWidth);
 
                 rawStreamInfo_ = {};
                 if (configuredRaw) {
@@ -6783,6 +6825,7 @@ private:
 
                 std::cerr << "ApertarCore camera configured: sensor="
                           << sensorFamilyName(sensorFamily_)
+                          << " binning=" << sensorBinning_.factor << "(" << sensorBinning_.source << ")"
                           << " raw=" << effectiveSettings.resolution.toString()
                           << " preview=" << previewStream_->configuration().size.toString();
                 if (configuredRaw) {
@@ -8054,6 +8097,7 @@ private:
     std::atomic<uint64_t> photoFrameCounter_{0};
     std::unordered_set<uint32_t> publishedPreviewSlots_;
     SensorFamily sensorFamily_ = SensorFamily::Unknown;
+    SensorBinning sensorBinning_{};
     std::string dngModel_ = "Generic";
     bool warnedUnsupportedRaw_ = false;
     uint64_t recordingGapEstimate_ = 0;
@@ -9245,6 +9289,14 @@ std::vector<CameraController::SensorMode> CameraController::sensorModes() const
 {
     std::lock_guard<std::mutex> lock(probedSensorModesMutex);
     return probedSensorModes;
+}
+
+CameraController::SensorBinning CameraController::sensorBinning() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (simulateCamera_ || !session_)
+        return {};
+    return session_->sensorBinning();
 }
 
 bool CameraController::isRecording() const

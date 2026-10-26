@@ -36,6 +36,16 @@ public:
         bool clearHdr = false;      // listed with wide_dynamic_range on
         double maxFps = 0;          // from FrameDurationLimits after configure()
         std::string crop;           // ScalerCropMaximum, sensor pixels
+        uint32_t binning = 0;       // 0 = unknown; see SensorBinning
+        std::string binningSource;  // "driver", "inferred" or "unknown"
+    };
+    // Binning of a configured mode. "driver": the driver's crop rectangle says it (crop width
+    // over output width). "inferred": the driver gives no window (crop = output size, or none),
+    // so it is guessed from the active area's width. "unknown": nothing to go on.
+    struct SensorBinning {
+        uint32_t factor = 0;
+        std::string source = "unknown";
+        std::string crop;           // ScalerCropMaximum, empty if the pipeline has none
     };
 
     CameraController(EventCallback eventCallback, PreviewCallback previewCallback);
@@ -97,6 +107,7 @@ public:
     CaptureSettings settings() const;
     std::string sensorName() const;
     std::vector<SensorMode> sensorModes() const;
+    SensorBinning sensorBinning() const;
     bool isRecording() const;
     std::string lastError() const;
     std::string recordingError() const;

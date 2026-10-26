@@ -164,6 +164,16 @@ std::string imuStatusBody(bool includeLiveSample)
     return out.str();
 }
 
+// The configured sensor mode's binning, as CameraController::SensorBinning describes it.
+std::string sensorBinningBody(const CameraController::SensorBinning &binning)
+{
+    std::ostringstream out;
+    out << "\"sensor_binning\":" << binning.factor
+        << ",\"sensor_binning_source\":\"" << escapeJson(binning.source) << "\""
+        << ",\"sensor_crop\":\"" << escapeJson(binning.crop) << "\"";
+    return out.str();
+}
+
 std::string settingsBody(const CaptureSettings &settings)
 {
     std::ostringstream out;
@@ -7729,6 +7739,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const bool timelapseActive = camera_.timelapseActive();
     const double timelapseIntervalSeconds = camera_.timelapseIntervalSeconds();
     const std::string sensorName = camera_.sensorName();
+    const auto sensorBinning = camera_.sensorBinning();
     const bool mediaMounted = isMountedPath(options_.mediaRoot);
     const std::string mountedDevice = mediaMounted ? mountedDeviceForPath(options_.mediaRoot) : std::string();
     const std::string mountedVolumeLabel = mediaMounted ? volumeLabelForDevicePath(mountedDevice) : std::string();
@@ -7865,6 +7876,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"timecode_local_ms_of_day\":" << localMillisecondsOfDay
         << ",\"backend_name\":\"Apertar-Core / libcamera\""
         << ",\"sensor\":\"" << escapeJson(sensorName) << "\""
+        << "," << sensorBinningBody(sensorBinning)
         << ",\"resolution\":\"" << settings.resolution.toString() << "\""
         << ",\"width\":" << settings.resolution.width
         << ",\"height\":" << settings.resolution.height
@@ -9241,7 +9253,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                  << ",\"height\":" << mode.size.height
                  << ",\"clear_hdr\":" << (mode.clearHdr ? "true" : "false")
                  << ",\"max_fps\":" << jsonNumber(mode.maxFps, 2)
-                 << ",\"crop\":\"" << escapeJson(mode.crop) << "\"}";
+                 << ",\"crop\":\"" << escapeJson(mode.crop) << "\""
+                 << ",\"binning\":" << mode.binning
+                 << ",\"binning_source\":\"" << escapeJson(mode.binningSource) << "\"}";
         }
         body << "]";
         return okReply(command.id, body.str());
@@ -9270,6 +9284,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_writes_pending\":" << (mediaWrite.pending ? "true" : "false")
              << ",\"media_write_revision\":" << mediaWrite.revision
              << ",\"sensor\":\"" << escapeJson(camera_.sensorName()) << "\""
+             << "," << sensorBinningBody(camera_.sensorBinning())
              << "," << settingsBody(camera_.settings());
         return okReply(command.id, body.str());
     }
