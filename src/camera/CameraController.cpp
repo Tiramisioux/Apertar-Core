@@ -3438,6 +3438,7 @@ public:
         enqueuedFrames_ = 0;
         writtenFrames_ = 0;
         writeFailures_ = 0;
+        markWriteProgress();
         failure_.reset();
         failed_.store(false, std::memory_order_relaxed);
         fault_.store(MediaFault::None, std::memory_order_relaxed);
@@ -3589,11 +3590,29 @@ public:
         // on the device (NVMe: its I/O timeout and reset), and joining it would
         // hold every lock above this call that long. Wait a bounded time, then
         // leave the stuck ones behind; startAtFolder refuses until they are gone.
+        // A writer that makes no progress for the stall time while we wait marks
+        // the medium gone too: this stop may be the user's, before any fault.
         bool joinAll = true;
-        if (mediumGone_.load(std::memory_order_acquire)) {
+        {
+            const auto workersDone = [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; };
             const auto limit = std::chrono::milliseconds(unsignedEnvValue("APERTAR_DEAD_MEDIUM_STOP_MS", 2000, 100, 600000));
             std::unique_lock<std::mutex> lock(exitMutex_);
-            joinAll = exitCv_.wait_for(lock, limit, [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; });
+            while (!workersDone()) {
+                if (mediumGone_.load(std::memory_order_acquire)) {
+                    joinAll = exitCv_.wait_for(lock, limit, workersDone);
+                    break;
+                }
+                if (const int64_t stalledMs = msSinceWriteProgress(); stalledMs > writeStallLimitMs()) {
+                    lock.unlock();
+                    std::cerr << "ApertarCore recording stop: no frame written for " << stalledMs
+                              << " ms, treating the medium as gone\n";
+                    failRecording("Media stopped responding: nothing was written for " +
+                                  std::to_string(stalledMs / 1000) + " s.", MediaFault::Removed);
+                    lock.lock();
+                    continue;
+                }
+                exitCv_.wait_for(lock, std::chrono::milliseconds(200), workersDone);
+            }
         }
         if (joinAll) {
             for (std::thread &worker : workers_) {
@@ -3741,7 +3760,7 @@ public:
 
     bool hasCapacityForFrame(uint64_t frameIndex)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         if (stopping_ || !active() || workers_.empty()) {
             // After a latched failure the completion thread keeps offering frames;
             // count them so the stop line says how much of the take never reached disk.
@@ -3761,7 +3780,35 @@ public:
                       << " queue=" << queue_.size() << "/" << maxQueuedFrames_
                       << "\n";
         }
+        // A full queue and no frame written for the stall time: the writers are
+        // stuck in the kernel (a pulled or hung medium the probe has not seen).
+        const int64_t stalledMs = msSinceWriteProgress();
+        lock.unlock();
+        if (stalledMs > writeStallLimitMs()) {
+            std::cerr << "ApertarCore recording: no frame written for " << stalledMs
+                      << " ms with the queue full, treating the medium as gone\n";
+            failRecording("Media stopped responding: nothing was written for " +
+                          std::to_string(stalledMs / 1000) + " s.", MediaFault::Removed);
+        }
         return false;
+    }
+
+    void markWriteProgress()
+    {
+        lastWriteProgressNs_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                                   std::memory_order_release);
+    }
+
+    int64_t msSinceWriteProgress() const
+    {
+        const int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration(
+            now - lastWriteProgressNs_.load(std::memory_order_acquire))).count();
+    }
+
+    static int64_t writeStallLimitMs()
+    {
+        return unsignedEnvValue("APERTAR_WRITE_STALL_MS", 5000, 1000, 600000);
     }
 
     std::vector<uint8_t> acquireRawBuffer(size_t size)
@@ -4116,6 +4163,7 @@ private:
                 }
                 completed = true;
                 ++writtenFrames_;
+                markWriteProgress();
             } catch (const std::exception &e) {
                 ++writeFailures_;
                 const MediaFault fault = classifyMediaException(e);
@@ -4222,6 +4270,7 @@ private:
                     throw std::runtime_error(mlvError.empty() ? "failed to write MLV frame" : mlvError);
                 }
                 ++writtenFrames_;
+                markWriteProgress();
             } catch (const std::exception &e) {
                 ++writeFailures_;
                 const MediaFault fault = classifyMediaException(e);
@@ -4304,6 +4353,7 @@ private:
     // Writer threads that have not returned yet, including any left behind by a
     // dead-medium stop (see stop()).
     std::atomic<unsigned int> liveWorkers_{0};
+    std::atomic<int64_t> lastWriteProgressNs_{0};   // steady_clock, last frame written (or the take's start)
     std::mutex exitMutex_;
     std::condition_variable exitCv_;
     uint64_t discardedOnFailureFrames_ = 0;

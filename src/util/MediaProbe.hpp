@@ -9,6 +9,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <sys/statvfs.h>
 
@@ -49,6 +50,7 @@ struct MediaSnapshot {
     bool deviceNodePresent = true;   // /sys/class/block/<root> still exists (USB: gone at once on a pull)
     std::string nvmeState;           // /sys/block/<root>/device/state for NVMe ("live", "dead", ...), else empty
     CardPresence card = CardPresence::Unknown;   // CFexpress HAT slot, for an NVMe medium
+    bool pulledSinceMount = false;   // the slot read empty since this mount: a Pi 5 cannot hot-plug NVMe
 
     bool mounted() const { return state == State::Mounted; }
     const char *stateName() const
@@ -63,7 +65,8 @@ struct MediaSnapshot {
     }
     bool sameMedium(const MediaSnapshot &other) const
     {
-        return state == other.state && device == other.device && fstype == other.fstype;
+        return state == other.state && device == other.device && fstype == other.fstype &&
+            card == other.card && pulledSinceMount == other.pulledSinceMount;
     }
 };
 
@@ -124,6 +127,27 @@ inline MountTableEntry findMountEntry(const std::string &mountPath)
 {
     std::ifstream mounts("/proc/mounts");
     return findMountEntry(mounts, mountPath);
+}
+
+// The kernel's id for the mount on mountPath (/proc/self/mountinfo: field 1 is
+// the mount id, field 5 the mount point), -1 when nothing is mounted there. It
+// changes on every unmount and mount, even of the same device name.
+inline int mountIdForPath(const std::string &mountPath)
+{
+    const std::string wanted = normalizeMountPathForProbe(mountPath);
+    std::ifstream info("/proc/self/mountinfo");
+    std::string line;
+    int found = -1;
+    while (std::getline(info, line)) {
+        std::istringstream fields(line);
+        int id = -1, parent = -1;
+        std::string devNumbers, root, mountPoint;
+        if (!(fields >> id >> parent >> devNumbers >> root >> mountPoint))
+            continue;
+        if (normalizeMountPathForProbe(decodeMountField(mountPoint)) == wanted)
+            found = id;   // the last one is on top
+    }
+    return found;
 }
 
 // /dev/nvme0n1p1 -> nvme0n1, /dev/mmcblk0p2 -> mmcblk0, /dev/sda1 -> sda, /dev/sda -> sda.

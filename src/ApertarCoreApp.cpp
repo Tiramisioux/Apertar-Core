@@ -9226,8 +9226,23 @@ void ApertarCoreApp::runMediaWatcher()
     CfeHatReader hat(hatConfig);
     std::cerr << "ApertarCore media: cfexpress hat " << (hatConfig.enabled ? "on" : "off")
               << " bus=" << hatConfig.bus << " address=0x" << std::hex << hatConfig.address << std::dec << "\n";
+    // A CFexpress card pulled and pushed back is not usable until the PCIe device
+    // is removed and rescanned (the automounter's remount, or a reboot), although
+    // the slot reads full again. Keep that mount "removed" until its id changes.
+    int pulledMountId = -1;
     while (mediaWatcherRunning_.load(std::memory_order_acquire)) {
-        const MediaSnapshot current = probeMediaRoot(options_.mediaRoot, hat.cardPresence());
+        const CardPresence slot = hat.cardPresence();
+        const int mountId = mountIdForPath(options_.mediaRoot);
+        if (pulledMountId >= 0 && mountId != pulledMountId)
+            pulledMountId = -1;
+        const bool pulled = pulledMountId >= 0;
+        MediaSnapshot current = probeMediaRoot(options_.mediaRoot, pulled ? CardPresence::Absent : slot);
+        if (!pulled && slot == CardPresence::Absent && current.state == MediaSnapshot::State::Removed &&
+            current.card == CardPresence::Absent)
+            pulledMountId = mountId;
+        current.pulledSinceMount = pulledMountId >= 0;
+        if (current.card != CardPresence::Unknown)
+            current.card = slot;
         updateCachedMediaSnapshot(current);
         {
             std::lock_guard<std::mutex> lock(mediaStateMutex_);
@@ -9241,7 +9256,8 @@ void ApertarCoreApp::runMediaWatcher()
                       << " errno=" << current.statvfsErrno
                       << " node=" << (current.deviceNodePresent ? 1 : 0)
                       << " nvme_state=" << (current.nvmeState.empty() ? "-" : current.nvmeState)
-                      << " hat_card=" << cardPresenceName(current.card) << "\n";
+                      << " hat_card=" << cardPresenceName(current.card)
+                      << " pulled=" << (current.pulledSinceMount ? 1 : 0) << "\n";
             publishEvent(mediaEventJson(current));
             const bool lost = havePrevious && previous.mounted() &&
                 (current.state == MediaSnapshot::State::Removed || current.state == MediaSnapshot::State::None);
@@ -9301,6 +9317,8 @@ std::string ApertarCoreApp::mediaGateError() const
     case MediaSnapshot::State::Mounted:
         break;
     case MediaSnapshot::State::Removed:
+        if (snapshot.pulledSinceMount && snapshot.card == CardPresence::Present)
+            return "The card was pulled while mounted. Eject and mount it again (or reboot) before recording.";
         return "Media was removed. Insert or mount media before recording.";
     case MediaSnapshot::State::Error:
         return "Media is not answering (errno " + std::to_string(snapshot.statvfsErrno) + "). Check the drive.";
