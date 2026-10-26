@@ -13,7 +13,7 @@
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
-#include "util/MediaProbe.hpp"
+#include "util/MediaProfile.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -103,6 +103,8 @@ private:
     void stopMediaWatcher();
     MediaSnapshot mediaSnapshot() const;
     std::string mediaGateError() const;
+    void applyMediaTuning(const MediaProfile &profile, bool apply);
+    MediaProfile mediaProfile() const;
     void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
     void handleSingleHardwareInputAction(const std::string &action);
@@ -188,6 +190,7 @@ private:
     std::condition_variable mediaWatcherCv_;
     MediaSnapshot mediaSnapshot_;
     bool mediaSnapshotValid_ = false;
+    MediaProfile mediaProfile_;
 };
 
 } // namespace apertar

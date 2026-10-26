@@ -1,0 +1,112 @@
+#!/bin/sh
+# apertar-media-tune apply|restore <rootdisk> <class> <fs>
+#
+# Root helper for the recording drive's kernel-side knobs. Called by
+# apertar-core (as `sudo -n /usr/local/libexec/apertar-media-tune ...`) when
+# the media root is mounted (apply) and when it goes away (restore). Only the
+# recording target is ever tuned: a USB stick for file transfer must not
+# override the recorder's settings (Cinemate c8f06c9).
+#
+# Per connection class, starting points taken from Cinemate's storage-automount
+# table; T29 measures them on this rig before they are trusted:
+#
+#   class        dirty_bytes  dirty_background  scheduler    nr_requests  rq_affinity
+#   pi-nvme      1 GiB        256 MiB           none         512          2   (+ nvme_core default_ps_max_latency_us 0)
+#   usb-uas      512 MiB      256 MiB           none         256          2
+#   usb-storage  256 MiB      128 MiB           none         256          2   (SLC-cache cliff: keep the cushion small)
+#   sd-card      256 MiB      128 MiB           mq-deadline  128          1
+#   other/unknown: block queue untouched, vm.dirty_* untouched
+#
+# With O_DIRECT cDNG the dirty cushion only covers buffered writers (MLV, H.264,
+# audio); it still decides how much unflushed data a yank can take with it.
+# Originals are saved under /run/apertar-media/tune/ on the first apply and
+# written back on restore. Every write is logged; nothing here is silent.
+set -u
+
+ACTION=${1:-}
+ROOT=${2:-}
+CLASS=${3:-unknown}
+FS=${4:-none}
+STATE_DIR="${APERTAR_MEDIA_RUN_DIR:-/run/apertar-media}/tune"
+
+log() { echo "apertar-media-tune: $*"; }
+
+case "$ROOT" in
+    ""|*/*|*..*) log "bad root disk '$ROOT'"; exit 2 ;;
+esac
+QUEUE="/sys/block/$ROOT/queue"
+
+write_sys() {
+    # write_sys <path> <value>
+    if [ -w "$1" ]; then
+        if printf '%s' "$2" > "$1" 2>/dev/null; then log "$1 = $2"; else log "cannot set $1 to $2"; fi
+    else
+        log "$1 not writable, skipped"
+    fi
+}
+
+save_once() {
+    # save_once <name> <path>: keep the first value seen, so repeated applies do not overwrite the original
+    mkdir -p "${STATE_DIR:?}"
+    [ -e "${STATE_DIR:?}/${1:?}" ] && return
+    [ -r "$2" ] && cat "$2" > "${STATE_DIR:?}/${1:?}" 2>/dev/null
+}
+
+restore_one() {
+    # restore_one <name> <path>
+    name=${1:?}
+    saved="${STATE_DIR:?}/${name}"
+    if [ -e "$saved" ]; then
+        value=$(cat "$saved")
+        case "$name" in queue_scheduler) value=$(echo "$value" | sed -n 's/.*\[\(.*\)\].*/\1/p') ;; esac
+        write_sys "$2" "$value"
+        rm -f "${STATE_DIR:?}/${name:?}"
+    fi
+}
+
+case "$CLASS" in
+    pi-nvme)     DIRTY=$((1024*1024*1024)); BG=$((256*1024*1024)); SCHED=none;        NR=512; RQ=2; APST=0 ;;
+    usb-uas)     DIRTY=$((512*1024*1024));  BG=$((256*1024*1024)); SCHED=none;        NR=256; RQ=2; APST="" ;;
+    usb-storage) DIRTY=$((256*1024*1024));  BG=$((128*1024*1024)); SCHED=none;        NR=256; RQ=2; APST="" ;;
+    sd-card)     DIRTY=$((256*1024*1024));  BG=$((128*1024*1024)); SCHED=mq-deadline; NR=128; RQ=1; APST="" ;;
+    *)           DIRTY=""; BG=""; SCHED=""; NR=""; RQ=""; APST="" ;;
+esac
+
+case "$ACTION" in
+    apply)
+        log "apply root=$ROOT class=$CLASS fs=$FS"
+        if [ -z "$DIRTY" ]; then log "class $CLASS: nothing to tune"; exit 0; fi
+        for k in scheduler nr_requests rq_affinity; do save_once "queue_$k" "$QUEUE/$k"; done
+        for k in dirty_bytes dirty_background_bytes dirty_ratio dirty_background_ratio dirty_writeback_centisecs dirty_expire_centisecs; do
+            save_once "vm_$k" "/proc/sys/vm/$k"
+        done
+        write_sys "$QUEUE/scheduler" "$SCHED"
+        write_sys "$QUEUE/nr_requests" "$NR"
+        write_sys "$QUEUE/rq_affinity" "$RQ"
+        # the ratios must be 0 before the byte values take effect
+        write_sys /proc/sys/vm/dirty_ratio 0
+        write_sys /proc/sys/vm/dirty_background_ratio 0
+        write_sys /proc/sys/vm/dirty_background_bytes "$BG"
+        write_sys /proc/sys/vm/dirty_bytes "$DIRTY"
+        write_sys /proc/sys/vm/dirty_writeback_centisecs 150
+        write_sys /proc/sys/vm/dirty_expire_centisecs 3000
+        # NVMe autonomous power states: an exit latency mid-take is a stall (Cinemate sets 0 for NVMe classes)
+        if [ -n "$APST" ]; then
+            save_once nvme_ps_max_latency /sys/module/nvme_core/parameters/default_ps_max_latency_us
+            write_sys /sys/module/nvme_core/parameters/default_ps_max_latency_us "$APST"
+        fi
+        ;;
+    restore)
+        log "restore root=$ROOT"
+        [ -d "${STATE_DIR:?}" ] || { log "nothing saved"; exit 0; }
+        for k in scheduler nr_requests rq_affinity; do restore_one "queue_$k" "$QUEUE/$k"; done
+        # byte values first, then the ratios, so the kernel never sees both at 0
+        for k in dirty_bytes dirty_background_bytes dirty_ratio dirty_background_ratio dirty_writeback_centisecs dirty_expire_centisecs; do
+            restore_one "vm_$k" "/proc/sys/vm/$k"
+        done
+        restore_one nvme_ps_max_latency /sys/module/nvme_core/parameters/default_ps_max_latency_us
+        ;;
+    *)
+        echo "usage: apertar-media-tune apply|restore <rootdisk> <class> <fs>" >&2; exit 2 ;;
+esac
+exit 0

@@ -1,0 +1,3 @@
+# /etc/sudoers.d/apertar-media  (install with: sudo install -m 0440 config/apertar-media.sudoers /etc/sudoers.d/apertar-media)
+# Lets the user apertar-core runs as call the media tuning helper without a password.
+pi ALL=(root) NOPASSWD: /usr/local/libexec/apertar-media-tune

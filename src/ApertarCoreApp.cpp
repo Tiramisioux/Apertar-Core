@@ -3635,11 +3635,14 @@ bool mountDeviceAtMediaPath(const std::string &devicePath,
     std::string mountType = fsType;
     std::string options;
 
+    // noatime everywhere: a DNG per frame must not cost an inode update per read.
     if (fsType == "ntfs") {
         mountType = "ntfs3";
-        options = "uid=1000,gid=1000,umask=0002";
+        options = "uid=1000,gid=1000,umask=0002,noatime";
     } else if (fsType == "exfat" || fsType == "vfat" || fsType == "fat32" || fsType == "fat" || fsType == "msdos") {
-        options = "uid=1000,gid=1000,umask=0002";
+        options = "uid=1000,gid=1000,umask=0002,noatime";
+    } else {
+        options = "noatime";
     }
 
     std::string command = "sudo -n mount";
@@ -7810,6 +7813,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const auto sensorBinning = camera_.sensorBinning();
     const bool mediaMounted = isMountedPath(options_.mediaRoot);
     const MediaSnapshot mediaSnap = mediaSnapshot();
+    const MediaProfile mediaProf = mediaProfile();
     const std::string mountedDevice = mediaMounted ? mountedDeviceForPath(options_.mediaRoot) : std::string();
     const std::string mountedVolumeLabel = mediaMounted ? volumeLabelForDevicePath(mountedDevice) : std::string();
     const std::string mediaTypeLabel = mediaMounted
@@ -8003,6 +8007,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"media_alive\":" << (mediaSnap.mounted() ? "true" : "false")
         << ",\"media_device\":\"" << escapeJson(mediaSnap.device) << "\""
         << ",\"media_fstype\":\"" << escapeJson(mediaSnap.fstype) << "\""
+        << ",\"media_class\":\"" << mediaClassName(mediaProf.mediaClass) << "\""
+        << ",\"media_profile\":\"" << escapeJson(mediaProf.summary()) << "\""
         << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
         << ",\"network_transport\":\"" << escapeJson(network.transport) << "\""
         << ",\"network_host\":\"" << escapeJson(network.hostLabel) << "\""
@@ -9272,6 +9278,25 @@ void ApertarCoreApp::runMediaWatcher()
                         syncRecordingTracking(false);
                 }
             }
+            // Only now the profile and the root helper: a sudo round-trip must not
+            // delay the abort above (critic S11).
+            // The medium decides the writer topology and the kernel knobs; classify
+            // it once per change, log it, and hand the kernel side to the root helper.
+            MediaProfile profile;
+            if (current.mounted()) {
+                profile = detectMediaProfile(current);
+                std::cerr << "ApertarCore media profile: " << profile.summary() << "\n";
+            }
+            MediaProfile previousProfile;
+            {
+                std::lock_guard<std::mutex> lock(mediaStateMutex_);
+                previousProfile = mediaProfile_;
+                mediaProfile_ = profile;
+            }
+            if (current.mounted())
+                applyMediaTuning(profile, true);
+            else if (previousProfile.known())
+                applyMediaTuning(previousProfile, false);
         }
         previous = current;
         havePrevious = true;
@@ -9333,6 +9358,44 @@ std::string ApertarCoreApp::mediaGateError() const
     if (snapshot.totalBytes > 0 && snapshot.freeBytes < minFreeMiB * 1024 * 1024)
         return "Media is full (" + std::to_string(snapshot.freeBytes / (1024 * 1024)) + " MB free).";
     return {};
+}
+
+MediaProfile ApertarCoreApp::mediaProfile() const
+{
+    std::lock_guard<std::mutex> lock(mediaStateMutex_);
+    return mediaProfile_;
+}
+
+// Kernel-side knobs (block queue, vm.dirty_*) need root; Core hands them to
+// /usr/local/libexec/apertar-media-tune through sudo -n, for the recording
+// target only, and asks it to restore when that medium goes away. Without the
+// helper the camera runs exactly as before, with one journal line saying so.
+void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
+{
+    if (const char *env = std::getenv("APERTAR_MEDIA_TUNE"); env && env[0] == '0')
+        return;
+    if (profile.rootDisk.empty())
+        return;
+    static const char *const helper = "/usr/local/libexec/apertar-media-tune";
+    std::error_code ec;
+    if (!std::filesystem::exists(helper, ec)) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "ApertarCore media: " << helper
+                      << " not installed; block-queue and dirty-page tuning skipped\n";
+        }
+        return;
+    }
+    std::string commandError;
+    const std::string command = std::string("sudo -n ") + helper + (apply ? " apply " : " restore ") +
+        shellQuote(profile.rootDisk) + " " + mediaClassName(profile.mediaClass) + " " +
+        mediaFilesystemName(profile.filesystem);
+    if (!runShellCommand(command, &commandError))
+        std::cerr << "ApertarCore media: tuning helper failed: " << commandError << "\n";
+    else
+        std::cerr << "ApertarCore media: tuning " << (apply ? "applied" : "restored") << " for "
+                  << profile.rootDisk << " (" << mediaClassName(profile.mediaClass) << ")\n";
 }
 
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)

@@ -25,6 +25,7 @@
 #include "video/H264Hardware.hpp"
 #include "util/RecordingFailure.hpp"
 #include "util/MediaFault.hpp"
+#include "util/MediaProfile.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
@@ -1171,8 +1172,12 @@ unsigned int proresCameraBufferCount()
 // request, so this is also the number of requests in flight.
 unsigned int rawCameraBufferCount(bool clearHdr)
 {
-    return unsignedEnvValue("APERTAR_RAW_CAMERA_BUFFERS",
-                            clearHdr ? kClearHdrBufferCount : kConfiguredBufferCount, 3, 16);
+    const unsigned int base = clearHdr ? kClearHdrBufferCount : kConfiguredBufferCount;
+    // Spikier filesystems (exFAT/FAT/NTFS allocate a directory entry per frame)
+    // get two more buffers of cushion, as Cinemate's profiles do (8 ext4 /
+    // 10 exFAT-NTFS). The env override still wins over everything.
+    const unsigned int extra = mediaExtraRawBuffersForConfiguredRoot();
+    return unsignedEnvValue("APERTAR_RAW_CAMERA_BUFFERS", std::min(16u, base + extra), 3, 16);
 }
 
 bool photoFormatWritesDng(PhotoCaptureFormat format)
@@ -3476,18 +3481,25 @@ public:
         }
 
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
-        const unsigned int normalWorkerCount = std::max(2u, std::min(4u, hardwareThreads));
+        const unsigned int formatWorkerCount = std::max(2u, std::min(4u, hardwareThreads));
+        // Uncompressed cDNG is storage-bound: the medium decides how many writers make
+        // sense (ext4 keeps 4, exFAT/NTFS get 2; T29 measures). Env wins, then the
+        // media profile, then the format default.
+        const unsigned int normalWorkerCount = unsignedEnvValue("APERTAR_CDNG_UNCOMPRESSED_WORKERS",
+            mediaProfile_.known() ? std::min(mediaProfile_.writer.workers, formatWorkerCount) : formatWorkerCount, 1, 8);
         const bool losslessCdng = recordingFormat_ == RecordingFormat::Cdng &&
             settings_.cdngCompression == CdngCompression::LosslessJpeg;
         const bool compressedDng = losslessCdng || recordingFormat_ == RecordingFormat::LossyDng;
-        const unsigned int defaultQueueFrames = compressedDng && hardwareThreads >= 4 ? 24u : 12u;
+        const unsigned int defaultQueueFrames = compressedDng && hardwareThreads >= 4
+            ? 24u
+            : (mediaProfile_.known() ? mediaProfile_.writer.queueFrames : 12u);
         maxQueuedFrames_ = unsignedEnvValue(
             "APERTAR_CDNG_QUEUE_FRAMES", defaultQueueFrames, 4, 64);
         // One extra lossless worker overlaps tile-write and scheduling stalls
         // while the other workers remain CPU-active.
         const unsigned int defaultLosslessWorkers = hardwareThreads >= 4
             ? std::min(8u, hardwareThreads + 1u)
-            : normalWorkerCount;
+            : formatWorkerCount;
         // Lossy DNG is CPU-bound and does not benefit from oversubscribing the
         // four-core Pi. Leave one worker per core so capture can be scheduled
         // promptly; lossless cDNG keeps its separately measured extra worker.
@@ -3534,6 +3546,8 @@ public:
                   << " compression=" << (recordingFormat_ == RecordingFormat::Cdng ? toString(settings_.cdngCompression)
                                       : recordingFormat_ == RecordingFormat::LossyDng ? toWireValue(settings_.lossyDngRatio)
                                       : "none");
+        std::cerr << " media_class=" << mediaClassName(mediaProfile_.mediaClass)
+                  << " media_fs=" << mediaFilesystemName(mediaProfile_.filesystem);
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
@@ -3747,6 +3761,10 @@ public:
 
     std::string error() const { return failure_.message(); }
     MediaFault fault() const { return fault_.load(std::memory_order_acquire); }
+    // The medium the next take writes to; set before start so workers, queue depth
+    // and direct I/O follow it. Logged in the clip line.
+    void setMediaProfile(const MediaProfile &profile) { mediaProfile_ = profile; }
+    const MediaProfile &mediaProfile() const { return mediaProfile_; }
 
     uint64_t nextFrameIndex(int64_t timestampUs)
     {
@@ -4359,6 +4377,7 @@ private:
     uint64_t discardedOnFailureFrames_ = 0;
     std::atomic<uint64_t> skippedAfterFailure_{0};
     std::atomic<uint64_t> lossyFailuresSeen_{0};
+    MediaProfile mediaProfile_;
     // Copy workers (completion-thread hand-off).
     std::mutex copyMutex_;
     std::condition_variable copyCv_;
@@ -6374,6 +6393,8 @@ public:
             return true;
         }
 
+        // The watcher's snapshot, not a fresh statvfs: this runs under the controller lock.
+        recorder_.setMediaProfile(detectMediaProfile(cachedMediaSnapshotOrProbe(mediaRoot)));
         if (!recorder_.startAtFolder(clipFolder, settings, error)) {
             audioRecorder_.stop();
             gyroRecorder_.stop();
@@ -8555,6 +8576,7 @@ bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     mediaRoot_ = mediaRoot;
+    configuredMediaRoot() = mediaRoot;
     simulateCamera_ = simulateCamera;
     state_ = CameraState::Starting;
     applyProcessTuningFile(settings_.tuningFile);
