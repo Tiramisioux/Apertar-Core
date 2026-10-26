@@ -9490,6 +9490,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
+        // The watcher's latest probe; never touches the device.
+        const MediaSnapshot mediaState = mediaSnapshot();
         const bool soundRecording = soundRecordingActive();
         const bool recording = camera_.isRecording() || soundRecording;
         std::ostringstream body;
@@ -9511,6 +9513,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_write_revision\":" << mediaWrite.revision
              << ",\"sensor\":\"" << escapeJson(camera_.sensorName()) << "\""
              << "," << sensorBinningBody(camera_.sensorBinning())
+             << ",\"media_state\":\"" << mediaState.stateName() << "\""
+             << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << "," << settingsBody(camera_.settings());
         return okReply(command.id, body.str());
     }
