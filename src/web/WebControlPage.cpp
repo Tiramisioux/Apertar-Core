@@ -4036,7 +4036,7 @@ std::string_view webControlPageHtml()
   <div class="toast" id="toast"></div>
 
   <script>
-    const fpsPresets = [24.000, 25.000, 30.000, 33.000, 35.000, 40.000, 45.000, 50.000, 60.000, 70.000, 80.000, 90.000, 100.000, 110.000, 120.000, 130.000, 140.000, 150.000, 160.000, 170.000, 180.000, 190.000, 200.000, 210.000, 220.000, 230.000, 240.000, 280.000];
+    const fpsPresets = [24.000, 25.000, 30.000, 35.000, 40.000, 45.000, 50.000, 60.000, 70.000, 80.000, 90.000, 100.000, 110.000, 120.000, 130.000, 140.000, 150.000, 160.000, 170.000, 180.000, 190.000, 200.000, 210.000, 220.000, 230.000, 240.000, 280.000];
     const isoOptions = ["Auto", "100", "200", "400", "800", "1600", "3200", "6400", "12800", "25600", "51200"];
     const shutterOptions = ["Auto", "11.25°", "15°", "22.5°", "30°", "37.5°", "45°", "60°", "72°", "75°", "90°", "108°", "120°", "144°", "150°", "172.8°", "180°", "216°", "270°", "324°", "360°"];
     const fallbackResolutionOptions = ["1920x1080", "3840x2160"];
@@ -4991,9 +4991,10 @@ std::string_view webControlPageHtml()
 
     function availableFpsOptionsForSnapshot(snapshot) {
       const sensorLower = sensorNameLower(snapshot);
+      // IMX585 and others: 25, 33, 50 (Patrik, 2026-10-27; temporary, to review).
       const presets = (sensorLower.indexOf("imx477") !== -1 || sensorLower.indexOf("imx577") !== -1)
         ? fpsPresets
-        : fpsPresets.filter((value) => value <= 60.0005);
+        : [25.000, 33.000, 50.000];
       let max = maximumSupportedFpsForSnapshot(snapshot);
       const h264MaxFps = Number(snapshot && snapshot.recording_capabilities && snapshot.recording_capabilities.h264_max_fps) || 0;
       if (processedVideoRecordFormatForSnapshot(snapshot) && h264MaxFps > 0)

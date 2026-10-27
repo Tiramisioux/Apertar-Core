@@ -8805,6 +8805,27 @@ bool CameraController::setResolution(Resolution resolution)
     return applySettingsLocked(next, true);
 }
 
+// Patrik's Clear HDR rule (2026-10-27): 16-bit Clear HDR is a 25 fps mode with
+// uncompressed cDNG. Entering it sets uncompressed and at most 25 fps; asking for
+// more than 25 fps in it switches to 12-bit SDR (lossless for cDNG) instead.
+namespace {
+constexpr double kClearHdr16MaxFps = 25.0;
+
+bool clearHdr16(const CaptureSettings &settings)
+{
+    return settings.clearHdr && settings.rawBitDepth == 16 && !settings.photoModeEnabled;
+}
+
+void limitClearHdr16Fps(CaptureSettings &next)
+{
+    if (!clearHdr16(next) || next.fps <= kClearHdr16MaxFps + 0.0005)
+        return;
+    if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
+        next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, kClearHdr16MaxFps);
+    next.fps = kClearHdr16MaxFps;
+}
+} // namespace
+
 bool CameraController::setFps(double fps)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -9231,27 +9252,6 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
     limitClearHdr16Fps(next);
     return applySettingsLocked(next, true);
 }
-
-// Patrik's Clear HDR rule (2026-10-27): 16-bit Clear HDR is a 25 fps mode with
-// uncompressed cDNG. Entering it sets uncompressed and at most 25 fps; asking for
-// more than 25 fps in it switches to 12-bit SDR (lossless for cDNG) instead.
-namespace {
-constexpr double kClearHdr16MaxFps = 25.0;
-
-bool clearHdr16(const CaptureSettings &settings)
-{
-    return settings.clearHdr && settings.rawBitDepth == 16 && !settings.photoModeEnabled;
-}
-
-void limitClearHdr16Fps(CaptureSettings &next)
-{
-    if (!clearHdr16(next) || next.fps <= kClearHdr16MaxFps + 0.0005)
-        return;
-    if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
-        next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, kClearHdr16MaxFps);
-    next.fps = kClearHdr16MaxFps;
-}
-} // namespace
 
 bool CameraController::setClearHdr(bool enabled)
 {
