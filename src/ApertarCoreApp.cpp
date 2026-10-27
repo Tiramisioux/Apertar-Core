@@ -1160,9 +1160,10 @@ double maximumPcfFpsForSettings(const CaptureSettings &settings, const std::stri
     }
 
     if (sensor.find("imx585") != std::string::npos) {
+        // Clear HDR 16-bit stops at 25, as in Core's tableMaximumFpsForResolution().
         if ((width == 3856 && height == 2180) ||
             (width == 3840 && height == 2160))
-            return 30.0;
+            return settings.clearHdr && settings.rawBitDepth == 16 ? 25.0 : 30.0;
         if ((width == 1928 && height == 1090) ||
             (width == 1920 && height == 1080))
             return 60.0;

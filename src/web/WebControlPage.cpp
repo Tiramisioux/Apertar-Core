@@ -4974,8 +4974,9 @@ std::string_view webControlPageHtml()
       }
 
       if (sensorLower.indexOf("imx585") !== -1) {
+        // Clear HDR 16-bit stops at 25, as in Core's tableMaximumFpsForResolution().
         if ((width === 3856 && height === 2180) || (width === 3840 && height === 2160))
-          return 30.0;
+          return snapshot.clear_hdr && Number(snapshot.raw_bit_depth) === 16 ? 25.0 : 30.0;
         if (width === 3840 && (height === 2076 || height === 2024 || height === 1920 || height === 1744
             || height === 1728 || height === 1632 || height === 1608 || height === 1536 || height === 1504))
           return 60.0;

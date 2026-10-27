@@ -2775,9 +2775,14 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
             return 11.72;
         break;
     case SensorFamily::Imx585:
-        if (normalized.width == 3840 && normalized.height == 2160)
+        if (normalized.width == 3840 && normalized.height == 2160) {
+            // Clear HDR 16-bit: 25 fps is the accepted ceiling. At 30 the back end
+            // delivers about 28 and drops frames (KB working/research-30fps-answer.md).
+            if (clearHdr && normalizeRawBitDepth(rawBitDepth) == 16)
+                return 25.0;
             // Clear HDR doubles VMAX: 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
             return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
+        }
         if (isImx585Raw12CropResolution(normalized))
             return 60.0;
         if ((normalized.width == 1920 && normalized.height == 1080) ||
