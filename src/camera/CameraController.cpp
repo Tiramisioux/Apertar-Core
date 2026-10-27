@@ -9293,14 +9293,17 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    // Patrik's rule (2026-10-27; temporary): Clear HDR records uncompressed cDNG,
+    // SDR lossless, whichever way the mode is switched. Set before the sanitiser
+    // so lossless's own limits (fps, ISO) apply.
+    if (next.recordingFormat == RecordingFormat::Cdng && enabled != settings_.clearHdr)
+        next.cdngCompression = enabled ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
     next = sanitizeSettingsForSensor(next, sensorFamily);
     if (enabled && !next.clearHdr) {
         // The sanitiser clears it for ProRes/H.264 (10-bit by rule) and for sensors other than the IMX585.
         setErrorLocked("Clear HDR needs an IMX585 and cDNG or MLV recording.");
         return false;
     }
-    if (enabled && !settings_.clearHdr && next.recordingFormat == RecordingFormat::Cdng)
-        next.cdngCompression = CdngCompression::Uncompressed;
     limitClearHdr16Fps(next);
     if (settings_.clearHdr == next.clearHdr && settings_.rawBitDepth == next.rawBitDepth &&
         settings_.cdngCompression == next.cdngCompression && std::abs(settings_.fps - next.fps) < 0.0001) {
