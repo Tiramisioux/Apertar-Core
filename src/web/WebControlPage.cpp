@@ -5022,7 +5022,7 @@ std::string_view webControlPageHtml()
 
     function availableIsoOptionsForSnapshot(snapshot) {
       return isLosslessImx585Snapshot(snapshot) || isLosslessFourKSnapshot(snapshot) || isLosslessTwoKSnapshot(snapshot)
-        ? ["100", "200", "400", "800"]
+        ? ["100", "200", "400", "800", "1600"]
         : isoOptions;
     }
 

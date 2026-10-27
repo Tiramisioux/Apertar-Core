@@ -2561,7 +2561,10 @@ void enforceLosslessCaptureLimits(CaptureSettings &settings, SensorFamily sensor
     if (!imx585 && !fourK && !twoK)
         return;
 
-    settings.iso = std::min<uint32_t>(settings.iso, 800u);
+    // Lossless JPEG slows down as noise grows, so ISO is capped; 1600 added on
+    // Patrik's request 2026-10-27 (12-bit lossless 4K25 had queue headroom: C0013
+    // peak 2/24). Not yet measured at 1600.
+    settings.iso = std::min<uint32_t>(settings.iso, 1600u);
     settings.isoAuto = false;
     const double maximumFps = imx585
         ? 30.0
