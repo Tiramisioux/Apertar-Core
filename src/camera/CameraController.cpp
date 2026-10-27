@@ -2566,8 +2566,10 @@ void enforceLosslessCaptureLimits(CaptureSettings &settings, SensorFamily sensor
     // peak 2/24). Not yet measured at 1600.
     settings.iso = std::min<uint32_t>(settings.iso, 1600u);
     settings.isoAuto = false;
+    // IMX585 lossless: 50 (was 30) so 33 and 50 fps can stay lossless (Patrik,
+    // 2026-10-27; temporary, not yet measured above 25).
     const double maximumFps = imx585
-        ? 30.0
+        ? 50.0
         : (twoK
         ? 60.0
         : (isApproximatelyFourThree(settings.resolution) ? 24.0 : 30.0));
@@ -2772,7 +2774,9 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     case SensorFamily::Imx585:
         if (normalized.width == 3840 && normalized.height == 2160)
             // Clear HDR doubles VMAX: 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
-            return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
+            // SDR: 60 once the startup probe confirms it (it does, 2026-10-26), else 30
+            // (was 30 always; Patrik wants 33 and 50, 2026-10-27; temporary).
+            return clearHdr ? (sensorLimitKnown ? 30.0 : 25.0) : (sensorLimitKnown ? 60.0 : 30.0);
         if (isImx585Raw12CropResolution(normalized))
             return 60.0;
         if ((normalized.width == 1920 && normalized.height == 1080) ||
@@ -8778,6 +8782,7 @@ bool CameraController::wakeFromStandby()
 bool CameraController::setResolution(Resolution resolution)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    clearHdrLeftForFps_ = false;
     if (recording_) {
         setErrorLocked("Resolution changes are blocked while recording.");
         return false;
@@ -8856,6 +8861,24 @@ bool CameraController::setFps(double fps)
         std::cerr << "ApertarCore clear hdr: " << fps << " fps asked in 16-bit Clear HDR; switching to 12-bit SDR"
                   << (next.cdngCompression == CdngCompression::LosslessJpeg ? " lossless" : "")
                   << " at " << next.fps << " fps\n";
+        const bool switched = applySettingsLocked(next, true);
+        clearHdrLeftForFps_ = switched;
+        return switched;
+    }
+    // Back at 25 fps or less after an automatic switch: 16-bit Clear HDR again,
+    // uncompressed for cDNG.
+    if (clearHdrLeftForFps_ && !settings_.clearHdr && fps <= kClearHdr16MaxFps + 0.0005) {
+        CaptureSettings next = settings_;
+        next.clearHdr = true;
+        next.rawBitDepth = 16;
+        if (next.recordingFormat == RecordingFormat::Cdng)
+            next.cdngCompression = CdngCompression::Uncompressed;
+        next.fps = fps;
+        next = sanitizeSettingsForSensor(next, sensorFamily);
+        if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
+            next.shutterUs = shutterUsForPreservedAngle(settings_.shutterUs, settings_.fps, next.fps);
+        clearHdrLeftForFps_ = false;
+        std::cerr << "ApertarCore clear hdr: back to " << next.fps << " fps; restoring 16-bit Clear HDR\n";
         return applySettingsLocked(next, true);
     }
     CaptureSettings requested = settings_;
@@ -9023,6 +9046,7 @@ bool CameraController::setWhiteBalanceAuto()
 bool CameraController::setRecordingFormat(RecordingFormat format)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    clearHdrLeftForFps_ = false;
     auto requested = settings_;
     requested.recordingFormat = format;
     if (const char *error = unsupportedRecordingSettings(requested)) {
@@ -9078,6 +9102,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
 bool CameraController::setCdngCompression(CdngCompression compression)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    clearHdrLeftForFps_ = false;
     if (recording_) {
         setErrorLocked("Compression changes are blocked while recording.");
         return false;
@@ -9219,6 +9244,7 @@ bool CameraController::setTuningFile(const std::string &path)
 bool CameraController::setRawBitDepth(uint32_t bitDepth)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    clearHdrLeftForFps_ = false;
     if (recording_) {
         setErrorLocked("Raw bit depth changes are blocked while recording.");
         return false;
@@ -9256,6 +9282,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 bool CameraController::setClearHdr(bool enabled)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    clearHdrLeftForFps_ = false;
     if (recording_) {
         setErrorLocked("Clear HDR changes are blocked while recording.");
         return false;

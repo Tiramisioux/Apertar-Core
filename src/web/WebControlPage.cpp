@@ -4975,7 +4975,7 @@ std::string_view webControlPageHtml()
 
       if (sensorLower.indexOf("imx585") !== -1) {
         if ((width === 3856 && height === 2180) || (width === 3840 && height === 2160))
-          return 30.0;
+          return snapshot && snapshot.clear_hdr ? 30.0 : 60.0;   // SDR 60 per the sensor probe (2026-10-27; temporary)
         if (width === 3840 && (height === 2076 || height === 2024 || height === 1920 || height === 1744
             || height === 1728 || height === 1632 || height === 1608 || height === 1536 || height === 1504))
           return 60.0;
@@ -5012,11 +5012,15 @@ std::string_view webControlPageHtml()
         max = Math.min(max, imx477MaximumUncompressedFps(width, height, snapshot && snapshot.raw_bit_depth));
       }
       if (isLosslessImx585Snapshot(snapshot))
-        max = Math.min(max, 30.0);
+        max = Math.min(max, 50.0);   // was 30 (Patrik, 2026-10-27; temporary)
       else if (isLosslessFourKSnapshot(snapshot))
         max = Math.min(max, isApproximatelyFourThreeSnapshot(snapshot) ? 24.0 : 30.0);
       else if (isLosslessTwoKSnapshot(snapshot))
         max = Math.min(max, 60.0);
+      // 16-bit Clear HDR: above 25 fps Core switches to 12-bit SDR lossless (up to 50).
+      if (sensorLower.indexOf("imx585") !== -1 && snapshot && snapshot.clear_hdr
+          && Number(snapshot.raw_bit_depth) === 16 && !stillCaptureForSnapshot(snapshot))
+        max = Math.max(max, 50.0);
       const filtered = presets.filter((value) => value <= max + 0.0005);
       return (filtered.length > 0 ? filtered : [max]).map((value) => Number(value).toFixed(3));
     }

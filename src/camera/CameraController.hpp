@@ -153,6 +153,9 @@ private:
     bool simulateCamera_ = false;
     bool recording_ = false;
     bool recordingFailureReported_ = false;
+    // Clear HDR 16-bit was left only because more than 25 fps was asked for;
+    // back at 25 fps or less it is restored. Any manual mode change clears it.
+    bool clearHdrLeftForFps_ = false;
     std::string recordingFailureMessage_;
     std::string externalFailureMessage_;
     bool externalMediumGone_ = false;

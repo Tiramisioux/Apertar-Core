@@ -1158,9 +1158,11 @@ double maximumPcfFpsForSettings(const CaptureSettings &settings, const std::stri
     }
 
     if (sensor.find("imx585") != std::string::npos) {
+        // 4K: 30 in Clear HDR, 60 in SDR (sensor probe, 2026-10-26); this table
+        // said 30 for both, which kept the rotary out of SDR's upper rates.
         if ((width == 3856 && height == 2180) ||
             (width == 3840 && height == 2160))
-            return 30.0;
+            return settings.clearHdr ? 30.0 : 60.0;
         if ((width == 1928 && height == 1090) ||
             (width == 1920 && height == 1080))
             return 60.0;
@@ -1173,12 +1175,20 @@ std::vector<double> availablePcfFpsOptions(const CaptureSettings &settings,
                                            const std::string &sensorName)
 {
     const std::string sensor = lowerAscii(sensorName);
-    const std::vector<double> presets =
-        sensor.find("imx477") != std::string::npos || sensor.find("imx577") != std::string::npos
-            ? std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0}
-            : std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0};
+    const bool imx477Or577 = sensor.find("imx477") != std::string::npos || sensor.find("imx577") != std::string::npos;
+    // IMX585 and others: 25, 33, 50, like both UIs (Patrik, 2026-10-27; temporary).
+    const std::vector<double> presets = imx477Or577
+        ? std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0}
+        : std::vector<double>{25.0, 33.0, 50.0};
 
-    const double maxFps = maximumPcfFpsForSettings(settings, sensorName);
+    // In 16-bit Clear HDR a step above 25 fps moves Core to 12-bit SDR lossless
+    // (CameraController::setFps), so offer what that mode allows.
+    CaptureSettings limitSettings = settings;
+    if (settings.clearHdr && settings.rawBitDepth == 16 && !settings.photoModeEnabled) {
+        limitSettings.clearHdr = false;
+        limitSettings.rawBitDepth = 12;
+    }
+    const double maxFps = maximumPcfFpsForSettings(limitSettings, sensorName);
     std::vector<double> filtered;
     for (double fps : presets) {
         if (fps <= maxFps + 0.0005)
@@ -8944,6 +8954,21 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "resolution")) {
+        // IMX585, raw formats: the resolution input toggles 4K 16-bit Clear HDR and
+        // 4K 12-bit SDR, like the touch UI's resolution button (Patrik, 2026-10-27;
+        // temporary). Core keeps 16-bit only when asked with Clear HDR on.
+        if (lowerAscii(camera_.sensorName()).find("imx585") != std::string::npos &&
+            !cameraSettings.photoModeEnabled &&
+            (cameraSettings.recordingFormat == RecordingFormat::Cdng ||
+             cameraSettings.recordingFormat == RecordingFormat::Mlv)) {
+            if (cameraSettings.clearHdr) {
+                dispatch("set_clear_hdr", { { "enabled", "false" } });
+            } else {
+                dispatch("set_clear_hdr", { { "enabled", "true" } });
+                dispatch("set_raw_bit_depth", { { "value", "16" } });
+            }
+            return;
+        }
         const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName());
         const size_t currentIndex = nearestPcfResolutionIndex(options, cameraSettings.resolution);
         const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);
