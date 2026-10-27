@@ -8820,6 +8820,23 @@ bool CameraController::setFps(double fps)
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
         ? session_->sensorFamily()
         : SensorFamily::Unknown;
+    // More than 25 fps asked for in 16-bit Clear HDR: leave it for 12-bit SDR
+    // (lossless for cDNG) at the requested rate, as far as that mode allows.
+    if (clearHdr16(settings_) && fps > kClearHdr16MaxFps + 0.0005) {
+        CaptureSettings next = settings_;
+        next.clearHdr = false;
+        next.rawBitDepth = 12;
+        if (next.recordingFormat == RecordingFormat::Cdng)
+            next.cdngCompression = CdngCompression::LosslessJpeg;
+        next.fps = fps;
+        next = sanitizeSettingsForSensor(next, sensorFamily);
+        if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
+            next.shutterUs = shutterUsForPreservedAngle(settings_.shutterUs, settings_.fps, next.fps);
+        std::cerr << "ApertarCore clear hdr: " << fps << " fps asked in 16-bit Clear HDR; switching to 12-bit SDR"
+                  << (next.cdngCompression == CdngCompression::LosslessJpeg ? " lossless" : "")
+                  << " at " << next.fps << " fps\n";
+        return applySettingsLocked(next, true);
+    }
     CaptureSettings requested = settings_;
     requested.fps = fps;
     requested = sanitizeSettingsForSensor(requested, sensorFamily);
@@ -9211,8 +9228,30 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
+    limitClearHdr16Fps(next);
     return applySettingsLocked(next, true);
 }
+
+// Patrik's Clear HDR rule (2026-10-27): 16-bit Clear HDR is a 25 fps mode with
+// uncompressed cDNG. Entering it sets uncompressed and at most 25 fps; asking for
+// more than 25 fps in it switches to 12-bit SDR (lossless for cDNG) instead.
+namespace {
+constexpr double kClearHdr16MaxFps = 25.0;
+
+bool clearHdr16(const CaptureSettings &settings)
+{
+    return settings.clearHdr && settings.rawBitDepth == 16 && !settings.photoModeEnabled;
+}
+
+void limitClearHdr16Fps(CaptureSettings &next)
+{
+    if (!clearHdr16(next) || next.fps <= kClearHdr16MaxFps + 0.0005)
+        return;
+    if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
+        next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, kClearHdr16MaxFps);
+    next.fps = kClearHdr16MaxFps;
+}
+} // namespace
 
 bool CameraController::setClearHdr(bool enabled)
 {
@@ -9233,7 +9272,11 @@ bool CameraController::setClearHdr(bool enabled)
         setErrorLocked("Clear HDR needs an IMX585 and cDNG or MLV recording.");
         return false;
     }
-    if (settings_.clearHdr == next.clearHdr && settings_.rawBitDepth == next.rawBitDepth) {
+    if (enabled && !settings_.clearHdr && next.recordingFormat == RecordingFormat::Cdng)
+        next.cdngCompression = CdngCompression::Uncompressed;
+    limitClearHdr16Fps(next);
+    if (settings_.clearHdr == next.clearHdr && settings_.rawBitDepth == next.rawBitDepth &&
+        settings_.cdngCompression == next.cdngCompression && std::abs(settings_.fps - next.fps) < 0.0001) {
         lastError_.clear();
         emitSettingsEventLocked();
         return true;
