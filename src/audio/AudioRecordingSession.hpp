@@ -96,6 +96,12 @@ private:
     uint64_t videoEndBootUs_ = 0;
     uint64_t capturedBytes_ = 0;
     uint64_t audioEndBootUs_ = 0;
+    // Least-squares fit of samples captured against each block's BOOTTIME stamp,
+    // for the clock-drift estimate (see finalizeWav).
+    int64_t fitOriginBootUs_ = 0;
+    uint64_t fitFrames_ = 0;
+    uint64_t fitPoints_ = 0;
+    double fitSumT_ = 0, fitSumN_ = 0, fitSumTT_ = 0, fitSumTN_ = 0;
 };
 
 } // namespace apertar

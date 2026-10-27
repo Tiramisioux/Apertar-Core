@@ -480,9 +480,23 @@ void AudioRecordingSession::readerLoop()
                     const uint64_t gapBytes = framesForDurationUs(sampleBootUs - audioEndBootUs_, options_.sampleRate) * blockAlign;
                     enqueueWrite(nullptr, static_cast<size_t>(gapBytes));
                     capturedBytes_ += gapBytes;
+                    fitFrames_ += gapBytes / blockAlign;
                     std::cerr << "ApertarCore audio discontinuity: padded_us=" << sampleBootUs - audioEndBootUs_ << "\n";
                 }
                 audioEndBootUs_ = sampleBootUs + uint64_t(framesRead) * 1000000 / options_.sampleRate;
+                // One point per block: its first sample's stamp against the samples
+                // before it. Each stamp can be a period (10 ms) off; thousands of
+                // points average that out, two endpoints do not.
+                if (fitPoints_ == 0)
+                    fitOriginBootUs_ = sampleBootUs;
+                const double t = double(sampleBootUs - fitOriginBootUs_) / 1e6;
+                const double n = double(fitFrames_);
+                fitSumT_ += t;
+                fitSumN_ += n;
+                fitSumTT_ += t * t;
+                fitSumTN_ += t * n;
+                ++fitPoints_;
+                fitFrames_ += uint64_t(framesRead);
             }
 
             const int meterLevel = applyGainAndMeasure(buffer.data(),
@@ -567,12 +581,26 @@ void AudioRecordingSession::finalizeWav()
     const uint64_t availableFrames = capturedBytes_ / blockAlign;
     double sourceRate = sampleRate;
     const uint64_t capturedDurationUs = audioEndBootUs_ > audioStartUs ? audioEndBootUs_ - audioStartUs : 0;
-    if (videoFirstUs > 0 && capturedDurationUs >= 10000000) {
-        const double measuredRate = double(availableFrames) * 1000000 / capturedDurationUs;
-        const double drift = measuredRate / sampleRate - 1;
+    // The rate is the slope of the per-block fit, not samples over (last - first):
+    // that two-point figure swung from -139 to +156 ppm between 3-minute takes
+    // (2026-10-26/27) because each end stamp can be a period off.
+    double fittedRate = 0;
+    uint64_t fitPoints = 0;
+    {
+        std::lock_guard<std::mutex> lock(syncMutex_);
+        fitPoints = fitPoints_;
+        const double count = double(fitPoints_);
+        const double denominator = count * fitSumTT_ - fitSumT_ * fitSumT_;
+        if (fitPoints_ >= 100 && denominator > 0)
+            fittedRate = (count * fitSumTN_ - fitSumT_ * fitSumN_) / denominator;
+    }
+    if (videoFirstUs > 0 && capturedDurationUs >= 10000000 && fittedRate > 0) {
+        const double endpointDrift = double(availableFrames) * 1000000 / capturedDurationUs / sampleRate - 1;
+        const double drift = fittedRate / sampleRate - 1;
         if (std::abs(drift) > 0.00002 && std::abs(drift) < 0.002)
-            sourceRate = measuredRate;
+            sourceRate = fittedRate;
         std::cerr << "ApertarCore audio clock: measured_drift_ppm=" << drift * 1000000
+                  << " points=" << fitPoints << " endpoint_ppm=" << endpointDrift * 1000000
                   << " correction=" << (sourceRate != sampleRate ? "resample" : "none") << "\n";
     }
     uint64_t trimFrames = 0;
@@ -792,6 +820,10 @@ void AudioRecordingSession::resetState()
     videoEndBootUs_ = 0;
     capturedBytes_ = 0;
     audioEndBootUs_ = 0;
+    fitOriginBootUs_ = 0;
+    fitFrames_ = 0;
+    fitPoints_ = 0;
+    fitSumT_ = fitSumN_ = fitSumTT_ = fitSumTN_ = 0;
 }
 
 void AudioRecordingSession::emitLevel(int level)
