@@ -5969,12 +5969,13 @@ std::string_view webControlPageHtml()
     function formatMinutes(minutes) {
       if (typeof minutes !== "number" || !isFinite(minutes) || minutes <= 0)
         return "--";
+      // Rounded down, like the touch UI (MediaStatusBridge::remainingMinutesText).
       if (minutes >= 60) {
         const hours = Math.floor(minutes / 60);
-        const mins = Math.round(minutes % 60);
+        const mins = Math.floor(minutes % 60);
         return hours + "h " + String(mins).padStart(2, "0") + "m";
       }
-      return Math.round(minutes) + " min";
+      return Math.floor(minutes) + " min";
     }
 
     function formatStillCount(count) {

@@ -7946,10 +7946,12 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
     std::optional<double> recordTimeLeftMinutes;
     if (estimatedBytesPerSecond > 0 && mediaFreeBytes > 0) {
-        recordTimeLeftMinutes =
+        // Truncated to the tenth, so the JSON's one decimal never rounds up: the
+        // touch UI shows whole minutes rounded down, and the WebUI does the same.
+        recordTimeLeftMinutes = std::floor(
             static_cast<double>(mediaFreeBytes) /
             static_cast<double>(estimatedBytesPerSecond) /
-            60.0;
+            60.0 * 10.0) / 10.0;
     }
     std::optional<double> recordStillsLeft;
     if (mediaFreeBytes > 0) {
