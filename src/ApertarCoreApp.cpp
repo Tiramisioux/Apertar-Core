@@ -4823,26 +4823,71 @@ std::optional<std::pair<uint64_t, uint64_t>> readCpuTicks()
     return std::make_pair(idleTicks, totalTicks);
 }
 
+// Bytes per second a take writes, per format: the touch UI's per-frame model
+// (Apertar-UI qml/CameraPage.qml estimatedFrameSizeMB), so the WebUI and the HDMI
+// display agree. The raw frame follows rawBitDepth, 16 included (Clear HDR);
+// the old model assumed 12-bit packed for every raw format (T21).
 uint64_t estimatedRawBytesPerSecond(const CaptureSettings &settings)
 {
+    constexpr double MiB = 1024.0 * 1024.0;
+    const double width = static_cast<double>(settings.resolution.width);
+    const double height = static_cast<double>(settings.resolution.height);
+    const double fps = std::max(1.0, settings.fps);
     if (settings.recordingFormat == RecordingFormat::Prores) {
         const double nominal = settings.proresProfile == ProresProfile::Proxy ? 45e6
             : settings.proresProfile == ProresProfile::LT ? 102e6
             : settings.proresProfile == ProresProfile::HQ ? 220e6 : 147e6;
-        return static_cast<uint64_t>(nominal / 8.0 * settings.resolution.width * settings.resolution.height
+        return static_cast<uint64_t>(nominal / 8.0 * width * height
             / (1920.0 * 1080.0) * settings.fps / 30.0 * 1.05);
     }
     if (settings.recordingFormat == RecordingFormat::H264) {
-        constexpr uint64_t kExperimentalH264BytesPerSecond = 25'000'000u / 8u;
-        return kExperimentalH264BytesPerSecond;
+        const double outWidth = settings.h264Resolution.width ? settings.h264Resolution.width : width;
+        const double outHeight = settings.h264Resolution.height ? settings.h264Resolution.height : height;
+        const double pixels = outWidth * outHeight;
+        const double mbps = (pixels >= 8000000 ? 70.0 : pixels >= 3500000 ? 42.0 : pixels >= 2000000 ? 24.0 : 14.0)
+            * std::max(0.5, settings.fps / 30.0);
+        return static_cast<uint64_t>(mbps * 1e6 / 8.0);
     }
 
-    const double pixelsPerFrame =
-        static_cast<double>(settings.resolution.width) * static_cast<double>(settings.resolution.height);
-    const double bytesPerFrame = pixelsPerFrame * 1.5;
-    const double containerOverhead = settings.recordingFormat == RecordingFormat::Cdng ? 1.08 : 1.03;
-    const double bytesPerSecond = bytesPerFrame * std::max(1.0, settings.fps) * containerOverhead;
-    return static_cast<uint64_t>(std::max(0.0, bytesPerSecond));
+    const unsigned bits = settings.rawBitDepth ? settings.rawBitDepth : 12;
+    const double rawMiB = width * height * bits / 8.0 / MiB;
+    double frameMiB = 0;
+    if (settings.recordingFormat == RecordingFormat::Mlv)
+        frameMiB = std::max(1.0, rawMiB * 1.04 + 0.02);
+    else if (settings.recordingFormat == RecordingFormat::LossyDng)
+        frameMiB = settings.lossyDngRatio == LossyDngRatio::R5
+            ? std::max(0.25, rawMiB / 5.0 + 0.10) : std::max(0.35, rawMiB / 3.0 + 0.12);
+    else if (settings.cdngCompression == CdngCompression::LosslessJpeg)
+        frameMiB = std::max(1.0, rawMiB * (bits <= 8 ? 0.82 : bits <= 10 ? 0.78 : 0.72) + 0.15);
+    else
+        frameMiB = std::max(1.0, rawMiB * 1.06 + 0.03);
+    return static_cast<uint64_t>(frameMiB * MiB * fps);
+}
+
+// What the time-left figure assumes, for the WebUI's sub-label.
+std::string timeLeftEstimateLabel(const CaptureSettings &settings)
+{
+    std::string format;
+    const std::string bits = std::to_string(settings.rawBitDepth ? settings.rawBitDepth : 12) + "-bit";
+    switch (settings.recordingFormat) {
+    case RecordingFormat::Prores:
+        format = std::string("ProRes ") + (settings.proresProfile == ProresProfile::Proxy ? "Proxy"
+            : settings.proresProfile == ProresProfile::LT ? "LT" : settings.proresProfile == ProresProfile::HQ ? "HQ" : "422");
+        break;
+    case RecordingFormat::H264:
+        format = "H.264";
+        break;
+    case RecordingFormat::Mlv:
+        format = "MLV " + bits;
+        break;
+    case RecordingFormat::LossyDng:
+        format = std::string("Lossy DNG ") + (settings.lossyDngRatio == LossyDngRatio::R5 ? "5:1 " : "3:1 ") + bits;
+        break;
+    default:
+        format = "cDNG " + bits + (settings.cdngCompression == CdngCompression::LosslessJpeg ? " lossless" : "");
+        break;
+    }
+    return format + " estimate (bar: 2 h)";
 }
 
 double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::string &sensorName)
@@ -7816,9 +7861,16 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const MediaProfile mediaProf = mediaProfile();
     const std::string mountedDevice = mediaMounted ? mountedDeviceForPath(options_.mediaRoot) : std::string();
     const std::string mountedVolumeLabel = mediaMounted ? volumeLabelForDevicePath(mountedDevice) : std::string();
-    const std::string mediaTypeLabel = mediaMounted
-        ? mediaTypeLabelForDeviceAndVolumeLabel(mountedDevice, mountedVolumeLabel)
-        : std::string("No Media Mounted");
+    // The mount table keeps a pulled or dead medium listed; say what the watcher
+    // knows, so the capture strip and the media cards never show a type label
+    // for a take that cannot reach a card (T20 Step 4).
+    const std::string mediaTypeLabel = mediaSnap.state == MediaSnapshot::State::Removed
+        ? std::string("Media Removed")
+        : mediaSnap.state == MediaSnapshot::State::Error
+            ? std::string("Media Error")
+            : mediaMounted
+                ? mediaTypeLabelForDeviceAndVolumeLabel(mountedDevice, mountedVolumeLabel)
+                : std::string("No Media Mounted");
     const std::vector<MediaDriveCandidate> mountableMediaDrives = scanMountableMediaDrives(options_.mediaRoot);
     const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
     const std::vector<std::string> lutPreviewOptions = discoverLutPreviewFiles(options_.mediaRoot);
@@ -8037,7 +8089,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"record_time_left_minutes\":" << jsonNumberOrNull(recordTimeLeftMinutes, 1)
         << ",\"record_stills_left\":" << jsonNumberOrNull(recordStillsLeft, 0)
         << ",\"time_left_percent\":" << jsonNumberOrNull(timeLeftPercent, 1)
-        << ",\"time_left_label\":\"Current format estimate\""
+        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings)) << "\""
         << ",\"time_zone\":\"" << escapeJson(currentTimeZone) << "\""
         << ",\"time_zone_options\":" << jsonStringArray(timeZones)
         << ",\"local_time_input\":\"" << escapeJson(localDateTimeValue) << "\""
