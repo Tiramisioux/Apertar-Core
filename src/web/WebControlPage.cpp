@@ -3598,7 +3598,7 @@ std::string_view webControlPageHtml()
               </div>
               <div class="field-stack">
                 <div class="ladder-list-head">
-                  <span class="input-label">Resolutions, first one first</span>
+                  <span class="input-label">Resolutions array</span>
                   <span class="ladder-note">Drag the handle, or use the arrows</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
