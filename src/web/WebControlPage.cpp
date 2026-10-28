@@ -5461,11 +5461,21 @@ std::string_view webControlPageHtml()
             sendValueSteps({ name: list.name, values: "" });
         });
 
+        const labelled = (text, child) => {
+          const field = document.createElement("div");
+          field.className = "field-stack";
+          const caption = document.createElement("span");
+          caption.className = "input-label";
+          caption.textContent = text;
+          field.appendChild(caption);
+          field.appendChild(child);
+          return field;
+        };
         const freeGrid = document.createElement("div");
         freeGrid.className = "settings-field-grid";
         const freePills = document.createElement("div");
         freePills.className = "pill-grid";
-        freeGrid.appendChild(freePills);
+        freeGrid.appendChild(labelled("Stepping", freePills));
         buildOptionButtonsInto(freePills, [{ value: "false", label: "List" }, { value: "true", label: "Free" }],
           ui[list.free] ? "true" : "false", (value) => sendValueSteps({ name: list.name, free: value }));
         const increment = document.createElement("input");
@@ -5481,7 +5491,7 @@ std::string_view webControlPageHtml()
           if (isFinite(value) && value > 0)
             sendValueSteps({ name: list.name, increment: value });
         });
-        freeGrid.appendChild(increment);
+        freeGrid.appendChild(labelled("Increment" + (list.unit.trim() ? " (" + list.unit.trim() + ")" : ""), increment));
         row.appendChild(freeGrid);
 
         if (list.name === "shutter_angle") {
