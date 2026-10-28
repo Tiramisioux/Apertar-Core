@@ -9733,7 +9733,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         return false;
     }
     if (draft.enabled && ladder::chooseRung(draft, ladderStatesLocked(draft, settings_), 0.0) < 0) {
-        *error = "No rung of this ladder can run in the current format.";
+        *error = "No resolution of this ladder can run in the current format.";
         return false;
     }
 

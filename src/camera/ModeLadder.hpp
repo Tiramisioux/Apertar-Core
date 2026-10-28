@@ -127,7 +127,7 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
         out.push_back(r);
     }
     if (out.empty()) {
-        error = "Add at least one rung.";
+        error = "Add at least one resolution.";
         return false;
     }
     return true;
@@ -156,20 +156,20 @@ inline std::string rungsText(const std::vector<Rung> &rungs)
 inline void validate(const Ladder &l, const std::vector<RungState> &s,
                      std::vector<std::string> &errors, std::vector<std::string> &warnings)
 {
-    const auto name = [](size_t i) { return "Rung " + std::to_string(i + 1); };
+    const auto name = [](size_t i) { return "Resolution " + std::to_string(i + 1); };
     if (l.rungs.size() > 8)
-        errors.push_back("At most 8 rungs.");
+        errors.push_back("At most 8 resolutions.");
     double lastThreshold = 0.0, reached = 0.0;
     size_t lastThresholdRung = 0;
     for (size_t i = 0; i < l.rungs.size(); ++i) {
         const Rung &r = l.rungs[i];
         for (size_t j = 0; j < i; ++j)
             if (sameMode(r, l.rungs[j]))
-                errors.push_back(name(i) + " repeats rung " + std::to_string(j + 1) + ".");
+                errors.push_back(name(i) + " repeats resolution " + std::to_string(j + 1) + ".");
         if (r.threshold > 0.0) {
             if (lastThreshold > 0.0 && r.threshold <= lastThreshold)
                 errors.push_back("Thresholds must rise down the list: " + name(i) + " (" + number(r.threshold) +
-                                 " fps) is not above rung " + std::to_string(lastThresholdRung + 1) + " (" +
+                                 " fps) is not above resolution " + std::to_string(lastThresholdRung + 1) + " (" +
                                  number(lastThreshold) + " fps).");
             lastThreshold = r.threshold;
             lastThresholdRung = i;
@@ -189,15 +189,15 @@ inline void validate(const Ladder &l, const std::vector<RungState> &s,
                                number(r.threshold) + ".");
         const double ceiling = rungCeiling(r, s[i]);
         if (ceiling <= reached + 0.0005)
-            warnings.push_back(name(i) + " is never used: an earlier rung already reaches " + number(reached) + " fps.");
+            warnings.push_back(name(i) + " is never used: an earlier resolution already reaches " + number(reached) + " fps.");
         reached = std::max(reached, ceiling);
         if (i > 0) {
             const Rung &p = l.rungs[i - 1];
             if (p.clearHdr != r.clearHdr || p.bits != r.bits)
-                warnings.push_back("Rung " + std::to_string(i) + " -> " + std::to_string(i + 1) + " changes " +
+                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) + " changes " +
                                    label(p) + " to " + label(r) + ": the look changes between takes.");
             if (p.width != r.width || p.height != r.height)
-                warnings.push_back("Rung " + std::to_string(i) + " -> " + std::to_string(i + 1) +
+                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) +
                                    " changes the frame size.");
         }
     }
