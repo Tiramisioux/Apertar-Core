@@ -9189,10 +9189,10 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "iso")) {
-        // Auto sits below the lowest value (request 13), where the mode allows it: not under an ISO
-        // ceiling (lossless cDNG, Clear HDR) and not in Clear HDR.
+        // Auto sits below the first value of the list (request 13), wherever auto ISO runs: not in
+        // Clear HDR (lossless on the IMX585 keeps auto, under its cap).
         const std::vector<double> options = pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax);
-        const bool autoAllowed = cameraSettings.isoMax == 0 && !cameraSettings.clearHdr;
+        const bool autoAllowed = !cameraSettings.clearHdr;
         if (uiSettings.isoFree && !cameraSettings.isoAuto) {
             const double iso = static_cast<double>(cameraSettings.iso);
             if (autoAllowed && *mode == PcfSettingStepMode::Down && iso <= options.front() + 0.5)

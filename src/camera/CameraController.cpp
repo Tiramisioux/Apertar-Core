@@ -2748,7 +2748,11 @@ void enforceLosslessCaptureLimits(CaptureSettings &settings, SensorFamily sensor
         return;
 
     settings.iso = std::min(settings.iso, kLosslessMaxIso);
-    settings.isoAuto = false;
+    // Upstream keeps lossless on manual ISO, so the AGC cannot pass the cap. On the IMX585 the
+    // AGC already stops at gain 8 (ISO 800, the default tuning's normal exposure mode, channel
+    // 0), below the cap, so auto ISO stays (Patrik, 2026-10-28). Other sensors are unchecked.
+    if (sensorFamily != SensorFamily::Imx585)
+        settings.isoAuto = false;
     settings.fps = std::min(settings.fps, losslessMaximumFps(settings, sensorFamily));
 }
 

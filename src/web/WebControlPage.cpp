@@ -5370,7 +5370,7 @@ std::string_view webControlPageHtml()
     }
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
-    // Auto under a ceiling or in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
+    // Auto in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
     // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
     // fields has focus, so typing is not interrupted.
     const valueListDefinitions = [
@@ -5510,7 +5510,7 @@ std::string_view webControlPageHtml()
       const steps = valueStepsFromSnapshot(snapshot, "iso_steps",
         isoOptions.filter((value) => value !== "Auto").map(Number));
       const entries = cappedValueEntries(steps, maximum, (value) => String(Math.round(value)));
-      const autoAllowed = !(maximum > 0) && !(snapshot && snapshot.clear_hdr);
+      const autoAllowed = !(snapshot && snapshot.clear_hdr);
       if (!autoAllowed)
         return entries;
       return (snapshot && snapshot.iso_auto ? [{ value: "Auto" }, { value: "Lock" }] : [{ value: "Auto" }]).concat(entries);
