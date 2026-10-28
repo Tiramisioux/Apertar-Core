@@ -3270,7 +3270,6 @@ std::string_view webControlPageHtml()
               <div class="field-stack">
                 <span class="input-label">Red timecode while recording</span>
                 <div class="pill-grid" id="settingsRecordingRedTimecodeOptions"></div>
-                <p class="settings-card-copy">Next to the REC indicator: a red frame at the edges and a red timecode during takes, on the touch screen, the HDMI monitor and this preview.</p>
               </div>
             </div>
 
