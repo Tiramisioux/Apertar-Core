@@ -6300,10 +6300,34 @@ std::string_view webControlPageHtml()
       }, 300);
     }
 
+    // The FPS where the next resolution after this one stops: its max, else its ceiling.
+    function ladderNextTop(list, index) {
+      const next = list[index + 1];
+      return next ? (next.thr !== "" ? Number(next.thr) : ladderCeiling(next)) : Infinity;
+    }
+
+    // The maxes must rise down the list: Resolution 1 serves the lowest FPS. A max at or below the
+    // one above is refused, not quietly reset.
+    function ladderOrderProblem(list) {
+      let previous = 0;
+      for (let i = 0; i < list.length; i++) {
+        const rung = list[i];
+        if (rung.thr !== "") {
+          const value = Number(rung.thr);
+          if (Number.isFinite(value) && value <= previous)
+            return "Resolution " + (i + 1) + ": max " + value + " must be above " + previous + " fps, where Resolution " + i + " stops.";
+          previous = Math.max(previous, value);
+        } else if (ladderCeilingKnown(rung)) {
+          previous = Math.max(previous, ladderCeiling(rung));
+        }
+      }
+      return "";
+    }
+
     // Every local edit goes through here: refused (with the reason) when the result is illegal.
     function commitLadderDraft(next, notice) {
       const normalized = normalizeLadderDraft(next);
-      const problem = ladderDraftProblem(normalized);
+      const problem = ladderOrderProblem(next) || ladderDraftProblem(normalized);
       if (problem) {
         state.ladderNotice = problem;
       } else {
@@ -6322,12 +6346,12 @@ std::string_view webControlPageHtml()
       let notice = "";
       if (text !== "") {
         const low = span.from + 1;
-        const high = span.ceiling;
+        const high = Math.min(span.ceiling, ladderNextTop(list, index) - 1);
         const value = Math.round(Number(text));
         const clamped = Number.isFinite(value) ? Math.min(Math.max(value, low), high) : high;
         if (clamped !== value)
           notice = "Resolution " + (index + 1) + ": FPS must be between " + low + " and " + high + ". Set to " + clamped + ".";
-        thr = clamped === high ? "" : String(clamped);
+        thr = clamped === span.ceiling ? "" : String(clamped);
       }
       commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr }) : rung)), notice);
     }
@@ -6485,7 +6509,7 @@ std::string_view webControlPageHtml()
       thrInput.inputMode = "numeric";
       thrInput.step = "1";
       thrInput.min = String(rowState.from + 1);
-      thrInput.max = String(ceiling);
+      thrInput.max = String(Math.min(ceiling, ladderNextTop(draft, index) - 1));
       thrInput.placeholder = known ? String(ceiling) : "";
       thrInput.value = rung.thr;
       thrInput.title = "Max FPS of Resolution " + (index + 1) + ": the highest FPS it runs";
