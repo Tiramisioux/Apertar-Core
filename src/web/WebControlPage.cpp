@@ -534,6 +534,20 @@ std::string_view webControlPageHtml()
       color: #ff4d4d;
     }
 
+    .time-card.recording.plain-timecode .timecode-value {
+      color: #ffffff;
+    }
+
+    /* Recording frame: a red border around the preview during a take (a switch in Live preview). */
+    .preview-stage.recording-frame::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border: 4px solid #ff4d4d;
+      pointer-events: none;
+      z-index: 6;
+    }
+
     .time-value.recording {
       color: var(--danger);
     }
@@ -3248,6 +3262,15 @@ std::string_view webControlPageHtml()
                   <span class="capture-key">Preview source</span>
                   <span class="capture-value" id="settingsPreviewSourceValue">--</span>
                 </div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Recording frame</span>
+                <div class="pill-grid" id="settingsRecordingFrameOptions"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Red timecode while recording</span>
+                <div class="pill-grid" id="settingsRecordingRedTimecodeOptions"></div>
+                <p class="settings-card-copy">Next to the REC indicator: a red frame at the edges and a red timecode during takes, on the touch screen, the HDMI monitor and this preview.</p>
               </div>
             </div>
 
@@ -9491,6 +9514,12 @@ std::string_view webControlPageHtml()
         case "set_camera_controls_mode":
           uiState.camera_controls_mode = String(payload.value || "Light") === "Dark" ? "Dark" : "Light";
           break;
+        case "set_recording_frame_enabled":
+          uiState.recording_frame_enabled = boolValue;
+          break;
+        case "set_recording_red_timecode_enabled":
+          uiState.recording_red_timecode_enabled = boolValue;
+          break;
         case "set_date_time_overlay_enabled":
           uiState.date_time_overlay_enabled = boolValue;
           break;
@@ -10632,6 +10661,25 @@ std::string_view webControlPageHtml()
         }
       });
 
+      const recordingFrameEnabled = uiState.recording_frame_enabled === true;
+      const recordingRedTimecodeEnabled = uiState.recording_red_timecode_enabled !== false;
+      document.getElementById("previewStage").classList.toggle("recording-frame", recordingFrameEnabled && !!snapshot.recording);
+      document.getElementById("timecodeBlock").classList.toggle("plain-timecode", !recordingRedTimecodeEnabled);
+      buildOptionButtons("settingsRecordingFrameOptions", toggleOptions, formatToggleLabel(recordingFrameEnabled), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_recording_frame_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      buildOptionButtons("settingsRecordingRedTimecodeOptions", toggleOptions, formatToggleLabel(recordingRedTimecodeEnabled), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_recording_red_timecode_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+
       buildOptionButtons("settingsDateTimeOverlayOptions", toggleOptions, formatToggleLabel(dateTimeOverlayEnabled), async (value) => {
         try {
           await sendCommand({ cmd: "set_date_time_overlay_enabled", enabled: value === "On" ? "true" : "false" });
@@ -11177,6 +11225,7 @@ std::string_view webControlPageHtml()
         "monitoringOrder", "recordOrder", "audioOrder", "powerOrder", "systemOrder",
         "wifiOrder", "infoOrder", "sidebarOrder", "favoritesOrder",
         "cameraRawBitDepth",
+        "recordingFrameEnabled", "recordingRedTimecodeEnabled",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
         "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio",
       ];
