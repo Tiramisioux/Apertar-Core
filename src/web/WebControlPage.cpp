@@ -9781,7 +9781,11 @@ std::string_view webControlPageHtml()
       setText("networkTransport", snapshot.network_transport || "Wi-Fi / Ethernet");
       setText("webDateTimePill", formatWebDateTimePill(localDateTimeValue));
       setText("recordingStatus", !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
-      setText("resolutionBadge", h264RecordFormat ? h264OutputResolutionLabel(snapshot) : resolutionLabel);
+      // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
+      const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
+      const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
+        ? " · " + rawBits + "-bit" + (snapshot.clear_hdr ? " · Clear HDR" : "") : "";
+      setText("resolutionBadge", h264RecordFormat ? h264OutputResolutionLabel(snapshot) : resolutionLabel + rawResolutionDetail);
       setText("fpsBadge", String(Math.round(snapshot.fps)) + " FPS");
       // Auto shows the value in use, not the word; green whenever the camera set it.
       const isoInUse = snapshot.iso_auto && Number(snapshot.iso_actual) > 0 ? Number(snapshot.iso_actual) : 0;
