@@ -793,9 +793,55 @@ std::string_view webControlPageHtml()
       color: var(--ok);
     }
 
+    .pill-button.system-value {
+      color: var(--ok);
+    }
+
+    /* Value lists (T33): one chip per value, x removes it. */
+    .value-list-row {
+      gap: 12px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .value-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .value-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.72);
+      color: #f4f4f5;
+      padding: 6px 6px 6px 12px;
+      font-size: 13px;
+    }
+
+    .value-chip button {
+      border: 0;
+      border-radius: 999px;
+      width: 22px;
+      height: 22px;
+      background: #27272a;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 22px;
+    }
+
+    .value-chip button:hover {
+      color: var(--danger);
+    }
+
     .pill-button.active.system-value {
       border-color: var(--ok);
       background: var(--ok);
+      color: #09090b;
     }
 
     .pill-button.disabled,
@@ -2987,6 +3033,16 @@ std::string_view webControlPageHtml()
             <div class="settings-card">
               <div class="settings-card-head">
                 <div>
+                  <h3 class="settings-card-title">Value Lists</h3>
+                  <p class="settings-card-copy">What the pickers, dials and buttons step through. A value above what the current mode allows stays in the list, greyed out; the camera offers its limit instead, in green. Free steps the dials by the increment between the list's lowest and highest value.</p>
+                </div>
+              </div>
+              <div class="field-stack" id="settingsValueLists"></div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <div>
                   <h3 class="settings-card-title">Gyro Data</h3>
                   <p class="settings-card-copy">Write IMU motion data beside each clip.</p>
                 </div>
@@ -4256,6 +4312,7 @@ std::string_view webControlPageHtml()
       speedRampStepping: false,
       speedRampStop: false,
       speedRampTakeBase: 0,
+      valueListsSignature: "",
       fetchInFlight: false,
       fetchQueued: false,
       fetchQueuedSilent: true,
@@ -4740,21 +4797,15 @@ std::string_view webControlPageHtml()
       return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds) + ":" + pad2(frames);
     }
 
+    // The angle the camera runs, not the nearest stop: lists, free stepping and flicker-free
+    // angles (86.4°, 172.8°) all land between the built-in stops.
     function formatAngle(us, fps) {
       const safeFps = Math.max(0.001, Number(fps) || 24);
-      const frameDurationUs = 1000000 / safeFps;
-      const angle = (Number(us) / frameDurationUs) * 360;
-      let best = shutterOptions[0];
-      let bestDiff = Infinity;
-      for (const option of shutterOptions) {
-        const value = parseFloat(option);
-        const diff = Math.abs(value - angle);
-        if (diff < bestDiff) {
-          best = option;
-          bestDiff = diff;
-        }
-      }
-      return best;
+      return formatAngleValue((Number(us) / (1000000 / safeFps)) * 360);
+    }
+
+    function formatAngleValue(angle) {
+      return String(Number(Number(angle).toFixed(2))) + "°";
     }
 
     function shutterAngleToUs(label, fps) {
@@ -5043,12 +5094,21 @@ std::string_view webControlPageHtml()
       return 60.0;
     }
 
+    // The operator's FPS list cut at the mode's ceiling (Core's fps_max): the selectable values,
+    // with the ceiling added when a value lies above it. fpsOptionEntriesForSnapshot() keeps the
+    // values above the ceiling for the pills, greyed out.
     function availableFpsOptionsForSnapshot(snapshot) {
+      return fpsOptionEntriesForSnapshot(snapshot).filter((entry) => entry.enabled).map((entry) => entry.value);
+    }
+
+    function fpsOptionEntriesForSnapshot(snapshot) {
       const sensorLower = sensorNameLower(snapshot);
-      const presets = (sensorLower.indexOf("imx477") !== -1 || sensorLower.indexOf("imx577") !== -1)
-        ? fpsPresets
-        : fpsPresets.filter((value) => value <= 60.0005);
-      let max = maximumSupportedFpsForSnapshot(snapshot);
+      const presets = valueStepsFromSnapshot(snapshot, "fps_steps",
+        (sensorLower.indexOf("imx477") !== -1 || sensorLower.indexOf("imx577") !== -1)
+          ? fpsPresets
+          : fpsPresets.filter((value) => value <= 60.0005));
+      const coreMax = Number(snapshot && snapshot.fps_max) || 0;
+      let max = coreMax > 0 ? coreMax : maximumSupportedFpsForSnapshot(snapshot);
       const h264MaxFps = Number(snapshot && snapshot.recording_capabilities && snapshot.recording_capabilities.h264_max_fps) || 0;
       if (processedVideoRecordFormatForSnapshot(snapshot) && h264MaxFps > 0)
         max = Math.min(max, h264MaxFps);
@@ -5070,8 +5130,10 @@ std::string_view webControlPageHtml()
         max = Math.min(max, isApproximatelyFourThreeSnapshot(snapshot) ? 24.0 : 30.0);
       else if (isLosslessTwoKSnapshot(snapshot))
         max = Math.min(max, 60.0);
-      const filtered = presets.filter((value) => value <= max + 0.0005);
-      return (filtered.length > 0 ? filtered : [max]).map((value) => Number(value).toFixed(3));
+      const entries = cappedValueEntries(presets, max, (value) => Number(value).toFixed(3))
+        .map((entry) => ({ ...entry, label: String(Number(entry.value)) }));
+      return entries.some((entry) => entry.enabled)
+        ? entries : [{ value: Number(max).toFixed(3), label: String(Number(max.toFixed(3))), enabled: true, system: true }];
     }
 
     // Speed ramp (T31). Cinemate's SHUTTER SYNC, FPS DOUBLE and _ramp_fps as one block.
@@ -5227,27 +5289,218 @@ std::string_view webControlPageHtml()
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none.
     // The first step above it stays and lands on the ceiling, as in Cinemate; no Auto under a
     // ceiling or in Clear HDR, where Core runs on manual ISO. With auto on, Lock freezes the gain.
-    function availableIsoOptionsForSnapshot(snapshot) {
-      const maximum = Number(snapshot && snapshot.iso_max) || 0;
-      let options = isoOptions;
-      if (maximum > 0) {
-        const values = isoOptions.filter((value) => value !== "Auto");
-        options = values.filter((value) => Number(value) <= maximum);
-        if (values.some((value) => Number(value) > maximum) && !options.includes(String(maximum)))
-          options.push(String(maximum));
-      } else if (snapshot && snapshot.clear_hdr) {
-        options = isoOptions.filter((value) => value !== "Auto");
-      }
-      return snapshot && snapshot.iso_auto && options.includes("Auto")
-        ? ["Auto", "Lock", ...options.filter((value) => value !== "Auto")]
-        : options;
+    // T33: the value lists come from Core's state (ui.*_steps: the operator's list or the built-in
+    // one); the constants above are the fallback for an older Core.
+    function valueStepsFromSnapshot(snapshot, key, fallback) {
+      const raw = snapshot && snapshot.ui && Array.isArray(snapshot.ui[key]) ? snapshot.ui[key] : [];
+      const steps = raw.map(Number).filter((value) => isFinite(value) && value > 0);
+      return steps.length > 0 ? steps : fallback;
     }
 
-    // True when the ISO on screen is the camera's: auto, held for Clear HDR, or on the ceiling.
+    // Request 24: a list works on any sensor. Every value stays; values above the mode's ceiling
+    // are greyed out, and the ceiling is added (camera-set, green) when it is not one of them.
+    function cappedValueEntries(steps, cap, format) {
+      const entries = steps.map((value) => ({
+        value: format(value), label: format(value), enabled: !(cap > 0) || value <= cap + 0.0005, system: false,
+      }));
+      if (cap > 0 && steps.some((value) => value > cap + 0.0005) && !steps.some((value) => Math.abs(value - cap) < 0.0005))
+        entries.splice(steps.findIndex((value) => value > cap + 0.0005), 0,
+          { value: format(cap), label: format(cap), enabled: true, system: true });
+      return entries;
+    }
+
+    // Lamps on AC flicker at twice the mains frequency, so k / (2 x mains) of exposure sees whole
+    // flicker cycles: angle = 360 x fps x k / (2 x mains), as Core's flickerFreeShutterAngles().
+    function flickerFreeShutterAngles(fps, mainsHz) {
+      const angles = [];
+      if (!(fps > 0) || !(mainsHz > 0))
+        return angles;
+      for (let k = 1; k <= 400; ++k) {
+        const angle = 360 * fps * k / (2 * mainsHz);
+        if (angle > 360.0005)
+          break;
+        angles.push(Math.round(angle * 10) / 10);
+      }
+      return angles;
+    }
+
+    // The operator's (or built-in) angles for this FPS, with the flicker-free ones merged in when
+    // switched on; those not already in the list are camera-set (green).
+    function shutterAngleEntriesForSnapshot(snapshot) {
+      const steps = valueStepsFromSnapshot(snapshot, "shutter_angle_steps",
+        shutterOptions.filter((value) => value !== "Auto").map(parseFloat));
+      const ui = (snapshot && snapshot.ui) || {};
+      const entries = steps.map((angle) => ({ angle, system: false }));
+      if (ui.flicker_free_shutter_angles) {
+        for (const angle of flickerFreeShutterAngles(Number(snapshot.fps), Number(ui.mains_hz) || 50)) {
+          if (!entries.some((entry) => Math.abs(entry.angle - angle) < 0.05))
+            entries.push({ angle, system: true });
+        }
+      }
+      entries.sort((a, b) => a.angle - b.angle);
+      return [{ value: "Auto", label: "Auto" }].concat(entries.map((entry) => ({
+        value: formatAngleValue(entry.angle), label: formatAngleValue(entry.angle), system: entry.system,
+      })));
+    }
+
+    function whiteBalanceStepsForSnapshot(snapshot) {
+      return valueStepsFromSnapshot(snapshot, "wb_steps", whiteBalanceOptions);
+    }
+
+    // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
+    // Auto under a ceiling or in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
+    // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
+    // fields has focus, so typing is not interrupted.
+    const valueListDefinitions = [
+      { name: "iso", title: "ISO", steps: "iso_steps", free: "iso_free", increment: "iso_free_increment", unit: "" },
+      { name: "shutter_angle", title: "Shutter Angle", steps: "shutter_angle_steps", free: "shutter_angle_free",
+        increment: "shutter_angle_free_increment", unit: "°" },
+      { name: "fps", title: "Frame Rate", steps: "fps_steps", free: "fps_free", increment: "fps_free_increment", unit: " fps" },
+      { name: "wb", title: "White Balance", steps: "wb_steps", free: "wb_free", increment: "wb_free_increment", unit: "K" },
+    ];
+
+    async function sendValueSteps(payload) {
+      try {
+        await sendCommand({ cmd: "set_value_steps", ...payload });
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    }
+
+    function renderValueListsEditor(snapshot) {
+      const container = document.getElementById("settingsValueLists");
+      const ui = (snapshot && snapshot.ui) || {};
+      if (!container || !Array.isArray(ui.iso_steps))
+        return;
+      const signature = JSON.stringify(valueListDefinitions.map((list) => [ui[list.steps], ui[list.free], ui[list.increment]])
+        .concat([ui.flicker_free_shutter_angles, ui.mains_hz]));
+      if (signature === state.valueListsSignature || container.contains(document.activeElement))
+        return;
+      state.valueListsSignature = signature;
+      container.innerHTML = "";
+      for (const list of valueListDefinitions) {
+        const steps = (ui[list.steps] || []).map(Number);
+        const row = document.createElement("div");
+        row.className = "field-stack value-list-row";
+        const label = document.createElement("span");
+        label.className = "input-label";
+        label.textContent = list.title;
+        row.appendChild(label);
+
+        const chips = document.createElement("div");
+        chips.className = "value-chip-row";
+        for (const value of steps) {
+          const chip = document.createElement("span");
+          chip.className = "value-chip";
+          chip.textContent = String(value) + list.unit;
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "×";
+          remove.title = "Remove " + value;
+          remove.addEventListener("click", () => {
+            const rest = steps.filter((other) => other !== value);
+            if (rest.length === 0) {
+              showToast("A list needs at least one value; Reset brings back the built-in list.", true);
+              return;
+            }
+            sendValueSteps({ name: list.name, values: rest.join(",") });
+          });
+          chip.appendChild(remove);
+          chips.appendChild(chip);
+        }
+        row.appendChild(chips);
+
+        const addGrid = document.createElement("div");
+        addGrid.className = "settings-field-grid";
+        const input = document.createElement("input");
+        input.className = "settings-input";
+        input.type = "text";
+        input.inputMode = "decimal";
+        input.placeholder = "Add values, e.g. 33, 48";
+        const add = () => {
+          const added = input.value.split(/[ ,;]+/).map(Number).filter((value) => isFinite(value) && value > 0);
+          if (added.length === 0)
+            return;
+          input.value = "";
+          sendValueSteps({ name: list.name, values: steps.concat(added).join(",") });
+        };
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter")
+            add();
+        });
+        addGrid.appendChild(input);
+        const actions = document.createElement("div");
+        actions.className = "pill-grid";
+        addGrid.appendChild(actions);
+        row.appendChild(addGrid);
+        buildOptionButtonsInto(actions, [{ value: "add", label: "Add" }, { value: "reset", label: "Reset" }], "", (value) => {
+          if (value === "add")
+            add();
+          else
+            sendValueSteps({ name: list.name, values: "" });
+        });
+
+        const freeGrid = document.createElement("div");
+        freeGrid.className = "settings-field-grid";
+        const freePills = document.createElement("div");
+        freePills.className = "pill-grid";
+        freeGrid.appendChild(freePills);
+        buildOptionButtonsInto(freePills, [{ value: "false", label: "List" }, { value: "true", label: "Free" }],
+          ui[list.free] ? "true" : "false", (value) => sendValueSteps({ name: list.name, free: value }));
+        const increment = document.createElement("input");
+        increment.className = "settings-input";
+        increment.type = "number";
+        increment.min = "0";
+        increment.step = "any";
+        increment.value = String(ui[list.increment]);
+        increment.title = "Free step";
+        increment.disabled = !ui[list.free];
+        increment.addEventListener("change", () => {
+          const value = Number(increment.value);
+          if (isFinite(value) && value > 0)
+            sendValueSteps({ name: list.name, increment: value });
+        });
+        freeGrid.appendChild(increment);
+        row.appendChild(freeGrid);
+
+        if (list.name === "shutter_angle") {
+          const flickerGrid = document.createElement("div");
+          flickerGrid.className = "settings-field-grid";
+          const flicker = document.createElement("div");
+          flicker.className = "pill-grid";
+          const mains = document.createElement("div");
+          mains.className = "pill-grid";
+          flickerGrid.appendChild(flicker);
+          flickerGrid.appendChild(mains);
+          buildOptionButtonsInto(flicker, [{ value: "false", label: "Flicker-free off" }, { value: "true", label: "Flicker-free on" }],
+            ui.flicker_free_shutter_angles ? "true" : "false",
+            (value) => sendValueSteps({ name: "shutter_angle", flicker_free: value }));
+          buildOptionButtonsInto(mains, [{ value: "50", label: "50 Hz" }, { value: "60", label: "60 Hz" }],
+            String(ui.mains_hz || 50), (value) => sendValueSteps({ name: "shutter_angle", mains_hz: Number(value) }));
+          row.appendChild(flickerGrid);
+        }
+        container.appendChild(row);
+      }
+    }
+
+    function availableIsoOptionsForSnapshot(snapshot) {
+      const maximum = Number(snapshot && snapshot.iso_max) || 0;
+      const steps = valueStepsFromSnapshot(snapshot, "iso_steps",
+        isoOptions.filter((value) => value !== "Auto").map(Number));
+      const entries = cappedValueEntries(steps, maximum, (value) => String(Math.round(value)));
+      const autoAllowed = !(maximum > 0) && !(snapshot && snapshot.clear_hdr);
+      if (!autoAllowed)
+        return entries;
+      return (snapshot && snapshot.iso_auto ? [{ value: "Auto" }, { value: "Lock" }] : [{ value: "Auto" }]).concat(entries);
+    }
+
+    // True when the ISO on screen is the camera's: auto, held for Clear HDR, or the ceiling the
+    // camera added (not one of the operator's values: ISO 800 in lossless is the operator's).
     function isoSetByCamera(snapshot) {
       const maximum = Number(snapshot && snapshot.iso_max) || 0;
+      const steps = valueStepsFromSnapshot(snapshot, "iso_steps", []);
       return !!snapshot && (!!snapshot.iso_auto || snapshot.iso_auto_after_clear_hdr === true ||
-        (maximum > 0 && Number(snapshot.iso) === maximum));
+        (maximum > 0 && Number(snapshot.iso) === maximum && !steps.some((value) => Math.abs(value - maximum) < 0.5)));
     }
 
     function markActiveSystemValue(containerId, isSystem) {
@@ -5763,9 +6016,10 @@ std::string_view webControlPageHtml()
 
     function nearestWhiteBalance(kelvin) {
       const numericKelvin = Number(kelvin) || 5600;
-      let best = whiteBalanceOptions[0];
+      const steps = whiteBalanceStepsForSnapshot(state.snapshot);
+      let best = steps[0];
       let bestDiff = Infinity;
-      for (const option of whiteBalanceOptions) {
+      for (const option of steps) {
         const diff = Math.abs(option - numericKelvin);
         if (diff < bestDiff) {
           best = option;
@@ -5777,13 +6031,14 @@ std::string_view webControlPageHtml()
 
     function whiteBalanceIndexFromKelvin(kelvin) {
       const matched = nearestWhiteBalance(kelvin);
-      const index = whiteBalanceOptions.indexOf(matched);
+      const index = whiteBalanceStepsForSnapshot(state.snapshot).indexOf(matched);
       return index >= 0 ? index : 0;
     }
 
     function whiteBalanceFromSliderValue(value) {
-      const index = clamp(Number(value) || 0, 0, whiteBalanceOptions.length - 1);
-      return whiteBalanceOptions[index];
+      const steps = whiteBalanceStepsForSnapshot(state.snapshot);
+      const index = clamp(Number(value) || 0, 0, steps.length - 1);
+      return steps[index];
     }
 
     function recordingFormatLabel(formatValue) {
@@ -6587,6 +6842,7 @@ std::string_view webControlPageHtml()
                 value: String(value),
                 label: String(label),
                 enabled: option.enabled !== false,
+                system: option.system === true,
               };
             }
             return {
@@ -9434,7 +9690,10 @@ std::string_view webControlPageHtml()
     }
 
     function buildOptionButtons(containerId, options, currentValue, onClick, columns) {
-      const container = document.getElementById(containerId);
+      buildOptionButtonsInto(document.getElementById(containerId), options, currentValue, onClick, columns);
+    }
+
+    function buildOptionButtonsInto(container, options, currentValue, onClick, columns) {
       if (!container)
         return;
       container.classList.toggle("three-col", columns === 3);
@@ -9443,7 +9702,8 @@ std::string_view webControlPageHtml()
         const button = document.createElement("button");
         button.className = "pill-button"
           + (option.value === String(currentValue) ? " active" : "")
-          + (option.enabled ? "" : " disabled");
+          + (option.enabled ? "" : " disabled")
+          + (option.system ? " system-value" : "");
         button.textContent = option.label;
         button.disabled = !option.enabled;
         button.addEventListener("click", () => {
@@ -9650,7 +9910,7 @@ std::string_view webControlPageHtml()
       const hasMedia = snapshot.media_alive !== undefined ? !!snapshot.media_alive : !!snapshot.media_mounted;
       const whiteBalanceAuto = !!snapshot.wb_auto;
       const whiteBalanceAvailable = snapshot.wb_available === true;
-      const displayWhiteBalance = nearestWhiteBalance(snapshot.wb_kelvin);
+      const displayWhiteBalance = Math.round(Number(snapshot.wb_kelvin) || 5600);
       const whiteBalanceLabel = whiteBalanceAuto ? "Auto" : (String(displayWhiteBalance) + "K");
       const fpsOptions = availableFpsOptionsForSnapshot(snapshot);
       const snapshotSensorLower = sensorNameLower(snapshot);
@@ -9680,7 +9940,7 @@ std::string_view webControlPageHtml()
         ? "Auto"
         : (stillModeEnabled ? formatShutterSpeed(snapshot.shutter_us) : formatAngle(snapshot.shutter_us, snapshot.fps));
       const shutterOptionSet = stillModeEnabled
-        ? availableStillShutterOptions(uiState) : shutterOptions;
+        ? availableStillShutterOptions(uiState) : shutterAngleEntriesForSnapshot(snapshot);
       const focusPeakingEnabled = !!uiState.focus_peaking_enabled;
       const focusPeakingThreshold = valueToFocusThreshold(uiState.focus_peaking_threshold);
       const focusPeakingColor = uiState.focus_peaking_color || "Red";
@@ -10087,6 +10347,7 @@ std::string_view webControlPageHtml()
       );
 
       const wbRange = document.getElementById("whiteBalanceRange");
+      wbRange.max = String(Math.max(0, whiteBalanceStepsForSnapshot(snapshot).length - 1));
       if (document.activeElement !== wbRange)
         wbRange.value = String(whiteBalanceIndexFromKelvin(displayWhiteBalance));
       setElementDisabled("whiteBalanceRange", whiteBalanceAuto || !whiteBalanceAvailable);
@@ -10175,7 +10436,7 @@ std::string_view webControlPageHtml()
       state.timecodeBaseLocalMsOfDay = Number(snapshot.timecode_local_ms_of_day || 0);
       updateLiveReadouts();
 
-      buildOptionButtons("fpsOptions", fpsOptions, Number(snapshot.fps).toFixed(3), async (value) => {
+      buildOptionButtons("fpsOptions", fpsOptionEntriesForSnapshot(snapshot), Number(snapshot.fps).toFixed(3), async (value) => {
         try {
           await sendCommand({ cmd: "set_fps", value: Number(value) });
         } catch (error) {
@@ -10272,6 +10533,7 @@ std::string_view webControlPageHtml()
       }, 3);
 
       renderSpeedRamp(snapshot, fpsOptions);
+      renderValueListsEditor(snapshot);
 
       buildOptionButtons("settingsGyroDataOptions", toggleOptions, formatToggleLabel(recordGyroEnabled), async (value) => {
         try {
