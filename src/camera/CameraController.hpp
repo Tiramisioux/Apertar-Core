@@ -60,7 +60,7 @@ public:
     bool setResolution(Resolution resolution);
     bool setFps(double fps);
     bool setIso(uint32_t iso);
-    bool setIsoAuto();
+    bool setIsoAuto(bool enabled = true); // false: lock at the gain in use
     bool setShutterUs(uint32_t shutterUs);
     bool setShutterAuto();
     bool setExposureCompensation(double ev);

@@ -185,6 +185,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps\":" << std::fixed << std::setprecision(3) << settings.fps
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -8027,6 +8028,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps\":" << jsonNumber(settings.fps, 3)
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -9683,7 +9685,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "set_iso_auto") {
-        return camera_.setIsoAuto()
+        // enabled=false locks: auto off at the gain in use (iso_actual).
+        const auto enabled = command.string("enabled");
+        return camera_.setIsoAuto(!enabled || *enabled == "true" || *enabled == "1")
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
     }

@@ -150,6 +150,7 @@ struct CaptureSettings {
     bool whiteBalanceAutoAfterClearHdr = false; // Clear HDR stopped auto WB; SDR turns it back on.
     bool whiteBalanceAvailable = false; // Runtime capability of the active tuning, not persisted.
     WhiteBalanceMeasurement whiteBalanceMeasured;
+    uint32_t isoMeasured = 0; // Runtime: the analogue gain in use x 100, not persisted.
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
     LossyDngRatio lossyDngRatio = LossyDngRatio::R3;

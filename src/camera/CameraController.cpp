@@ -149,6 +149,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps\":" << std::fixed << std::setprecision(3) << settings.fps
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -9286,9 +9287,27 @@ bool CameraController::setIso(uint32_t iso)
     return applySettingsLocked(next, false);
 }
 
-bool CameraController::setIsoAuto()
+bool CameraController::setIsoAuto(bool enabled)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled) {
+        // Lock: auto off at the gain it is using now, so the picture does not jump.
+        if (!settings_.isoAuto) {
+            lastError_.clear();
+            emitSettingsEventLocked();
+            return true;
+        }
+        const float gain = (!simulateCamera_ && session_) ? session_->measuredAnalogueGain() : 0.0f;
+        if (!std::isfinite(gain) || gain <= 0.0f) {
+            setErrorLocked("Auto ISO has no measured gain yet; try again in a moment.");
+            return false;
+        }
+        CaptureSettings next = settings_;
+        next.iso = static_cast<uint32_t>(std::clamp(std::lround(gain * 100.0f), 50l, 51200l));
+        next.isoAuto = false;
+        next.isoAutoAfterClearHdr = false;
+        return applySettingsLocked(next, false);
+    }
     if (settings_.clearHdr) {
         setErrorLocked("Auto ISO is off in Clear HDR: ISO holds its value and auto comes back in SDR.");
         return false;
@@ -10280,8 +10299,11 @@ CaptureSettings CameraController::settings() const
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings result = settings_;
     result.exposureCompensationAvailable = simulateCamera_ || (session_ && session_->exposureCompensationAvailable());
-    if (!simulateCamera_ && session_)
+    if (!simulateCamera_ && session_) {
         result.whiteBalanceMeasured = session_->measuredWhiteBalance();
+        if (const float gain = session_->measuredAnalogueGain(); std::isfinite(gain) && gain > 0.0f)
+            result.isoMeasured = static_cast<uint32_t>(std::lround(gain * 100.0f));
+    }
     return result;
 }
 
