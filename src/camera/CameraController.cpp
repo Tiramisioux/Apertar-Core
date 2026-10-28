@@ -9489,9 +9489,10 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const std::string tuningFile = next.tuningFile;
             const TimecodeMode timecodeMode = next.timecodeMode;
             const std::string metering = next.exposureMetering;
-            // Speed ramping is one switch for the camera, not one per format: on in H.264
-            // (where it waits) must mean on in cDNG and MLV too.
+            // Speed ramping and the phase lock are one switch for the camera, not one per
+            // format: on in H.264 (where ramping waits) must mean on in cDNG and MLV too.
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
+            const bool fpsPhaseLock = next.fpsPhaseLock;
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
             const double conformFps = next.conformFps;
             next = saved->second;
@@ -9501,6 +9502,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.fpsSpeedRamp = fpsSpeedRamp;
             next.fpsSpeedRampKeepExposure = fpsSpeedRampKeepExposure;
             next.conformFps = conformFps;
+            next.fpsPhaseLock = fpsPhaseLock;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
