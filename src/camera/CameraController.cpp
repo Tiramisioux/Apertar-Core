@@ -152,6 +152,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_max\":" << settings.isoMax
+        << ",\"fps_max\":" << settings.fpsMax
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -2615,18 +2616,20 @@ uint32_t isoForMeasuredGain(float gain)
     return static_cast<uint32_t>(std::clamp(static_cast<long>(std::ceil(gain * 100.0f)), 50l, 51200l));
 }
 
-// [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap.
+// [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap,
+// and max_fps, the highest rate any control may select on this build (0 = the sensor's own limit).
 // 12-bit: the sensor merges HG and LG only while GAIN + EXP_GAIN <= 29.1 dB, so with the driver's
 // +12 dB EXP_GAIN up to gain code 57 (17.1 dB), ISO 720. 16-bit: the driver caps Clear HDR gain at
 // code 80 (24 dB), ISO 1585; above it only the preview brightens (ISP digital gain), not the file.
-struct ClearHdrIsoLimits {
+struct CameraSection {
     uint32_t max12 = 720;
     uint32_t max16 = 1585;
+    double maxFps = 0.0;
 };
 
-ClearHdrIsoLimits loadClearHdrIsoLimits()
+CameraSection loadCameraSection()
 {
-    ClearHdrIsoLimits limits;
+    CameraSection limits;
     std::vector<std::filesystem::path> candidates;
     if (const char *envPath = std::getenv("APERTAR_HARDWARE_CONFIG"); envPath && *envPath)
         candidates.emplace_back(envPath);
@@ -2654,10 +2657,16 @@ ClearHdrIsoLimits loadClearHdrIsoLimits()
             if (!inCamera || eq == std::string::npos)
                 continue;
             char *end = nullptr;
+            const std::string key = line.substr(0, eq);
+            if (key == "max_fps") {
+                const double fps = std::strtod(line.c_str() + eq + 1, &end);
+                if (end && *end == '\0' && std::isfinite(fps) && fps >= 0.0 && fps <= 280.0)
+                    limits.maxFps = fps;
+                continue;
+            }
             const long value = std::strtol(line.c_str() + eq + 1, &end, 10);
             if (!end || *end != '\0' || value < 0 || value > 51200)
                 continue;
-            const std::string key = line.substr(0, eq);
             if (key == "clear_hdr_iso_max_12bit")
                 limits.max12 = static_cast<uint32_t>(value);
             else if (key == "clear_hdr_iso_max_16bit")
@@ -2669,9 +2678,9 @@ ClearHdrIsoLimits loadClearHdrIsoLimits()
 }
 
 // Read once: a change in the file takes effect at the next Core start.
-const ClearHdrIsoLimits &clearHdrIsoLimits()
+const CameraSection &cameraSection()
 {
-    static const ClearHdrIsoLimits limits = loadClearHdrIsoLimits();
+    static const CameraSection limits = loadCameraSection();
     return limits;
 }
 
@@ -2680,7 +2689,7 @@ uint32_t clearHdrIsoCap(const CaptureSettings &settings)
 {
     if (!settings.clearHdr)
         return 0;
-    const ClearHdrIsoLimits &limits = clearHdrIsoLimits();
+    const CameraSection &limits = cameraSection();
     return normalizeRawBitDepth(settings.rawBitDepth) == 16 ? limits.max16 : limits.max12;
 }
 
@@ -2726,24 +2735,27 @@ bool losslessCaptureLimited(const CaptureSettings &settings, SensorFamily sensor
     return imx585 || isLosslessFourKCapture(settings, sensorFamily) || isLosslessTwoKCapture(settings, sensorFamily);
 }
 
+// The lossless cDNG FPS limit; 0 when the lossless limits do not apply.
+double losslessMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
+{
+    if (!losslessCaptureLimited(settings, sensorFamily))
+        return 0.0;
+    const bool imx585 = sensorFamily == SensorFamily::Imx585 &&
+                        settings.recordingFormat == RecordingFormat::Cdng &&
+                        settings.cdngCompression == CdngCompression::LosslessJpeg;
+    return imx585 ? 30.0
+        : (isLosslessTwoKCapture(settings, sensorFamily) ? 60.0
+        : (isApproximatelyFourThree(settings.resolution) ? 24.0 : 30.0));
+}
+
 void enforceLosslessCaptureLimits(CaptureSettings &settings, SensorFamily sensorFamily)
 {
     if (!losslessCaptureLimited(settings, sensorFamily))
         return;
 
-    const bool imx585 = sensorFamily == SensorFamily::Imx585 &&
-                        settings.recordingFormat == RecordingFormat::Cdng &&
-                        settings.cdngCompression == CdngCompression::LosslessJpeg;
-    const bool twoK = isLosslessTwoKCapture(settings, sensorFamily);
-
     settings.iso = std::min(settings.iso, kLosslessMaxIso);
     settings.isoAuto = false;
-    const double maximumFps = imx585
-        ? 30.0
-        : (twoK
-        ? 60.0
-        : (isApproximatelyFourThree(settings.resolution) ? 24.0 : 30.0));
-    settings.fps = std::min(settings.fps, maximumFps);
+    settings.fps = std::min(settings.fps, losslessMaximumFps(settings, sensorFamily));
 }
 
 // The highest ISO the current mode takes, 0 = none; published as iso_max so the UIs cut
@@ -2979,7 +2991,9 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    return probed ? std::min(table, *probed) : table;
+    const double sensor = probed ? std::min(table, *probed) : table;
+    // The build's ceiling ([camera] max_fps) over every mode.
+    return cameraSection().maxFps > 0.0 ? std::min(sensor, cameraSection().maxFps) : sensor;
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -3007,6 +3021,31 @@ uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t reque
     }
 
     return 12u;
+}
+
+// The current mode's FPS ceiling before the lossless limit: the sensor table or probe (with
+// the build's max_fps), and the IMX477 uncompressed cDNG limit.
+double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
+{
+    double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
+                                                     settings.clearHdr);
+    if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
+        settings.recordingFormat == RecordingFormat::Cdng &&
+        settings.cdngCompression == CdngCompression::Uncompressed) {
+        maxFps = std::min(
+            maxFps,
+            imx477MaximumUncompressedCdngFpsForResolution(settings.resolution, settings.rawBitDepth));
+    }
+    return maxFps;
+}
+
+// The highest FPS the current mode takes; published as fps_max so the UIs cut their FPS
+// lists where the sanitiser clamps.
+double maximumFpsForSettings(const CaptureSettings &settings, SensorFamily sensorFamily)
+{
+    const double lossless = losslessMaximumFps(settings, sensorFamily);
+    const double mode = modeMaximumFps(settings, sensorFamily);
+    return lossless > 0.0 ? std::min(mode, lossless) : mode;
 }
 
 CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily sensorFamily)
@@ -3043,15 +3082,7 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     if (sensorFamily == SensorFamily::Imx294)
         settings.resolution = normalizedImx294ResolutionForBitDepth(settings.resolution, settings.rawBitDepth);
 
-    double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
-                                                     settings.clearHdr);
-    if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
-        settings.recordingFormat == RecordingFormat::Cdng &&
-        settings.cdngCompression == CdngCompression::Uncompressed) {
-        maxFps = std::min(
-            maxFps,
-            imx477MaximumUncompressedCdngFpsForResolution(settings.resolution, settings.rawBitDepth));
-    }
+    const double maxFps = modeMaximumFps(settings, sensorFamily);
     if (settings.fps > maxFps)
         settings.fps = maxFps;
     enforceLosslessCaptureLimits(settings, sensorFamily);
@@ -10525,7 +10556,9 @@ CaptureSettings CameraController::settings() const
         if (const float gain = session_->measuredAnalogueGain(); std::isfinite(gain) && gain > 0.0f)
             result.isoMeasured = static_cast<uint32_t>(std::lround(gain * 100.0f));
     }
-    result.isoMax = maximumIsoForSettings(result, (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown);
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    result.isoMax = maximumIsoForSettings(result, family);
+    result.fpsMax = maximumFpsForSettings(result, family);
     return result;
 }
 
@@ -10773,7 +10806,9 @@ void CameraController::emitSettingsEventLocked()
     settings_.exposureCompensationAvailable = simulateCamera_ || (session_ && session_->exposureCompensationAvailable());
     settings_.whiteBalanceAvailable = simulateCamera_ ||
         ((!session_ || !session_->monochromeSensor()) && activeTuningHasCalibratedWhiteBalance());
-    settings_.isoMax = maximumIsoForSettings(settings_, (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown);
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    settings_.isoMax = maximumIsoForSettings(settings_, family);
+    settings_.fpsMax = maximumFpsForSettings(settings_, family);
     if (eventCallback_)
         eventCallback_(settingsEvent(settings_));
 }

@@ -188,6 +188,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_max\":" << settings.isoMax
+        << ",\"fps_max\":" << settings.fpsMax
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -4356,6 +4357,8 @@ pcie_controller=1000110000.pcie
 # 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
 clear_hdr_iso_max_12bit=720
 clear_hdr_iso_max_16bit=1585
+# Highest FPS any control may select on this build; 0 = each mode's own limit.
+max_fps=50
 
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
@@ -8045,6 +8048,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
         << ",\"iso_max\":" << settings.isoMax
+        << ",\"fps_max\":" << jsonNumber(settings.fpsMax, 3)
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
