@@ -11962,6 +11962,9 @@ std::string_view webControlPageHtml()
           const resolution = fpsResolution(fpsEntries[index].value);
           button.classList.toggle("ladder-switch", !button.classList.contains("active") && resolution !== ladderCurrent);
           button.appendChild(createDomElement("span", "pill-sub", "Resolution " + resolution));
+          const mode = state.ladderServer && Array.isArray(state.ladderServer.resolutions) ? state.ladderServer.resolutions[resolution - 1] : null;
+          if (mode)
+            button.appendChild(createDomElement("span", "pill-sub", ladderSizeText(mode) + " · " + ladderClassText(mode)));
         });
       }
       const fpsLadderLine = document.getElementById("fpsLadderLine");
