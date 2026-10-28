@@ -6380,10 +6380,6 @@ std::string_view webControlPageHtml()
         : (rowState.open ? "" : approx + Math.round(rate) + " MB/s at " + rowState.top + " fps" + (over ? " · above " + cardSpeed + " MB/s (card)" : ""))));
       controls.appendChild(compField);
 
-      const buttons = createDomElement("div", "ladder-row-buttons");
-      buttons.appendChild(createLadderIconButton("remove", "Deactivate " + name, "remove", locked,
-        () => commitLadderDraft(draft.filter((other, i) => i !== index), "")));
-      controls.appendChild(buttons);
       row.appendChild(controls);
       item.appendChild(row);
 
