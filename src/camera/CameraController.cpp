@@ -2565,6 +2565,13 @@ bool isLosslessTwoKCapture(const CaptureSettings &settings, SensorFamily sensorF
            resolution.width == 2028;
 }
 
+// The ISO that keeps the sensor on the gain code it is measured at. The gain-to-code step rounds
+// down (0.3 dB per code), so ISO 794 for a measured 7.94x lands one code lower; rounding up keeps it.
+uint32_t isoForMeasuredGain(float gain)
+{
+    return static_cast<uint32_t>(std::clamp(static_cast<long>(std::ceil(gain * 100.0f)), 50l, 51200l));
+}
+
 // [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap.
 // 12-bit: the sensor merges HG and LG only while GAIN + EXP_GAIN <= 29.1 dB, so with the driver's
 // +12 dB EXP_GAIN up to gain code 57 (17.1 dB), ISO 720. 16-bit: the driver caps Clear HDR gain at
@@ -9303,7 +9310,7 @@ bool CameraController::setIsoAuto(bool enabled)
             return false;
         }
         CaptureSettings next = settings_;
-        next.iso = static_cast<uint32_t>(std::clamp(std::lround(gain * 100.0f), 50l, 51200l));
+        next.iso = isoForMeasuredGain(gain);
         next.isoAuto = false;
         next.isoAutoAfterClearHdr = false;
         return applySettingsLocked(next, false);
@@ -9696,7 +9703,7 @@ bool CameraController::setClearHdr(bool enabled)
         // they are using now rather than the last manual ones.
         if (settings_.isoAuto) {
             if (const float gain = session_->measuredAnalogueGain(); std::isfinite(gain) && gain > 0.0f)
-                next.iso = static_cast<uint32_t>(std::clamp(std::lround(gain * 100.0f), 50l, 51200l));
+                next.iso = isoForMeasuredGain(gain);
         }
         if (settings_.whiteBalanceAuto) {
             if (const WhiteBalanceMeasurement wb = session_->measuredWhiteBalance(); wb.valid() && wb.kelvin)
