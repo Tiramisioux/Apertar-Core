@@ -1222,8 +1222,8 @@ std::string_view webControlPageHtml()
       grid-template-columns: repeat(2, 88px);
     }
 
-    .pill-grid.ladder-depth {
-      grid-template-columns: repeat(auto-fill, minmax(150px, max-content));
+    .pill-grid.ladder-aspects {
+      grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
     }
 
     .ladder-groups {
@@ -3634,14 +3634,6 @@ std::string_view webControlPageHtml()
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
-              <div class="ladder-draft-row">
-                <span class="subtle-note" id="settingsModeLadderDraft"></span>
-                <div class="ladder-actions">
-                  <button class="secondary-button" id="settingsModeLadderRevert" type="button" disabled>Revert</button>
-                  <button class="primary-button" id="settingsModeLadderSave" type="button" disabled>Save ladder</button>
-                </div>
-              </div>
-              <ul class="ladder-messages" id="settingsModeLadderMessages"></ul>
               <div class="ladder-box ladder-coverage">
                 <div class="ladder-coverage-head">
                   <span class="input-label" id="settingsModeLadderCoverageTitle">FPS coverage</span>
@@ -3659,7 +3651,7 @@ std::string_view webControlPageHtml()
                   <p class="settings-card-copy" id="settingsSensorModesCopy"></p>
                 </div>
               </div>
-              <div class="pill-grid ladder-depth" id="settingsSensorModeDepthFilters" role="group" aria-label="Bit depth"></div>
+              <div class="pill-grid ladder-aspects" id="settingsSensorModeAspectFilters" role="group" aria-label="Aspect ratio"></div>
               <div class="ladder-groups" id="settingsSensorModeGroups"></div>
             </div>
 
@@ -4994,8 +4986,8 @@ std::string_view webControlPageHtml()
       ladderServer: null,      // Core's last mode_ladder reply
       ladderError: "",
       ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
-      ladderNotice: "",
-      ladderCheck: null,       // Core's dry run of the draft
+      ladderSaveAgain: false,
+      ladderRecordingSeen: null,
       ladderCheckTimer: 0,
       ladderDrag: null,
       ladderSaving: false,
@@ -5003,9 +4995,8 @@ std::string_view webControlPageHtml()
       ladderFetching: false,
       ladderFetchedMs: -10000,
       ladderSeenActive: null,
-      ladderDepth: "all",
+      ladderAspect: "all",
       ladderOpen: { chdr: true, "4k": true, crop: false, "2k": false },
-      ladderMessagesSignature: "",
       fetchInFlight: false,
       fetchQueued: false,
       fetchQueuedSilent: true,
@@ -5952,7 +5943,6 @@ std::string_view webControlPageHtml()
     const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
     const ladderGroups = [["chdr", "Clear HDR"], ["4k", "4K SDR"], ["crop", "3840 wide crops"], ["2k", "2K binned"]];
-    const ladderDepthFilters = [["all", "Any depth"], ["12", "12-bit"], ["10", "10-bit"], ["16hdr", "16-bit Clear HDR"], ["12hdr", "12-bit Clear HDR"]];
     const ladderIcons = {
       handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
       up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
@@ -6297,33 +6287,8 @@ std::string_view webControlPageHtml()
       state.ladderError = "";
       if (!keepDraft) {
         state.ladderDraft = ladderDraftFromServer(modeLadder);
-        state.ladderNotice = "";
-        state.ladderCheck = null;
       }
       renderLadderEditor();
-    }
-
-    // Core checks the draft as it would a save (dry_run), 300 ms after the last edit.
-    function scheduleLadderCheck() {
-      clearTimeout(state.ladderCheckTimer);
-      state.ladderCheck = null;
-      if (!ladderDirty())
-        return;
-      const text = ladderDraftText(state.ladderDraft);
-      state.ladderCheckTimer = window.setTimeout(async () => {
-        let check;
-        try {
-          const result = await ladderRequest({ cmd: "set_mode_ladder", resolutions: text, dry_run: "true" });
-          const modeLadder = result.mode_ladder || {};
-          check = { text, errors: modeLadder.errors || [], warnings: modeLadder.warnings || [] };
-        } catch (error) {
-          check = { text, errors: [error.message], warnings: [] };
-        }
-        if (text === ladderDraftText(state.ladderDraft)) {
-          state.ladderCheck = check;
-          renderLadderFooter();
-        }
-      }, 300);
     }
 
     // The FPS where the next resolution after this one stops: its max, else its ceiling.
@@ -6350,16 +6315,19 @@ std::string_view webControlPageHtml()
       return "";
     }
 
-    // Every local edit goes through here: refused (with the reason) when the result is illegal.
+    // Every local edit goes through here: refused (with the reason) when the result is illegal, else
+    // saved on the camera a moment later. The ladder on screen is always the saved one.
     function commitLadderDraft(next, notice) {
       const normalized = normalizeLadderDraft(next);
       const problem = ladderOrderProblem(next) || ladderDraftProblem(normalized);
       if (problem) {
-        state.ladderNotice = problem;
+        showToast(problem, true);
       } else {
         state.ladderDraft = normalized;
-        state.ladderNotice = notice || "";
-        scheduleLadderCheck();
+        if (notice)
+          showToast(notice, false);
+        clearTimeout(state.ladderCheckTimer);
+        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
       }
       renderLadderEditor();
     }
@@ -6404,7 +6372,7 @@ std::string_view webControlPageHtml()
           moveLadderRung(drag.from, drag.over);
       };
       handle.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0)
+        if (event.button !== 0 || (state.snapshot && state.snapshot.recording))
           return;
         event.preventDefault();
         handle.setPointerCapture(event.pointerId);
@@ -6455,6 +6423,7 @@ std::string_view webControlPageHtml()
       const cardSpeed = ladderCardWriteSpeed();
       const approx = rung.comp === "none" ? "" : "≈ ";
       const rate = megabytes * rowState.top;
+      const locked = !!(state.snapshot && state.snapshot.recording);
       const item = createDomElement("div", "ladder-item");
 
       const row = createDomElement("div", "ladder-row");
@@ -6500,6 +6469,7 @@ std::string_view webControlPageHtml()
         compSelect.appendChild(option);
       });
       compSelect.value = rung.comp;
+      compSelect.disabled = locked;
       compSelect.addEventListener("change", () => commitLadderDraft(
         draft.map((other, i) => (i === index ? Object.assign({}, other, { comp: compSelect.value }) : other)), ""));
       compField.appendChild(compLabel);
@@ -6516,9 +6486,9 @@ std::string_view webControlPageHtml()
       controls.appendChild(compField);
 
       const buttons = createDomElement("div", "ladder-row-buttons");
-      buttons.appendChild(createLadderIconButton("up", "Move " + name + " up", "", index === 0, () => moveLadderRung(index, index - 1)));
-      buttons.appendChild(createLadderIconButton("down", "Move " + name + " down", "", index === draft.length - 1, () => moveLadderRung(index, index + 1)));
-      buttons.appendChild(createLadderIconButton("remove", "Remove " + name + " from the ladder", "remove", false,
+      buttons.appendChild(createLadderIconButton("up", "Move " + name + " up", "", locked || index === 0, () => moveLadderRung(index, index - 1)));
+      buttons.appendChild(createLadderIconButton("down", "Move " + name + " down", "", locked || index === draft.length - 1, () => moveLadderRung(index, index + 1)));
+      buttons.appendChild(createLadderIconButton("remove", "Remove " + name + " from the ladder", "remove", locked,
         () => commitLadderDraft(draft.filter((other, i) => i !== index), "")));
       controls.appendChild(buttons);
       row.appendChild(controls);
@@ -6538,6 +6508,7 @@ std::string_view webControlPageHtml()
       thrInput.max = String(Math.min(ceiling, ladderNextTop(draft, index) - 1));
       thrInput.placeholder = known ? String(ceiling) : "";
       thrInput.value = rung.thr;
+      thrInput.disabled = locked;
       thrInput.title = "Max FPS of Resolution " + (index + 1) + ": the highest FPS it runs";
       thrInput.setAttribute("aria-label", "Max FPS of Resolution " + (index + 1));
       thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
@@ -6587,35 +6558,6 @@ std::string_view webControlPageHtml()
       state.ladderDraft.forEach((rung, index) => list.appendChild(createLadderRow(rung, index, rowStates[index])));
     }
 
-    function renderLadderFooter() {
-      const snapshot = state.snapshot || {};
-      const server = state.ladderServer;
-      const dirty = ladderDirty();
-      const text = ladderDraftText(state.ladderDraft);
-      const check = state.ladderCheck && state.ladderCheck.text === text ? state.ladderCheck : null;
-      const source = dirty ? check : server;
-      const errors = source && Array.isArray(source.errors) ? source.errors : [];
-      const warnings = source && Array.isArray(source.warnings) ? source.warnings : [];
-      const recording = !!snapshot.recording;
-      const draftLine = document.getElementById("settingsModeLadderDraft");
-      setText("settingsModeLadderDraft", state.ladderNotice || (!server ? ""
-        : (dirty ? (recording ? "Unsaved changes. Stop recording to save the ladder." : "Unsaved changes. Core checks the ladder again when you save.")
-          : "Saved on the camera.")));
-      draftLine.classList.toggle("notice", !!state.ladderNotice);
-      draftLine.classList.toggle("dirty", !state.ladderNotice && dirty);
-      setElementDisabled("settingsModeLadderRevert", !dirty || state.ladderSaving);
-      setElementDisabled("settingsModeLadderSave", !dirty || recording || errors.length > 0 || state.ladderSaving);
-
-      const signature = JSON.stringify([errors, warnings]);
-      if (signature === state.ladderMessagesSignature)
-        return;
-      state.ladderMessagesSignature = signature;
-      const messages = document.getElementById("settingsModeLadderMessages");
-      messages.innerHTML = "";
-      errors.forEach((message) => messages.appendChild(createDomElement("li", "error", message)));
-      warnings.forEach((message) => messages.appendChild(createDomElement("li", "warning", message)));
-    }
-
     function renderLadderCoverage(enabled) {
       // The bar stops at the first resolution whose ceiling nobody knows (empty max, not probed).
       const allRows = ladderRowStates(state.ladderDraft);
@@ -6662,15 +6604,6 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsModeLadderGap").classList.toggle("hidden", gap === "");
     }
 
-    // "Clear HDR modes always show" under 12-bit and 10-bit; the two Clear HDR pills show those only.
-    function ladderDepthMatches(entry, filter) {
-      if (filter === "all")
-        return true;
-      if (filter === "16hdr" || filter === "12hdr")
-        return entry.clear_hdr === true && String(entry.bits) === filter.slice(0, 2);
-      return entry.clear_hdr === true || String(entry.bits) === filter;
-    }
-
     // Activated sensor modes: the probe's pool in collapsible groups, one column; Add puts a mode
     // at the end of the draft.
     function renderSensorModes() {
@@ -6682,18 +6615,30 @@ std::string_view webControlPageHtml()
         : (pool.length === 0 ? "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…)."
           : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
             + ". Add the ones you want on the ladder. Ceilings are Core's."));
-      const depth = document.getElementById("settingsSensorModeDepthFilters");
-      depth.classList.toggle("hidden", pool.length === 0);
-      buildOptionButtons("settingsSensorModeDepthFilters",
-        ladderDepthFilters.map(([value, label]) => ({ value, label, enabled: true })), state.ladderDepth, (value) => {
-          state.ladderDepth = value;
+      // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
+      const aspects = [];
+      pool.forEach((entry) => {
+        const text = ladderAspectText(entry);
+        if (!aspects.some((aspect) => aspect.text === text))
+          aspects.push({ text, ratio: entry.width / entry.height });
+      });
+      aspects.sort((a, b) => a.ratio - b.ratio);
+      if (state.ladderAspect !== "all" && !aspects.some((aspect) => aspect.text === state.ladderAspect))
+        state.ladderAspect = "all";
+      const filters = document.getElementById("settingsSensorModeAspectFilters");
+      filters.classList.toggle("hidden", pool.length === 0);
+      buildOptionButtons("settingsSensorModeAspectFilters",
+        [{ value: "all", label: "All", enabled: true }].concat(aspects.map((aspect) => ({ value: aspect.text, label: aspect.text, enabled: true }))),
+        state.ladderAspect, (value) => {
+          state.ladderAspect = value;
           renderSensorModes();
         });
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
       ladderGroups.forEach(([groupKey, title]) => {
-        const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey && ladderDepthMatches(entry, state.ladderDepth));
+        const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
+          && (state.ladderAspect === "all" || ladderAspectText(entry) === state.ladderAspect));
         if (entries.length === 0)
           return;
         const onLadder = entries.filter((entry) => draft.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
@@ -6744,9 +6689,10 @@ std::string_view webControlPageHtml()
       const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
       const crop = ladderCrop(mode);
       const candidate = Object.assign({}, mode, { comp: "none", thr: "" });
+      const locked = !!(state.snapshot && state.snapshot.recording);
       const placed = index >= 0 || ceiling <= 0 ? null : ladderWithMode(draft, candidate);
       const why = index >= 0 ? ""
-        : (ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
+        : (locked ? "Stop recording to change the ladder." : ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
           : (placed.problem || ""));
       const item = createDomElement("div", "ladder-pool-item" + (index >= 0 ? "" : " inactive"));
       const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
@@ -6766,6 +6712,7 @@ std::string_view webControlPageHtml()
         actions.appendChild(createDomElement("span", "ladder-pool-number", "Resolution " + (index + 1)));
         const remove = createDomElement("button", "ladder-add remove", "Remove");
         remove.type = "button";
+        remove.disabled = locked;
         remove.setAttribute("aria-label", "Remove " + name + " from the ladder");
         remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), ""));
         actions.appendChild(remove);
@@ -6804,6 +6751,12 @@ std::string_view webControlPageHtml()
       else if (server && state.ladderSeenActive !== null && state.ladderSeenActive !== active && !ladderDirty())
         void fetchModeLadder(false);
       state.ladderSeenActive = active;
+      if (state.ladderRecordingSeen !== recording) {
+        // Recording starts or stops: the editor locks or unlocks (Core refuses a save in a take).
+        state.ladderRecordingSeen = recording;
+        renderLadderEditor();
+        return;
+      }
 
       setText("settingsModeLadderValue", enabled ? "On" : "Off");
       document.getElementById("settingsModeLadderValue").classList.toggle("off", !enabled);
@@ -6834,7 +6787,6 @@ std::string_view webControlPageHtml()
       }
 
       document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
-      renderLadderFooter();
       renderLadderCoverage(enabled);
     }
 
@@ -6855,26 +6807,24 @@ std::string_view webControlPageHtml()
     async function saveModeLadder() {
       if (!ladderDirty())
         return;
+      if (state.ladderSaving) {
+        state.ladderSaveAgain = true;
+        return;
+      }
       state.ladderSaving = true;
-      renderLadderFooter();
       try {
-        await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
-        await fetchModeLadder(true);
-        showToast("Mode Ladder saved.", false);
+        const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
+        applyModeLadder(result.mode_ladder, false);
       } catch (error) {
         showToast(error.message, true);
+        await fetchModeLadder(true);
       } finally {
         state.ladderSaving = false;
-        renderLadderFooter();
+        if (state.ladderSaveAgain) {
+          state.ladderSaveAgain = false;
+          void saveModeLadder();
+        }
       }
-    }
-
-    function revertModeLadder() {
-      clearTimeout(state.ladderCheckTimer);
-      state.ladderDraft = ladderDraftFromServer(state.ladderServer);
-      state.ladderNotice = "";
-      state.ladderCheck = null;
-      renderLadderEditor();
     }
 
     // While the Mode Ladder is active the FPS picks the mode: mode pills show it, locked.
@@ -13613,8 +13563,6 @@ std::string_view webControlPageHtml()
         } catch (error) { showToast(error.message, true); }
       });
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
-      document.getElementById("settingsModeLadderSave").addEventListener("click", saveModeLadder);
-      document.getElementById("settingsModeLadderRevert").addEventListener("click", revertModeLadder);
       document.addEventListener("click", (event) => {
         const link = event.target.closest ? event.target.closest("a[data-ladder-link]") : null;
         if (!link)
