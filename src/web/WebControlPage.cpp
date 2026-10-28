@@ -809,86 +809,565 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
-    /* Mode Ladder editor (T34): one row per resolution, a handle to drag it. */
+    /* Mode Ladder, Speed Ramp and Activated sensor modes (Settings > Record), and the ladder in Camera settings */
+    .switch-field {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .settings-card-head.wrap-head {
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .settings-card-head.wrap-head > div:first-child {
+      flex: 1 1 320px;
+      min-width: 0;
+    }
+
+    .online-pill.off {
+      background: rgba(161, 161, 170, 0.12);
+      color: #d4d4d8;
+    }
+
+    .ladder-box {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.72);
+    }
+
+    .ladder-box-text {
+      flex: 1 1 180px;
+      min-width: 0;
+    }
+
+    .ladder-box-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .ladder-now {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .crop-frame {
+      position: relative;
+      flex: 0 0 auto;
+      width: 78px;
+      height: 48px;
+      border: 1px solid #8a8a8a;
+      background: #131210;
+      overflow: hidden;
+    }
+
+    .crop-frame.large {
+      width: 160px;
+      height: 98px;
+    }
+
+    .crop-frame.small {
+      width: 65px;
+      height: 40px;
+    }
+
+    .crop-window {
+      position: absolute;
+      min-width: 2px;
+      min-height: 2px;
+      border: 2px solid #90ee90;
+      background: rgba(120, 220, 150, 0.13);
+    }
+
+    .crop-window.whole {
+      background: rgba(120, 220, 150, 0.08);
+    }
+
+    .crop-tag {
+      position: absolute;
+      left: 3px;
+      top: 2px;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      line-height: 1.2;
+      color: #fbbf24;
+    }
+
+    .crop-frame.large .crop-tag {
+      font-size: 11px;
+    }
+
+    .ladder-list-head,
+    .ladder-coverage-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px 12px;
+    }
+
+    .ladder-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .ladder-list.off .ladder-row {
+      opacity: 0.55;
+    }
+
+    .ladder-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ladder-transition {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 10px 2px 44px;
+      font-size: 13px;
+      color: #d4d4d8;
+    }
+
+    .ladder-transition svg {
+      flex: 0 0 auto;
+    }
+
     .ladder-row {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 10px;
+      gap: 16px;
+      padding: 14px 16px;
       border-radius: 18px;
-      border: 1px solid #27272a;
-      background: rgba(9, 9, 11, 0.72);
-      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #202024;
     }
 
     .ladder-row.dragging {
-      opacity: 0.6;
-      border-color: #52525b;
+      background: #111113;
     }
 
     .ladder-row.drop-target {
-      border-color: #ffffff;
+      border: 1px dashed rgba(255, 255, 255, 0.7);
+    }
+
+    .ladder-row-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+      flex: 1 1 360px;
+      min-width: 0;
     }
 
     .ladder-handle {
-      touch-action: none;
-      cursor: grab;
-      user-select: none;
-      min-width: 44px;
-      min-height: 44px;
-      display: inline-flex;
+      display: flex;
       align-items: center;
       justify-content: center;
+      width: 28px;
+      min-height: 44px;
       color: var(--muted);
-      font-size: 20px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
     }
 
-    .ladder-title {
-      flex: 1 1 180px;
-      min-width: 0;
+    .ladder-badge {
+      flex: 0 0 30px;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      background: #4ade80;
+      color: #09090b;
       font-size: 14px;
-      color: #f4f4f5;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
-    .ladder-title small {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
+    .ladder-row-text {
+      flex: 1 1 160px;
+      min-width: 0;
     }
 
-    .ladder-row .settings-select,
-    .ladder-row .settings-input {
-      width: auto;
-      min-height: 44px;
+    .ladder-row-name {
+      font-size: 15px;
+      font-weight: 600;
     }
 
-    .ladder-row .ladder-threshold {
-      width: 7em;
-    }
-
-    .ladder-button {
-      min-width: 44px;
-      min-height: 44px;
-      border-radius: 14px;
-      border: 1px solid #27272a;
-      background: #18181b;
-      color: #f4f4f5;
-      cursor: pointer;
-      font-size: 16px;
-    }
-
-    .ladder-button:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    .ladder-message {
+    .ladder-row-meta,
+    .ladder-row-desc {
+      margin-top: 3px;
       font-size: 13px;
       color: var(--muted);
     }
 
-    .ladder-message.error {
-      color: var(--danger);
+    .ladder-row-desc.crop-in {
+      color: #fbbf24;
+    }
+
+    .ladder-row-range,
+    .ladder-problem {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #d4d4d8;
+    }
+
+    .ladder-problem {
+      color: #fca5a5;
+    }
+
+    .ladder-row-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 12px;
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
+    .ladder-row-controls .field-stack {
+      gap: 4px;
+    }
+
+    .ladder-row-controls .input-label {
+      font-size: 11px;
+    }
+
+    .ladder-row-controls .settings-input,
+    .ladder-row-controls .settings-select {
+      min-height: 44px;
+      border-radius: 14px;
+      padding-left: 12px;
+    }
+
+    .ladder-row-controls .settings-input.problem {
+      border-color: var(--danger);
+    }
+
+    .ladder-thr {
+      flex: 0 0 120px;
+      width: 120px;
+    }
+
+    .ladder-comp {
+      flex: 0 0 190px;
+      width: 190px;
+    }
+
+    .ladder-note {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ladder-size {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e4e4e7;
+    }
+
+    .ladder-note.over {
+      color: #fbbf24;
+    }
+
+    .ladder-row-buttons {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-top: 19px;
+    }
+
+    .ladder-icon-button {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.72);
+      color: #f4f4f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ladder-icon-button.remove {
+      color: #fca5a5;
+    }
+
+    .ladder-icon-button:disabled {
+      color: #52525b;
+      cursor: default;
+    }
+
+    .ladder-draft-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .ladder-draft-row .subtle-note.dirty {
+      color: #fbbf24;
+    }
+
+    .ladder-draft-row .subtle-note.notice,
+    .ladder-messages .error {
+      color: #fca5a5;
+    }
+
+    .ladder-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .ladder-messages {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 13px;
+    }
+
+    .ladder-messages .warning,
+    .ladder-gap {
+      color: #fdba74;
+    }
+
+    .ladder-coverage {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      padding: 16px;
+    }
+
+    .ladder-bar {
+      display: flex;
+      height: 34px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #27272a;
+    }
+
+    .ladder-bar span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #4ade80;
+      color: #09090b;
+      font-size: 13px;
+      font-weight: 700;
+      border-right: 2px solid #18181b;
+    }
+
+    .ladder-bar.off span {
+      background: #52525b;
+    }
+
+    .ladder-ticks {
+      position: relative;
+      height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ladder-ticks span {
+      position: absolute;
+      top: 0;
+    }
+
+    .ladder-gap {
+      font-size: 13px;
+    }
+
+    .pill-grid.ladder-pair {
+      grid-template-columns: repeat(2, 88px);
+    }
+
+    .pill-grid.ladder-depth {
+      grid-template-columns: repeat(auto-fill, minmax(150px, max-content));
+    }
+
+    .ladder-groups {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .ladder-group-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 48px;
+      padding: 0 16px;
+      border-radius: 16px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.72);
+      color: #f4f4f5;
+      font-size: 15px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .ladder-group-head svg {
+      flex: 0 0 auto;
+      transition: transform 0.15s ease;
+    }
+
+    .ladder-group-head[aria-expanded="true"] svg {
+      transform: rotate(90deg);
+    }
+
+    .ladder-group-count {
+      margin-left: auto;
+      font-size: 13px;
+      font-weight: 400;
+      color: var(--muted);
+    }
+
+    .ladder-pool {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ladder-pool-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 12px 12px 12px 14px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #202024;
+    }
+
+    .ladder-pool-text {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .ladder-pool-name {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .ladder-pool-meta {
+      margin-top: 3px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ladder-add {
+      flex: 0 0 auto;
+      min-width: 72px;
+      min-height: 44px;
+      padding: 0 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      background: #ffffff;
+      color: #09090b;
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .ladder-add:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .ladder-add.on-ladder {
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      opacity: 1;
+    }
+
+    .section-head .online-pill {
+      margin-left: auto;
+    }
+
+    .select-note {
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 400;
+      letter-spacing: 0;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    .select-note.switching {
+      font-weight: 700;
+      color: #fbbf24;
+    }
+
+    .select-note.ladder-on {
+      font-weight: 600;
+      color: var(--ok);
+    }
+
+    .pill-sub {
+      display: block;
+      margin-top: 2px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #71717a;
+    }
+
+    .pill-button.active .pill-sub {
+      color: #52525b;
+    }
+
+    .pill-button.ladder-switch {
+      border: 1px dashed #f59e0b;
+    }
+
+    .pill-button.ladder-switch .pill-sub {
+      color: #fbbf24;
+    }
+
+    .pill-grid.ladder-locked .pill-button.active {
+      border-color: rgba(255, 255, 255, 0.9);
+      background: #ffffff;
+      color: #09090b;
+    }
+
+    @media (max-width: 560px) {
+      .ladder-comp {
+        flex: 1 1 100%;
+        width: auto;
+      }
+
+      .ladder-transition {
+        padding-left: 10px;
+      }
+    }
+
+    .ladder-link {
+      color: inherit;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
 
     /* Value lists (T33): one chip per value, x removes it. */
@@ -2681,12 +3160,14 @@ std::string_view webControlPageHtml()
                 <img class="icon-image" src="/icons/settings.png" alt="">
               </div>
               <h2 class="section-title">Camera settings</h2>
+              <div class="online-pill hidden" id="quickLadderPill">Resolution ladder on</div>
             </div>
 
             <div class="stack">
               <section class="select-block">
                 <div class="select-topline">
                   <span>Frame rate</span>
+                  <span class="select-note" id="fpsLadderLine"></span>
                 </div>
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
@@ -2708,6 +3189,7 @@ std::string_view webControlPageHtml()
               <section class="select-block">
                 <div class="select-topline">
                   <span id="quickResolutionLabel">Resolution</span>
+                  <span class="select-note ladder-on hidden" id="quickResolutionLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a> on: the FPS picks the resolution.</span>
                 </div>
                 <div class="pill-grid three-col" id="resolutionOptions"></div>
               </section>
@@ -2715,6 +3197,7 @@ std::string_view webControlPageHtml()
               <section class="select-block hidden" id="cropRatioBlock">
                 <div class="select-topline">
                   <span id="quickCropLabel">Crop mode</span>
+                  <span class="select-note ladder-on hidden" id="quickCropLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a> on: the FPS picks the resolution.</span>
                 </div>
                 <div class="pill-grid three-col" id="cropRatioOptions"></div>
               </section>
@@ -3019,6 +3502,7 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="settingsH264ResolutionSelect"></select>
                 </label>
               </div>
+              <p class="settings-card-copy hidden" id="settingsRecordLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a><span id="settingsRecordLadderNoteTail"> on: the FPS picks the resolution.</span></p>
               <div class="pill-grid" id="settingsRecordFormatOptions"></div>
               <div class="field-stack hidden" id="settingsProresColorField">
                 <label class="input-label" for="settingsProresColorSelect">Color Profile</label>
@@ -3052,7 +3536,6 @@ std::string_view webControlPageHtml()
                     <option value="lossy_5to1">Lossy 5:1</option>
                   </select>
                 </label>
-                <p class="settings-card-copy field-span-2 hidden" id="settingsCdngCompressionLadderNote">The Mode Ladder is active: it sets the compression for each resolution. Turn it off to choose it here.</p>
               </div>
               <div class="settings-card-head compact-head">
                 <div>
@@ -3062,17 +3545,72 @@ std::string_view webControlPageHtml()
                 <div class="online-pill" id="settingsRawBitDepthValue">12-bit</div>
               </div>
               <div class="pill-grid three-col" id="settingsRawBitDepthOptions"></div>
-              <div class="settings-card-head compact-head">
+            </div>
+
+            <div class="settings-card" id="settingsModeLadderCard">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Mode Ladder</h3>
+                  <p class="settings-card-copy">Switches resolution automatically when you change FPS. Each resolution runs to its max FPS, then the next one takes over.</p>
+                </div>
+                <div class="online-pill off" id="settingsModeLadderValue">Off</div>
+              </div>
+              <div class="ladder-box">
+                <div class="ladder-box-text">
+                  <div class="ladder-box-title">Activate ladder</div>
+                  <div class="subtle-note" id="settingsModeLadderSwitchNote">Off: changing FPS never switches resolution.</div>
+                </div>
+                <div class="pill-grid ladder-pair" id="settingsModeLadderOptions"></div>
+              </div>
+              <div class="ladder-box">
+                <div class="ladder-box-text">
+                  <span class="input-label">Running now</span>
+                  <div class="ladder-now" id="settingsModeLadderNow">--</div>
+                  <div class="subtle-note" id="settingsModeLadderNowNote"></div>
+                </div>
+                <div class="crop-frame large" id="settingsModeLadderNowCrop" role="img"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">During a take</span>
+                <span class="ladder-row-range">FPS stops at the running resolution's ceiling. Resolutions change between takes only, with a short preview blink.</span>
+                <span class="subtle-note">While the ladder is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
+              </div>
+              <div class="field-stack">
+                <div class="ladder-list-head">
+                  <span class="input-label">Resolutions, first one first</span>
+                  <span class="ladder-note">Drag the handle, or use the arrows</span>
+                </div>
+                <div class="ladder-list" id="settingsModeLadderList"></div>
+              </div>
+              <div class="ladder-draft-row">
+                <span class="subtle-note" id="settingsModeLadderDraft"></span>
+                <div class="ladder-actions">
+                  <button class="secondary-button" id="settingsModeLadderRevert" type="button" disabled>Revert</button>
+                  <button class="primary-button" id="settingsModeLadderSave" type="button" disabled>Save ladder</button>
+                </div>
+              </div>
+              <ul class="ladder-messages" id="settingsModeLadderMessages"></ul>
+              <div class="ladder-box ladder-coverage">
+                <div class="ladder-coverage-head">
+                  <span class="input-label" id="settingsModeLadderCoverageTitle">FPS coverage</span>
+                </div>
+                <div class="ladder-bar" id="settingsModeLadderBar" role="img"></div>
+                <div class="ladder-ticks" id="settingsModeLadderTicks"></div>
+                <div class="ladder-gap hidden" id="settingsModeLadderGap"></div>
+              </div>
+            </div>
+
+            <div class="settings-card" id="settingsSpeedRampCard">
+              <div class="settings-card-head wrap-head">
                 <div>
                   <h3 class="settings-card-title">Speed Ramp</h3>
-                  <p class="settings-card-copy" id="settingsSpeedRampNote">Change FPS during a CinemaDNG or MLV take.</p>
+                  <p class="settings-card-copy">Change the frame rate during recording. The clip keeps the rate it started at, so the faster parts play back as slow motion.</p>
+                  <p class="settings-card-copy hidden" id="settingsSpeedRampNote"></p>
                 </div>
-                <div class="online-pill" id="settingsSpeedRampValue">Off</div>
-              </div>
-              <div class="pill-grid" id="settingsSpeedRampOptions"></div>
-              <div class="field-stack">
-                <span class="input-label">Ramp-ready (Mode Ladder)</span>
-                <div class="pill-grid" id="settingsSpeedRampReadyOptions"></div>
+                <div class="switch-field">
+                  <span>Allow speed ramping</span>
+                  <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
+                </div>
               </div>
               <div class="field-stack">
                 <span class="input-label">Shutter Sync</span>
@@ -3084,42 +3622,17 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
                 <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
               </div>
-              <div class="settings-field-grid">
-                <label class="field-stack">
-                  <span class="input-label">Ramp to</span>
-                  <select class="settings-select" id="settingsSpeedRampTargetSelect"></select>
-                </label>
-                <label class="field-stack">
-                  <span class="input-label">Over</span>
-                  <select class="settings-select" id="settingsSpeedRampSecondsSelect">
-                    <option value="0">Cut</option>
-                    <option value="1">1 s</option>
-                    <option value="2">2 s</option>
-                    <option value="5" selected>5 s</option>
-                    <option value="10">10 s</option>
-                    <option value="20">20 s</option>
-                  </select>
-                </label>
-              </div>
-              <div class="pill-grid three-col" id="settingsSpeedRampActions"></div>
-              <p class="settings-card-copy" id="settingsSpeedRampRange"></p>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" id="settingsSensorModesCard">
               <div class="settings-card-head">
                 <div>
-                  <h3 class="settings-card-title">Mode Ladder</h3>
+                  <h3 class="settings-card-title">Activated sensor modes</h3>
+                  <p class="settings-card-copy" id="settingsSensorModesCopy"></p>
                 </div>
-                <div class="online-pill" id="settingsModeLadderValue">Off</div>
               </div>
-              <div class="pill-grid" id="settingsModeLadderOptions"></div>
-              <div class="field-stack" id="settingsModeLadderList"></div>
-              <div class="settings-field-grid">
-                <select class="settings-select" id="settingsModeLadderAddSelect"></select>
-                <div class="pill-grid" id="settingsModeLadderAddActions"></div>
-              </div>
-              <div class="field-stack" id="settingsModeLadderMessages"></div>
-              <div class="pill-grid" id="settingsModeLadderSaveActions"></div>
+              <div class="pill-grid ladder-depth" id="settingsSensorModeDepthFilters" role="group" aria-label="Bit depth"></div>
+              <div class="ladder-groups" id="settingsSensorModeGroups"></div>
             </div>
 
             <div class="settings-card">
@@ -4424,19 +4937,23 @@ std::string_view webControlPageHtml()
 
     const state = {
       snapshot: null,
-      speedRampTarget: "",
-      speedRampReturnFps: 0,
-      speedRampStepping: false,
-      speedRampStop: false,
-      speedRampTakeBase: 0,
       valueListsSignature: "",
+      fpsSwitchingTo: 0,       // the resolution a set_fps in flight switches to
       ladderServer: null,      // Core's last mode_ladder reply
-      ladderDraft: null,       // {enabled, rampReady, rows} being edited
-      ladderDirty: false,
-      ladderDrag: null,
+      ladderError: "",
+      ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
+      ladderNotice: "",
+      ladderCheck: null,       // Core's dry run of the draft
       ladderCheckTimer: 0,
+      ladderDrag: null,
+      ladderSaving: false,
+      ladderToggling: false,
       ladderFetching: false,
+      ladderFetchedMs: -10000,
       ladderSeenActive: null,
+      ladderDepth: "all",
+      ladderOpen: { chdr: true, "4k": true, crop: false, "2k": false },
+      ladderMessagesSignature: "",
       fetchInFlight: false,
       fetchQueued: false,
       fetchQueuedSilent: true,
@@ -5261,154 +5778,47 @@ std::string_view webControlPageHtml()
         ? entries : [{ value: Number(max).toFixed(3), label: String(Number(max.toFixed(3))), enabled: true, system: true }];
     }
 
-    // Speed ramp (T31). Cinemate's SHUTTER SYNC, FPS DOUBLE and _ramp_fps as one block.
-    // Core refuses an FPS change in a take unless fps_speed_ramp is on and the take is
-    // CinemaDNG (any compression) or MLV; fps_speed_ramp itself only changes between takes.
-    // Core has no ramp command: the page steps set_fps itself, one fps per step.
+    // Speed ramp (T31). Core refuses an FPS change in a take unless fps_speed_ramp is on and the
+    // take is CinemaDNG (any compression) or MLV; fps_speed_ramp itself only changes between takes.
+    // The FPS pills and dials ramp: this card only allows it and sets the shutter and audio policy.
     function speedRampFormatSupported(snapshot) {
       const format = String(snapshot && snapshot.recording_format || "").toLowerCase();
       return !stillCaptureForSnapshot(snapshot) && (format === "cdng" || format === "lossydng" || format === "mlv");
     }
 
-    function speedRampFpsLabel(value) {
-      return String(Number(value)) + " fps";
-    }
-
-    // Walks from the current FPS to toFps over the chosen seconds, the way Cinemate's
-    // _ramp_fps does. Stops at the first refusal, when Core no longer moves the rate (the
-    // mode's ceiling), and when a take starts or ends under it, so a mid-ramp value never
-    // becomes a take's start rate or outlives its take.
-    async function startSpeedRamp(toFps) {
-      if (state.speedRampStepping || !state.snapshot)
-        return;
-      const seconds = Number(document.getElementById("settingsSpeedRampSecondsSelect").value) || 0;
-      const fromFps = Number(state.snapshot.fps) || 0;
-      const target = Number(toFps);
-      const steps = seconds > 0 ? Math.max(1, Math.min(200, Math.round(Math.abs(target - fromFps)))) : 1;
-      const intervalMs = seconds > 0 ? seconds * 1000 / steps : 0;
-      const takeRecording = !!state.snapshot.recording;
-      let lastFps = fromFps;
-      state.speedRampStepping = true;
-      state.speedRampStop = false;
-      renderSnapshot(state.snapshot);
-      try {
-        for (let step = 1; step <= steps; ++step) {
-          if (intervalMs > 0)
-            await new Promise((resolve) => setTimeout(resolve, intervalMs));
-          if (state.speedRampStop || !state.snapshot || !!state.snapshot.recording !== takeRecording)
-            break;
-          const fps = step === steps ? target : fromFps + (target - fromFps) * step / steps;
-          const result = await sendCommand({ cmd: "set_fps", value: Math.round(fps * 1000) / 1000 });
-          const accepted = result && isFiniteNumber(result.fps) ? Number(result.fps) : Number(state.snapshot.fps);
-          if (Math.abs(accepted - lastFps) < 0.0005)
-            break;
-          lastFps = accepted;
-        }
-      } catch (error) {
-        showToast(error.message, true);
-      } finally {
-        state.speedRampStepping = false;
-        if (state.snapshot)
-          renderSnapshot(state.snapshot);
-      }
-    }
-
-    function renderSpeedRamp(snapshot, fpsOptions) {
+    function renderSpeedRamp(snapshot) {
       const enabled = snapshot.fps_speed_ramp === true;
       const keepExposure = snapshot.fps_speed_ramp_keep_exposure === true;
-      const stepping = state.speedRampStepping;
       const recording = !!snapshot.recording;
       const formatSupported = speedRampFormatSupported(snapshot);
-      // The take's start rate as this page saw it start; a page opened mid-take counts
-      // from the rate it first sees (Core does not publish the base).
-      if (!recording)
-        state.speedRampTakeBase = 0;
-      else if (!(state.speedRampTakeBase > 0))
-        state.speedRampTakeBase = Number(snapshot.fps) || 0;
-      const takeBase = recording && enabled ? state.speedRampTakeBase : 0;
-      const currentFps = Number(snapshot.fps) || 0;
-      // The highest value in the selectable list, as the camera UI's maximumSelectableFps().
-      const highestFps = fpsOptions.length > 0 ? Number(fpsOptions[fpsOptions.length - 1]) : currentFps;
-      const canRamp = !stepping && (!recording || (enabled && formatSupported));
-      const nearly = (a, b) => Math.abs(a - b) < 0.0005;
+      const note = !formatSupported
+        ? (stillCaptureForSnapshot(snapshot) ? "Not in photo mode." : "Not in H.264 or ProRes: they keep one rate per clip.")
+        : (recording ? "Stop recording to turn it on or off." : "");
+      setText("settingsSpeedRampNote", note);
+      document.getElementById("settingsSpeedRampNote").classList.toggle("hidden", note === "");
 
-      setText("settingsSpeedRampValue", !enabled ? "Off" : (stepping ? "Ramping" : (keepExposure ? "On · Exposure" : "On · Angle")));
-      setText("settingsSpeedRampNote", !formatSupported
-        ? "Works in CinemaDNG and MLV. H.264, ProRes and stills keep one rate per clip."
-        : (takeBase > 0 && enabled
-          ? "This take runs at " + speedRampFpsLabel(takeBase) + ": every frame is numbered at that rate, so a faster stretch plays as slow motion. Stop returns to it."
-          : "Change FPS during a CinemaDNG or MLV take. The clip keeps the rate it started with, so a faster stretch plays as slow motion."));
-      setText("settingsSpeedRampRange", "Selectable in this mode: " + speedRampFpsLabel(fpsOptions[0] || currentFps)
-        + " to " + speedRampFpsLabel(highestFps) + "." + (recording && !enabled ? " Turn ramping on before the take." : ""));
-
-      buildOptionButtons("settingsSpeedRampOptions", [
-        { label: "Off", value: "Off", enabled: !recording },
-        { label: "On", value: "On", enabled: !recording },
-      ], enabled ? "On" : "Off", async (value) => {
+      const send = async (payload) => {
         try {
-          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: value === "On" ? "true" : "false" });
+          await sendCommand({ cmd: "set_fps_speed_ramp", ...payload });
         } catch (error) {
           showToast(error.message, true);
         }
-      }, 2);
+      };
+      buildOptionButtons("settingsSpeedRampOptions", [
+        { label: "Off", value: "Off", enabled: !recording && formatSupported },
+        { label: "On", value: "On", enabled: !recording && formatSupported },
+      ], enabled ? "On" : "Off", (value) => send({ enabled: value === "On" ? "true" : "false" }), 2);
 
       buildOptionButtons("settingsSpeedRampShutterOptions", [
         { label: "Angle", value: "angle", enabled },
         { label: "Exposure", value: "exposure", enabled },
-      ], keepExposure ? "exposure" : "angle", async (value) => {
-        try {
-          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: "true", shutter: value });
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      }, 2);
+      ], keepExposure ? "exposure" : "angle", (value) => send({ enabled: "true", shutter: value }), 2);
 
       const stretchAudio = snapshot.fps_speed_ramp_stretch_audio !== false;
       buildOptionButtons("settingsSpeedRampAudioOptions", [
         { label: "Real time", value: "real", enabled: enabled && !recording },
         { label: "Stretched", value: "stretch", enabled: enabled && !recording },
-      ], stretchAudio ? "stretch" : "real", async (value) => {
-        try {
-          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: "true", audio: value });
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      }, 2);
-
-      // Same list as the FPS pills: edit fpsPresets and both follow.
-      const targets = fpsOptions.filter((value) => !nearly(Number(value), currentFps));
-      ensureSelectEntries("settingsSpeedRampTargetSelect", targets.map((value) => ({ value, label: speedRampFpsLabel(value) })));
-      const targetSelect = document.getElementById("settingsSpeedRampTargetSelect");
-      if (targetSelect) {
-        if (targets.includes(state.speedRampTarget))
-          targetSelect.value = state.speedRampTarget;
-        else if (targets.length > 0)
-          targetSelect.value = targets[targets.length - 1];
-        targetSelect.disabled = !canRamp || targets.length === 0;
-      }
-
-      // ×2 doubles the take's start rate (Cinemate's FPS DOUBLE); Back returns to it,
-      // or outside a take to the rate before the last ×2.
-      const doubleBase = takeBase > 0 ? takeBase : currentFps;
-      const doubleFps = doubleBase * 2;
-      const backFps = takeBase > 0 ? takeBase : (Number(state.speedRampReturnFps) || 0);
-      buildOptionButtons("settingsSpeedRampActions", [
-        { label: stepping ? "Stop" : "Ramp", value: stepping ? "stop" : "ramp", enabled: stepping || (canRamp && targets.length > 0) },
-        { label: "×2 → " + speedRampFpsLabel(doubleFps), value: "double", enabled: canRamp && doubleFps <= highestFps + 0.0005 && !nearly(doubleFps, currentFps) },
-        { label: backFps > 0 ? "Back → " + speedRampFpsLabel(backFps) : "Back", value: "back", enabled: canRamp && backFps > 0 && !nearly(backFps, currentFps) },
-      ], "", async (value) => {
-        if (value === "stop") {
-          state.speedRampStop = true;
-        } else if (value === "ramp" && targetSelect) {
-          await startSpeedRamp(targetSelect.value);
-        } else if (value === "double") {
-          if (takeBase <= 0)
-            state.speedRampReturnFps = currentFps;
-          await startSpeedRamp(doubleFps);
-        } else if (value === "back") {
-          await startSpeedRamp(backFps);
-        }
-      }, 3);
+      ], stretchAudio ? "stretch" : "real", (value) => send({ enabled: "true", audio: value }), 2);
     }
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none.
@@ -5474,334 +5884,898 @@ std::string_view webControlPageHtml()
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
     // Auto in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
-    // ---- Mode Ladder editor (T34) ----------------------------------------------------------------
+    // ---- Mode Ladder (T34) -----------------------------------------------------------------------
     // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
-    // its limit. Core owns the ladder (mode_ladder.conf) and checks every draft; this page edits a
-    // draft. The rows are rebuilt only after a fetch, a save, a revert or a local edit, never by the
-    // poll, so typing in a field is not interrupted.
-    const ladderCompressionChoices = [
-      { value: "", label: "Default" },
-      { value: "none", label: "Uncompressed" },
-      { value: "lossless_jpeg", label: "Lossless JPEG" },
-      { value: "lossy_3to1", label: "Lossy 3:1" },
-      { value: "lossy_5to1", label: "Lossy 5:1" },
+    // its max. Core owns the ladder (get_mode_ladder, set_mode_ladder). The editor keeps a draft of
+    // the resolutions, refuses a change that would make it illegal, asks Core about the draft
+    // (dry_run) and saves it with Save ladder. A resolution: Core's mode identity (width, height,
+    // bits, clear_hdr), its compression (comp) and its max FPS (thr, "" = its ceiling).
+    const ladderCompressions = [
+      { value: "none", label: "Uncompressed", factor: 1 },
+      { value: "lossless_jpeg", label: "Lossless JPEG", factor: 0.6 },
+      { value: "lossy_3to1", label: "Lossy 3:1", factor: 1 / 3 },
+      { value: "lossy_5to1", label: "Lossy 5:1", factor: 1 / 5 },
     ];
+    const ladderMaxResolutions = 8;
+    const ladderUnknownCeiling = 280;
+    const ladderCropArea = { width: 3840, height: 2160 };
+    const ladderGroups = [["chdr", "Clear HDR"], ["4k", "4K SDR"], ["crop", "3840 wide crops"], ["2k", "2K binned"]];
+    const ladderDepthFilters = [["all", "Any depth"], ["12", "12-bit"], ["10", "10-bit"], ["16hdr", "16-bit Clear HDR"], ["12hdr", "12-bit Clear HDR"]];
+    const ladderIcons = {
+      handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
+      up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
+      down: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>',
+      remove: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>',
+      chevron: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>',
+    };
 
-    function ladderRowText(row) {
-      const threshold = Number(row.threshold) > 0 ? String(Number(row.threshold)) : "";
-      return row.width + "x" + row.height + ":" + row.bits + ":" + (row.clear_hdr ? "hdr" : "sdr")
-        + (threshold || row.compression ? ":" + threshold : "") + (row.compression ? ":" + row.compression : "");
+    function ladderKey(mode) {
+      return mode.width + "x" + mode.height + ":" + mode.bits + ":" + (mode.clear_hdr ? "hdr" : "sdr");
     }
 
-    function ladderText(rows) {
-      return rows.map(ladderRowText).join(",");
+    function ladderCompression(value) {
+      return ladderCompressions.find((entry) => entry.value === value) || ladderCompressions[0];
     }
 
-    function ladderRowsFromServer(ladder) {
-      return (ladder.resolutions || []).map((entry) => ({
-        width: entry.width, height: entry.height, bits: entry.bits, clear_hdr: !!entry.clear_hdr, label: entry.label,
-        threshold: Number(entry.threshold) || 0, compression: entry.compression_set ? entry.compression : "",
+    function ladderSizeText(mode) {
+      return mode.width + "×" + mode.height;
+    }
+
+    function ladderAspectText(mode) {
+      const ratio = mode.height > 0 ? mode.width / mode.height : 16 / 9;
+      return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
+    }
+
+    function ladderClassText(mode) {  // "ClearHDR16", "SDR12 2.39:1": Core's running line
+      const aspect = ladderAspectText(mode);
+      return (mode.clear_hdr ? "ClearHDR" : "SDR") + mode.bits + (aspect === "16:9" ? "" : " " + aspect);
+    }
+
+    // What Core knows about a mode: the probe's pool entry, else the saved resolution.
+    function ladderModeInfo(mode) {
+      const server = state.ladderServer || {};
+      const key = ladderKey(mode);
+      return (server.pool || []).find((entry) => ladderKey(entry) === key)
+        || (server.resolutions || []).find((entry) => ladderKey(entry) === key) || null;
+    }
+
+    // The sensor window narrower than the readout area: a real crop-in.
+    function ladderCropIn(info) {
+      return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropArea.width;
+    }
+
+    function ladderClassName(mode) {  // "Clear HDR", "SDR", "SDR 2×2 binned"
+      const info = ladderModeInfo(mode);
+      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR 2×2 binned" : "SDR");
+    }
+
+    // "4K Clear HDR 16-bit", "4K SDR 12-bit", "2.39:1, 12-bit" (3840 wide), "2K binned 12-bit",
+    // "2K 2.39:1, 12-bit" (1920 wide).
+    function ladderModeName(mode) {
+      const info = ladderModeInfo(mode);
+      const bits = mode.bits + "-bit";
+      const aspect = ladderAspectText(mode);
+      const cropIn = ladderCropIn(info);
+      if (mode.clear_hdr)
+        return (mode.width === 3840 && aspect === "16:9" ? "4K" : ladderSizeText(mode)) + " Clear HDR " + bits;
+      if (!cropIn && mode.width === 3840)
+        return aspect === "16:9" ? "4K SDR " + bits : aspect + ", " + bits;
+      if (!cropIn && mode.width === 1920)
+        return aspect === "16:9" ? "2K binned " + bits : "2K " + aspect + ", " + bits;
+      return ladderSizeText(mode) + (cropIn ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + ", " + bits;
+    }
+
+    function ladderModeGroup(mode) {
+      const info = ladderModeInfo(mode);
+      if (mode.clear_hdr)
+        return "chdr";
+      if (info && Number(info.binning) >= 2)
+        return "2k";
+      return ladderCropIn(info) || ladderAspectText(mode) !== "16:9" ? "crop" : "4k";
+    }
+
+    // Known when the probe gave a ceiling for some compression, or the mode is usable in this
+    // format (then a zero is real). Otherwise nobody knows here: Core's dry run checks it.
+    function ladderCeilingKnown(rung) {
+      const info = ladderModeInfo(rung);
+      if (!info || !info.ceilings)
+        return false;
+      return Object.keys(info.ceilings).some((key) => Number(info.ceilings[key]) > 0) || info.usable === true;
+    }
+
+    // The highest FPS a resolution records in its compression (0: it cannot).
+    function ladderCeiling(rung) {
+      if (!ladderCeilingKnown(rung))
+        return ladderUnknownCeiling;
+      return Number(ladderModeInfo(rung).ceilings[rung.comp]) || 0;
+    }
+
+    // Why a resolution cannot record in its compression; "" when it can, or when nobody knows.
+    function ladderCannotRecord(rung) {
+      if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
+        return "Lossy DNG cannot record Clear HDR.";
+      if (!ladderCeilingKnown(rung) || ladderCeiling(rung) > 0)
+        return "";
+      return "This mode cannot record in " + ladderCompression(rung.comp).label + ".";
+    }
+
+    // Core's ladder as a draft, normalised as edits write it (a max at the ceiling is empty);
+    // as saved when Core finds errors in it, so the rows show them.
+    function ladderDraftFromServer(server) {
+      const draft = (server && Array.isArray(server.resolutions) ? server.resolutions : []).map((rung) => ({
+        width: Number(rung.width),
+        height: Number(rung.height),
+        bits: Number(rung.bits),
+        clear_hdr: rung.clear_hdr === true,
+        comp: ladderCompression(rung.compression).value,
+        thr: Number(rung.threshold) > 0 ? String(Number(rung.threshold)) : "",
       }));
+      return server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
     }
 
-    function loadLadderDraft(ladder) {
-      state.ladderServer = ladder;
-      state.ladderDraft = { enabled: !!ladder.enabled, rampReady: !!ladder.ramp_ready, rows: ladderRowsFromServer(ladder) };
-      state.ladderDirty = false;
-      renderLadderRows();
-      updateLadderChecks(ladder);
+    // Core's text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
+    function ladderDraftText(list) {
+      return list.map((rung) => ladderKey(rung) + (rung.thr !== "" || rung.comp ? ":" + rung.thr : "")
+        + (rung.comp ? ":" + rung.comp : "")).join(",");
     }
 
-    async function fetchModeLadder() {
+    function ladderDirty() {
+      return !!state.ladderServer && ladderDraftText(state.ladderDraft) !== ladderDraftText(ladderDraftFromServer(state.ladderServer));
+    }
+
+    // Each resolution serves (from, top]: from = where the ones above stop. An empty max at a
+    // ceiling nobody knows moves nothing: from is then only a lower bound.
+    function ladderSpans(list) {
+      let previous = 0;
+      return list.map((rung) => {
+        const ceiling = ladderCeiling(rung);
+        const threshold = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
+        const from = previous;
+        const top = Math.max(previous, Math.min(threshold, ceiling));
+        previous = top;
+        return { from, top, ceiling };
+      });
+    }
+
+    // Every max into its legal range; one out of range is cleared (= the mode's ceiling).
+    function normalizeLadderDraft(list) {
+      let previous = 0;
+      return list.map((rung) => {
+        const ceiling = ladderCeiling(rung);
+        let thr = rung.thr;
+        if (thr !== "") {
+          const value = Number(thr);
+          thr = Number.isFinite(value) && value > previous && value < ceiling ? String(value) : "";
+        }
+        previous = Math.max(previous, thr !== "" ? Number(thr) : (ladderCeilingKnown(rung) ? ceiling : previous));
+        return Object.assign({}, rung, { thr });
+      });
+    }
+
+    // "" when the draft is legal, else why not.
+    function ladderDraftProblem(list) {
+      if (list.length > ladderMaxResolutions)
+        return "At most " + ladderMaxResolutions + " resolutions.";
+      let previous = 0;
+      for (let i = 0; i < list.length; i++) {
+        const rung = list[i];
+        const cannot = ladderCannotRecord(rung);
+        if (cannot)
+          return rung.clear_hdr && rung.comp.indexOf("lossy") === 0
+            ? cannot : "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") cannot record: " + cannot;
+        const ceiling = ladderCeiling(rung);
+        if (ceiling <= previous)
+          return "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") would never be used: the ones above already reach " + previous + " fps.";
+        previous = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
+      }
+      return "";
+    }
+
+    // Per resolution: its ceiling, what it serves and what is wrong with it, as the rows show it.
+    // open: its top is a ceiling nobody knows (empty max); the ones below it start above that
+    // resolution (after = its number, from = a lower bound).
+    function ladderRowStates(list) {
+      let previous = 0;
+      let after = 0;
+      return list.map((rung, index) => {
+        const ceiling = ladderCeiling(rung);
+        const threshold = rung.thr === "" ? ceiling : Number(rung.thr);
+        let problem = ladderCannotRecord(rung);
+        if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
+          problem = "Lossy DNG cannot record Clear HDR. Pick Uncompressed or Lossless JPEG.";
+        else if (problem)
+          problem = "Cannot record: " + problem;
+        else if (!Number.isFinite(threshold) || threshold <= 0)
+          problem = "Enter an FPS, or leave it empty for " + ceiling + ".";
+        else if (threshold > ceiling)
+          problem = "Above this mode’s ceiling of " + ceiling + " fps.";
+        else if (ceiling <= previous)
+          problem = "Never used: the resolutions above already cover up to " + previous + " fps.";
+        else if (threshold <= previous)
+          problem = "Must be above " + previous + " fps, where the resolution above stops.";
+        const open = !problem && rung.thr === "" && !ladderCeilingKnown(rung);
+        const from = previous;
+        const fromAfter = after;
+        const top = problem || open ? from : Math.max(previous, threshold);
+        previous = Math.max(previous, top);
+        if (open)
+          after = index + 1;
+        else if (!problem)
+          after = 0;
+        return { ceiling, from, top, problem, open, after: fromAfter };
+      });
+    }
+
+    // The mode's window inside the sensor's readout area (Cinemate's cropDiagram), from the probe's
+    // sensor window, centred; without one, the mode's own size at its binning. 16-bit Clear HDR
+    // reads 3840×2200 but is the same 3840×2160 picture: the window is cut to the area.
+    function ladderCrop(mode) {
+      const info = ladderModeInfo(mode) || {};
+      const area = ladderCropArea;
+      const binning = Math.max(1, Number(info.binning) || 1);
+      const known = Number(info.window_w) > 0 && Number(info.window_h) > 0;
+      const width = Math.min(area.width, known ? Number(info.window_w) : mode.width * binning);
+      const height = Math.min(area.height, known ? Number(info.window_h) : mode.height * binning);
+      const rect = { x: (area.width - width) / 2, y: (area.height - height) / 2, width, height };
+      const cropIn = width < area.width;
+      const whole = width >= area.width && height >= area.height;
+      const binned = binning >= 2;
+      const read = width + "×" + height + " of " + area.width + "×" + area.height;
+      const binnedTo = binned ? ", binned 2×2 to " + ladderSizeText(mode) : "";
+      const desc = cropIn
+        ? "Crop in: reads " + read + ", " + Math.round((1 - width / area.width) * 100) + "% of the width cut off" + (binned ? ", then binned 2×2" : "") + "."
+        : (whole
+          ? (binned ? "Whole sensor area, binned 2×2 to " + ladderSizeText(mode) + "." : "Whole sensor area, no crop.")
+          : "Full sensor width, " + ladderAspectText(mode) + " (top and bottom not read)" + binnedTo + ". No crop-in.");
+      const title = (cropIn ? "Crop in " : (whole ? "Full sensor area " : "Full width ")) + read
+        + (binned ? " (2×2 readout, output " + ladderSizeText(mode) + ")" : "");
+      return { area, rect, cropIn, whole, desc, title };
+    }
+
+    function fillCropFrame(frame, crop) {
+      frame.innerHTML = "";
+      const windowBox = createDomElement("div", "crop-window" + (crop.whole ? " whole" : ""));
+      windowBox.style.left = (crop.rect.x / crop.area.width * 100) + "%";
+      windowBox.style.top = (crop.rect.y / crop.area.height * 100) + "%";
+      windowBox.style.width = (crop.rect.width / crop.area.width * 100) + "%";
+      windowBox.style.height = (crop.rect.height / crop.area.height * 100) + "%";
+      frame.appendChild(windowBox);
+      if (crop.cropIn)
+        frame.appendChild(createDomElement("span", "crop-tag", "CROP IN"));
+      frame.title = crop.title;
+      return frame;
+    }
+
+    function ladderFrameMB(mode, comp) {
+      return mode.width * mode.height * mode.bits / 8 / 1e6 * ladderCompression(comp).factor;
+    }
+
+    // The media speed test's last result ("412 MB/s"); 0 when the card was not measured.
+    function ladderCardWriteSpeed() {
+      const systemState = state.snapshot && state.snapshot.system || {};
+      const match = /^([0-9.]+) MB\/s$/.exec(String(systemState.write_speed_result_text || ""));
+      return match ? Number(match[1]) : 0;
+    }
+
+    function ladderSnapshotMode(snapshot) {
+      return {
+        width: Number(snapshot.width) || 0,
+        height: Number(snapshot.height) || 0,
+        bits: rawBitDepthNumber(snapshot.raw_bit_depth),
+        clear_hdr: snapshot.clear_hdr === true,
+      };
+    }
+
+    // "3840×2160 · ClearHDR16 · Uncompressed": the camera's mode when the ladder does not run it.
+    function ladderSnapshotLine(snapshot) {
+      const mode = ladderSnapshotMode(snapshot);
+      const format = recordingFormatLabel(snapshot.recording_format);
+      const compression = format === "CinemaDNG" ? ladderCompression(cdngCompressionValueForSnapshot(snapshot)).label : format;
+      return ladderSizeText(mode) + (ladderCrop(mode).cropIn ? " crop in" : "") + " · " + ladderClassText(mode) + " · " + compression;
+    }
+
+    // The resolution (1-based) that runs an FPS: the first whose top reaches it (Core's ladder_tops).
+    function ladderResolutionForFps(tops, fps) {
+      const index = tops.findIndex((top) => top > 0 && top >= fps - 0.0005);
+      return index >= 0 ? index + 1 : tops.indexOf(Math.max(...tops)) + 1;
+    }
+
+    function fpsStopToastText(snapshot, accepted) {
+      const mode = ladderClassText(ladderSnapshotMode(snapshot));
+      const where = snapshot.ladder_active === true && Number(snapshot.ladder_resolution) > 0
+        ? "Resolution " + snapshot.ladder_resolution + " (" + mode + ")" : mode;
+      return where + " stops at " + accepted + " fps" + (snapshot.recording ? " in a take." : ".");
+    }
+
+    // The line under a greyed control while the ladder is on; "Mode Ladder" jumps to the card.
+    function ladderLockNote(withCompression) {
+      const note = createDomElement("p", "settings-card-copy");
+      const link = createDomElement("a", "ladder-link", "Mode Ladder");
+      link.href = "#settingsModeLadderCard";
+      link.dataset.ladderLink = "1";
+      note.appendChild(link);
+      note.appendChild(document.createTextNode(" on: the FPS picks the resolution" + (withCompression ? " and compression." : ".")));
+      return note;
+    }
+
+    function openModeLadderCard() {
+      if (!state.settingsOpen)
+        setSettingsOpen(true);
+      setSettingsPanel("record");
+      const card = document.getElementById("settingsModeLadderCard");
+      if (card)
+        window.requestAnimationFrame(() => card.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
+
+    // get_mode_ladder and dry runs change nothing, so they skip sendCommand's snapshot patching.
+    async function ladderRequest(payload) {
+      const response = await fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!result.ok)
+        throw new Error(result.error || "Command failed.");
+      return result;
+    }
+
+    async function fetchModeLadder(resetDraft) {
       if (state.ladderFetching)
         return;
       state.ladderFetching = true;
+      state.ladderFetchedMs = performance.now();
       try {
-        const result = await sendCommand({ cmd: "get_mode_ladder" });
-        loadLadderDraft(result.mode_ladder);
+        const result = await ladderRequest({ cmd: "get_mode_ladder" });
+        applyModeLadder(result.mode_ladder, resetDraft);
       } catch (error) {
-        showToast(error.message, true);
+        state.ladderError = "Mode Ladder unavailable: " + error.message;
+        renderLadderEditor();
       } finally {
         state.ladderFetching = false;
       }
     }
 
-    // Core's answer for the draft: the range each resolution serves, the errors and the warnings.
-    function updateLadderChecks(ladder) {
-      const entries = (ladder && ladder.resolutions) || [];
-      const rows = document.querySelectorAll("#settingsModeLadderList .ladder-row");
-      rows.forEach((rowElement, index) => {
-        const entry = entries[index];
-        const caption = rowElement.querySelector(".ladder-caption");
-        const threshold = rowElement.querySelector(".ladder-threshold");
-        if (!entry || !caption)
-          return;
-        caption.textContent = entry.usable
-          ? "Serves " + (Number(entry.from) > 0 ? "above " + entry.from : "from the lowest") + " up to " + entry.ceiling + " fps"
-          : "Cannot run in this format";
-        if (threshold)
-          threshold.placeholder = entry.mode_ceiling > 0 ? "max " + entry.mode_ceiling : "fps";
-      });
-      const box = document.getElementById("settingsModeLadderMessages");
-      if (!box)
+    // A dirty draft survives a refetch; Save and Revert replace it.
+    function applyModeLadder(modeLadder, resetDraft) {
+      if (!modeLadder || typeof modeLadder !== "object")
         return;
-      box.innerHTML = "";
-      for (const [list, kind] of [[(ladder && ladder.errors) || [], "error"], [(ladder && ladder.warnings) || [], ""]]) {
-        for (const text of list) {
-          const line = document.createElement("div");
-          line.className = "ladder-message" + (kind ? " " + kind : "");
-          line.textContent = text;
-          box.appendChild(line);
-        }
+      const keepDraft = !resetDraft && ladderDirty();
+      state.ladderServer = modeLadder;
+      state.ladderError = "";
+      if (!keepDraft) {
+        state.ladderDraft = ladderDraftFromServer(modeLadder);
+        state.ladderNotice = "";
+        state.ladderCheck = null;
       }
+      renderLadderEditor();
     }
 
-    function showLadderError(text) {
-      const box = document.getElementById("settingsModeLadderMessages");
-      if (!box)
-        return;
-      box.innerHTML = "";
-      const line = document.createElement("div");
-      line.className = "ladder-message error";
-      line.textContent = text;
-      box.appendChild(line);
-    }
-
+    // Core checks the draft as it would a save (dry_run), 300 ms after the last edit.
     function scheduleLadderCheck() {
-      window.clearTimeout(state.ladderCheckTimer);
-      state.ladderCheckTimer = window.setTimeout(checkLadderDraft, 350);
+      clearTimeout(state.ladderCheckTimer);
+      state.ladderCheck = null;
+      if (!ladderDirty())
+        return;
+      const text = ladderDraftText(state.ladderDraft);
+      state.ladderCheckTimer = window.setTimeout(async () => {
+        let check;
+        try {
+          const result = await ladderRequest({ cmd: "set_mode_ladder", resolutions: text, dry_run: "true" });
+          const modeLadder = result.mode_ladder || {};
+          check = { text, errors: modeLadder.errors || [], warnings: modeLadder.warnings || [] };
+        } catch (error) {
+          check = { text, errors: [error.message], warnings: [] };
+        }
+        if (text === ladderDraftText(state.ladderDraft)) {
+          state.ladderCheck = check;
+          renderLadderFooter();
+        }
+      }, 300);
     }
 
-    async function checkLadderDraft() {
-      if (!state.ladderDraft)
-        return;
-      try {
-        const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderText(state.ladderDraft.rows), dry_run: "true" });
-        updateLadderChecks(result.mode_ladder);
-      } catch (error) {
-        showLadderError(error.message);
+    // Every local edit goes through here: refused (with the reason) when the result is illegal.
+    function commitLadderDraft(next, notice) {
+      const normalized = normalizeLadderDraft(next);
+      const problem = ladderDraftProblem(normalized);
+      if (problem) {
+        state.ladderNotice = problem;
+      } else {
+        state.ladderDraft = normalized;
+        state.ladderNotice = notice || "";
+        scheduleLadderCheck();
       }
+      renderLadderEditor();
     }
 
-    function markLadderDirty() {
-      state.ladderDirty = true;
-      scheduleLadderCheck();
-      renderLadderActions();
+    function setLadderThreshold(index, raw) {
+      const list = state.ladderDraft;
+      const span = ladderSpans(normalizeLadderDraft(list))[index];
+      const text = String(raw).trim();
+      let thr = "";
+      let notice = "";
+      if (text !== "") {
+        const low = span.from + 1;
+        const high = span.ceiling;
+        const value = Math.round(Number(text));
+        const clamped = Number.isFinite(value) ? Math.min(Math.max(value, low), high) : high;
+        if (clamped !== value)
+          notice = "Resolution " + (index + 1) + ": FPS must be between " + low + " and " + high + ". Set to " + clamped + ".";
+        thr = clamped === high ? "" : String(clamped);
+      }
+      commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr }) : rung)), notice);
     }
 
-    function moveLadderRow(from, to) {
-      const rows = state.ladderDraft.rows;
-      if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length)
+    function moveLadderRung(from, to) {
+      const list = state.ladderDraft.slice();
+      if (to < 0 || to >= list.length || from === to)
         return;
-      rows.splice(to, 0, rows.splice(from, 1)[0]);
-      renderLadderRows();
-      markLadderDirty();
+      const [rung] = list.splice(from, 1);
+      list.splice(to, 0, rung);
+      commitLadderDraft(list, "");
     }
 
-    // Pointer events with capture, because touch screens do not fire HTML5 drag events.
-    function installLadderDrag(handle, index) {
-      const rowElements = () => Array.from(document.querySelectorAll("#settingsModeLadderList .ladder-row"));
+    // Drag a resolution by its handle: pointer events, so it works with a finger too.
+    function installLadderDrag(handle, row, index) {
+      const rows = () => Array.from(document.querySelectorAll("#settingsModeLadderList .ladder-row"));
+      const finish = (event, drop) => {
+        const drag = state.ladderDrag;
+        if (!drag || drag.pointerId !== event.pointerId)
+          return;
+        state.ladderDrag = null;
+        rows().forEach((element) => element.classList.remove("dragging", "drop-target"));
+        if (drop && drag.over !== drag.from)
+          moveLadderRung(drag.from, drag.over);
+      };
       handle.addEventListener("pointerdown", (event) => {
-        if (state.snapshot && state.snapshot.recording)
+        if (event.button !== 0)
           return;
         event.preventDefault();
         handle.setPointerCapture(event.pointerId);
-        state.ladderDrag = { index, target: index };
-        rowElements()[index].classList.add("dragging");
+        state.ladderDrag = { pointerId: event.pointerId, from: index, over: index };
+        row.classList.add("dragging");
       });
       handle.addEventListener("pointermove", (event) => {
         const drag = state.ladderDrag;
-        if (!drag)
+        if (!drag || drag.pointerId !== event.pointerId)
           return;
-        const rows = rowElements();
-        let target = rows.findIndex((element) => {
-          const box = element.getBoundingClientRect();
-          return event.clientY >= box.top && event.clientY <= box.bottom;
-        });
-        if (target < 0)
-          target = event.clientY < rows[0].getBoundingClientRect().top ? 0 : rows.length - 1;
-        drag.target = target;
-        rows.forEach((element, i) => element.classList.toggle("drop-target", i === target && i !== drag.index));
+        // The drop goes before the first row whose middle is below the pointer (gaps and
+        // transition lines count too); over = the row whose place the dragged one takes.
+        const all = rows();
+        let slot = all.length;
+        for (let i = 0; i < all.length; i++) {
+          const box = all[i].getBoundingClientRect();
+          if (event.clientY < box.top + box.height / 2) {
+            slot = i;
+            break;
+          }
+        }
+        const over = slot > drag.from ? slot - 1 : slot;
+        drag.over = over;
+        all.forEach((element, i) => element.classList.toggle("drop-target", i === over && i !== drag.from));
       });
-      const finish = (cancelled) => {
-        const drag = state.ladderDrag;
-        state.ladderDrag = null;
-        rowElements().forEach((element) => element.classList.remove("dragging", "drop-target"));
-        if (drag && !cancelled)
-          moveLadderRow(drag.index, drag.target);
-      };
-      handle.addEventListener("pointerup", () => finish(false));
-      handle.addEventListener("pointercancel", () => finish(true));
+      handle.addEventListener("pointerup", (event) => finish(event, true));
+      handle.addEventListener("pointercancel", (event) => finish(event, false));
     }
 
+    function createLadderIconButton(icon, label, className, disabled, onClick) {
+      const button = createDomElement("button", "ladder-icon-button" + (className ? " " + className : ""));
+      button.type = "button";
+      button.innerHTML = ladderIcons[icon];
+      button.setAttribute("aria-label", label);
+      button.disabled = !!disabled;
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function createLadderRow(rung, index, rowState) {
+      const draft = state.ladderDraft;
+      const name = ladderModeName(rung);
+      const crop = ladderCrop(rung);
+      const ceiling = rowState.ceiling;
+      const known = ladderCeilingKnown(rung);
+      const uncompressedCeiling = ladderCeiling(Object.assign({}, rung, { comp: "none" }));
+      const megabytes = ladderFrameMB(rung, rung.comp);
+      const cardSpeed = ladderCardWriteSpeed();
+      const approx = rung.comp === "none" ? "" : "≈ ";
+      const rate = megabytes * rowState.top;
+      const item = createDomElement("div", "ladder-item");
+
+      if (index > 0) {
+        const above = draft[index - 1];
+        const classChange = ladderClassName(above) !== ladderClassName(rung) || above.bits !== rung.bits;
+        const sizeChange = above.width !== rung.width || above.height !== rung.height;
+        const parts = [];
+        if (classChange)
+          parts.push(ladderClassName(above) + " " + above.bits + "-bit → " + ladderClassName(rung) + " " + rung.bits + "-bit");
+        if (sizeChange)
+          parts.push("picture " + ladderSizeText(above) + " → " + ladderSizeText(rung));
+        if (above.comp !== rung.comp)
+          parts.push(ladderCompression(above.comp).label + " → " + ladderCompression(rung.comp).label);
+        if (!parts.length)
+          parts.push("same class and size");
+        const stop = rowState.after ? "the max of Resolution " + rowState.after : String(rowState.from);
+        const inTake = classChange || sizeChange
+          ? "Switches between takes only, with a short preview blink; in a take FPS stops at " + stop + "."
+          : "Same mode: a ramp crosses without a switch, in a take too.";
+        const transition = createDomElement("div", "ladder-transition");
+        transition.innerHTML = ladderIcons.down;
+        transition.appendChild(createDomElement("span", "", "Above " + stop + (rowState.after ? "" : " fps") + ": " + parts.join(", ") + ". " + inTake));
+        item.appendChild(transition);
+      }
+
+      const row = createDomElement("div", "ladder-row");
+      const main = createDomElement("div", "ladder-row-main");
+      const handle = createDomElement("span", "ladder-handle");
+      handle.innerHTML = ladderIcons.handle;
+      handle.title = "Drag to reorder";
+      installLadderDrag(handle, row, index);
+      main.appendChild(handle);
+      main.appendChild(createDomElement("span", "ladder-badge", String(index + 1)));
+      const frame = fillCropFrame(createDomElement("div", "crop-frame"), crop);
+      frame.setAttribute("aria-hidden", "true");
+      main.appendChild(frame);
+      const text = createDomElement("div", "ladder-row-text");
+      text.appendChild(createDomElement("div", "ladder-row-name", name));
+      text.appendChild(createDomElement("div", "ladder-row-meta",
+        ladderSizeText(rung) + " · " + ladderAspectText(rung) + " · " + rung.bits + "-bit · " + ladderClassName(rung)));
+      if (crop.desc)
+        text.appendChild(createDomElement("div", "ladder-row-desc" + (crop.cropIn ? " crop-in" : ""), crop.desc));
+      const rangeFrom = rowState.after ? "Above Resolution " + rowState.after : (rowState.from === 0 ? "Lowest FPS" : "Above " + rowState.from);
+      text.appendChild(createDomElement("div", "ladder-row-range", rowState.problem
+        ? "Not used" : rangeFrom + ", max " + (rowState.open ? "its ceiling" : rowState.top + " fps")));
+      if (rowState.problem)
+        text.appendChild(createDomElement("div", "ladder-problem", rowState.problem));
+      main.appendChild(text);
+      row.appendChild(main);
+
+      const controls = createDomElement("div", "ladder-row-controls");
+      const thrField = createDomElement("div", "field-stack ladder-thr");
+      const thrLabel = createDomElement("label", "input-label", "Max (fps)");
+      thrLabel.htmlFor = "settingsModeLadderThr" + index;
+      const thrInput = createDomElement("input", "settings-input" + (rowState.problem ? " problem" : ""));
+      thrInput.id = "settingsModeLadderThr" + index;
+      thrInput.type = "number";
+      thrInput.inputMode = "numeric";
+      thrInput.step = "1";
+      thrInput.min = String(rowState.from + 1);
+      thrInput.max = String(ceiling);
+      thrInput.placeholder = known ? String(ceiling) : "";
+      thrInput.value = rung.thr;
+      thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
+      thrField.appendChild(thrLabel);
+      thrField.appendChild(thrInput);
+      thrField.appendChild(createDomElement("span", "ladder-note", !known
+        ? "Ceiling: Core checks it"
+        : "Ceiling " + ceiling + (rung.comp === "lossless_jpeg" && ceiling < uncompressedCeiling ? " (lossless cap)" : " (sensor mode)")));
+      controls.appendChild(thrField);
+
+      const compField = createDomElement("div", "field-stack ladder-comp");
+      const compLabel = createDomElement("label", "input-label", "Compression");
+      compLabel.htmlFor = "settingsModeLadderComp" + index;
+      const compSelect = createDomElement("select", "settings-select");
+      compSelect.id = "settingsModeLadderComp" + index;
+      ladderCompressions.forEach((entry) => {
+        const candidate = Object.assign({}, rung, { comp: entry.value });
+        const notForClearHdr = rung.clear_hdr && entry.value.indexOf("lossy") === 0;
+        const cannot = ladderCannotRecord(candidate);
+        const option = createDomElement("option", "", entry.label
+          + (notForClearHdr ? " (not for Clear HDR)" : (cannot ? " (not available)" : "")));
+        option.value = entry.value;
+        option.disabled = cannot !== "" && entry.value !== rung.comp;
+        option.title = cannot;
+        compSelect.appendChild(option);
+      });
+      compSelect.value = rung.comp;
+      compSelect.addEventListener("change", () => commitLadderDraft(
+        draft.map((other, i) => (i === index ? Object.assign({}, other, { comp: compSelect.value }) : other)), ""));
+      compField.appendChild(compLabel);
+      compField.appendChild(compSelect);
+      compField.appendChild(createDomElement("span", "ladder-note", rung.comp === "none" ? "Exact, largest files"
+        : (rung.comp === "lossless_jpeg"
+          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : "Exact, smaller files")
+          : "Smaller files")));
+      compField.appendChild(createDomElement("span", "ladder-size", approx + megabytes.toFixed(1) + " MB per frame"));
+      const over = !rowState.problem && !rowState.open && cardSpeed > 0 && rate > cardSpeed;
+      compField.appendChild(createDomElement("span", "ladder-note" + (over ? " over" : ""), rowState.problem
+        ? "Not used"
+        : (rowState.open ? "" : approx + Math.round(rate) + " MB/s at " + rowState.top + " fps" + (over ? " · above " + cardSpeed + " MB/s (card)" : ""))));
+      controls.appendChild(compField);
+
+      const buttons = createDomElement("div", "ladder-row-buttons");
+      buttons.appendChild(createLadderIconButton("up", "Move " + name + " up", "", index === 0, () => moveLadderRung(index, index - 1)));
+      buttons.appendChild(createLadderIconButton("down", "Move " + name + " down", "", index === draft.length - 1, () => moveLadderRung(index, index + 1)));
+      buttons.appendChild(createLadderIconButton("remove", "Remove " + name + " from the ladder", "remove", false,
+        () => commitLadderDraft(draft.filter((other, i) => i !== index), "")));
+      controls.appendChild(buttons);
+      row.appendChild(controls);
+      item.appendChild(row);
+      return item;
+    }
+
+    // Rows are rebuilt only here: after Core's ladder arrives, Save, Revert or a local edit. The
+    // 1 s poll never rebuilds them, so typing a max keeps its focus.
     function renderLadderRows() {
       const list = document.getElementById("settingsModeLadderList");
-      const draft = state.ladderDraft;
-      if (!list || !draft)
+      if (!list)
         return;
-      const recording = !!(state.snapshot && state.snapshot.recording);
       list.innerHTML = "";
-      draft.rows.forEach((row, index) => {
-        const element = document.createElement("div");
-        element.className = "ladder-row";
-
-        const handle = document.createElement("span");
-        handle.className = "ladder-handle";
-        handle.textContent = "⋮⋮";
-        handle.title = "Drag to reorder";
-        installLadderDrag(handle, index);
-        element.appendChild(handle);
-
-        const title = document.createElement("div");
-        title.className = "ladder-title";
-        title.textContent = (index + 1) + ". " + row.label;
-        const caption = document.createElement("small");
-        caption.className = "ladder-caption";
-        title.appendChild(caption);
-        element.appendChild(title);
-
-        const compression = document.createElement("select");
-        compression.className = "settings-select";
-        compression.title = "Compression";
-        for (const choice of ladderCompressionChoices) {
-          const option = document.createElement("option");
-          option.value = choice.value;
-          option.textContent = choice.value === "" ? "Default (" + (row.clear_hdr ? "uncompressed" : "lossless") + ")" : choice.label;
-          option.disabled = row.clear_hdr && choice.value.indexOf("lossy") === 0;
-          compression.appendChild(option);
-        }
-        compression.value = row.compression;
-        compression.disabled = recording;
-        compression.addEventListener("change", () => {
-          row.compression = compression.value;
-          markLadderDirty();
-        });
-        element.appendChild(compression);
-
-        const threshold = document.createElement("input");
-        threshold.className = "settings-input ladder-threshold";
-        threshold.type = "number";
-        threshold.min = "0";
-        threshold.step = "any";
-        threshold.title = "Highest fps this resolution serves";
-        threshold.value = row.threshold > 0 ? String(row.threshold) : "";
-        threshold.disabled = recording;
-        threshold.addEventListener("input", () => {
-          row.threshold = Number(threshold.value) > 0 ? Number(threshold.value) : 0;
-          markLadderDirty();
-        });
-        element.appendChild(threshold);
-
-        for (const [text, title2, action, off] of [
-          ["↑", "Move up", () => moveLadderRow(index, index - 1), index === 0],
-          ["↓", "Move down", () => moveLadderRow(index, index + 1), index === draft.rows.length - 1],
-          ["×", "Remove", () => {
-            draft.rows.splice(index, 1);
-            renderLadderRows();
-            markLadderDirty();
-          }, false],
-        ]) {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "ladder-button";
-          button.textContent = text;
-          button.title = title2;
-          button.disabled = recording || off;
-          button.addEventListener("click", action);
-          element.appendChild(button);
-        }
-        list.appendChild(element);
-      });
-
-      // The sensor's modes that are not in the ladder yet.
-      const select = document.getElementById("settingsModeLadderAddSelect");
-      if (select) {
-        const pool = ((state.ladderServer && state.ladderServer.pool) || []).filter((mode) => !draft.rows.some((row) =>
-          row.width === mode.width && row.height === mode.height && row.bits === mode.bits && row.clear_hdr === !!mode.clear_hdr));
-        select.innerHTML = "";
-        pool.forEach((mode, i) => {
-          const option = document.createElement("option");
-          option.value = String(i);
-          option.textContent = mode.label + (mode.usable ? " · up to " + mode.mode_ceiling + " fps" : " · not in this format");
-          select.appendChild(option);
-        });
-        select.disabled = recording || pool.length === 0;
-        select._pool = pool;
+      if (!state.ladderServer) {
+        list.appendChild(createDomElement("div", "preset-empty", state.ladderError || "Loading the Mode Ladder…"));
+        return;
       }
-      renderLadderActions();
-      if (state.ladderServer)
-        updateLadderChecks(state.ladderServer);
+      if (state.ladderDraft.length === 0) {
+        list.appendChild(createDomElement("div", "preset-empty", "No resolutions yet. Add a mode from Activated sensor modes below."));
+        return;
+      }
+      const rowStates = ladderRowStates(state.ladderDraft);
+      state.ladderDraft.forEach((rung, index) => list.appendChild(createLadderRow(rung, index, rowStates[index])));
     }
 
-    function renderLadderActions() {
-      const recording = !!(state.snapshot && state.snapshot.recording);
-      const select = document.getElementById("settingsModeLadderAddSelect");
-      buildOptionButtons("settingsModeLadderAddActions", [
-        { value: "add", label: "Add", enabled: !recording && !!select && !!select._pool && select._pool.length > 0 },
-      ], "", (value) => {
-        const mode = select && select._pool && select._pool[Number(select.value)];
-        if (!mode || !state.ladderDraft)
-          return;
-        state.ladderDraft.rows.push({
-          width: mode.width, height: mode.height, bits: mode.bits, clear_hdr: !!mode.clear_hdr, label: mode.label,
-          threshold: 0, compression: "",
-        });
-        renderLadderRows();
-        markLadderDirty();
-      }, 1);
-      buildOptionButtons("settingsModeLadderSaveActions", [
-        { value: "save", label: "Save", enabled: !recording && state.ladderDirty },
-        { value: "revert", label: "Revert", enabled: state.ladderDirty },
-      ], "", async (value) => {
-        if (value === "revert") {
-          if (state.ladderServer)
-            loadLadderDraft(state.ladderServer);
-          return;
-        }
-        try {
-          const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderText(state.ladderDraft.rows) });
-          loadLadderDraft(result.mode_ladder);
-          showToast("Mode Ladder saved", false);
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      }, 2);
-    }
-
-    // Called on every snapshot: only pills, states and the first or a changed fetch.
-    function renderModeLadder(snapshot) {
+    function renderLadderFooter() {
+      const snapshot = state.snapshot || {};
+      const server = state.ladderServer;
+      const dirty = ladderDirty();
+      const text = ladderDraftText(state.ladderDraft);
+      const check = state.ladderCheck && state.ladderCheck.text === text ? state.ladderCheck : null;
+      const source = dirty ? check : server;
+      const errors = source && Array.isArray(source.errors) ? source.errors : [];
+      const warnings = source && Array.isArray(source.warnings) ? source.warnings : [];
       const recording = !!snapshot.recording;
+      const draftLine = document.getElementById("settingsModeLadderDraft");
+      setText("settingsModeLadderDraft", state.ladderNotice || (!server ? ""
+        : (dirty ? (recording ? "Unsaved changes. Stop recording to save the ladder." : "Unsaved changes. Core checks the ladder again when you save.")
+          : "Saved on the camera.")));
+      draftLine.classList.toggle("notice", !!state.ladderNotice);
+      draftLine.classList.toggle("dirty", !state.ladderNotice && dirty);
+      setElementDisabled("settingsModeLadderRevert", !dirty || state.ladderSaving);
+      setElementDisabled("settingsModeLadderSave", !dirty || recording || errors.length > 0 || state.ladderSaving);
+
+      const signature = JSON.stringify([errors, warnings]);
+      if (signature === state.ladderMessagesSignature)
+        return;
+      state.ladderMessagesSignature = signature;
+      const messages = document.getElementById("settingsModeLadderMessages");
+      messages.innerHTML = "";
+      errors.forEach((message) => messages.appendChild(createDomElement("li", "error", message)));
+      warnings.forEach((message) => messages.appendChild(createDomElement("li", "warning", message)));
+    }
+
+    function renderLadderCoverage(enabled) {
+      // The bar stops at the first resolution whose ceiling nobody knows (empty max, not probed).
+      const allRows = ladderRowStates(state.ladderDraft);
+      const openIndex = allRows.findIndex((row) => row.open);
+      const rowStates = openIndex < 0 ? allRows : allRows.slice(0, openIndex);
+      const covered = rowStates.reduce((top, row) => (row.problem ? top : Math.max(top, row.top)), 0);
+      // The scale ends at the highest ceiling among the resolutions; a gap shows when a max stops short of it.
+      const scaleMax = Math.max(1, rowStates.reduce((top, row) => (row.problem ? top : Math.max(top, row.ceiling)), 0));
+      setText("settingsModeLadderCoverageTitle", "FPS coverage, 1 to " + scaleMax);
+      const bar = document.getElementById("settingsModeLadderBar");
+      bar.parentElement.classList.toggle("hidden", !state.ladderServer || state.ladderDraft.length === 0);
+      bar.innerHTML = "";
+      bar.classList.toggle("off", !enabled);
+      const covers = [];
+      rowStates.forEach((row, index) => {
+        if (row.problem || row.top <= row.from)
+          return;
+        const segment = createDomElement("span", "", String(index + 1));
+        segment.style.width = ((row.top - row.from) / scaleMax * 100) + "%";
+        bar.appendChild(segment);
+        covers.push("resolution " + (index + 1) + " up to " + row.top);
+      });
+      bar.setAttribute("aria-label", "FPS coverage from 1 to " + scaleMax + ": " + covers.join(", "));
+      const ticks = document.getElementById("settingsModeLadderTicks");
+      ticks.innerHTML = "";
+      const values = [1];
+      rowStates.forEach((row) => {
+        if (!row.problem && values.indexOf(row.top) < 0)
+          values.push(row.top);
+      });
+      if (values.indexOf(scaleMax) < 0)
+        values.push(scaleMax);
+      values.forEach((value) => {
+        const tick = createDomElement("span", "", String(value));
+        tick.style.left = Math.min(100, value / scaleMax * 100) + "%";
+        tick.style.transform = value <= 1 ? "none" : (value >= scaleMax ? "translateX(-100%)" : "translateX(-50%)");
+        ticks.appendChild(tick);
+      });
+      const gap = openIndex >= 0
+        ? "The bar stops at Resolution " + (openIndex + 1) + ": its ceiling is unknown here. Core checks it."
+        : (enabled && state.ladderDraft.length > 0 && covered < scaleMax
+          ? "Above " + covered + " fps no resolution can run: FPS stops at " + covered + ". Add a resolution or raise a max." : "");
+      setText("settingsModeLadderGap", gap);
+      document.getElementById("settingsModeLadderGap").classList.toggle("hidden", gap === "");
+    }
+
+    // "Clear HDR modes always show" under 12-bit and 10-bit; the two Clear HDR pills show those only.
+    function ladderDepthMatches(entry, filter) {
+      if (filter === "all")
+        return true;
+      if (filter === "16hdr" || filter === "12hdr")
+        return entry.clear_hdr === true && String(entry.bits) === filter.slice(0, 2);
+      return entry.clear_hdr === true || String(entry.bits) === filter;
+    }
+
+    // Activated sensor modes: the probe's pool in collapsible groups, one column; Add puts a mode
+    // at the end of the draft.
+    function renderSensorModes() {
+      const server = state.ladderServer;
+      const pool = server && Array.isArray(server.pool) ? server.pool : [];
+      const draft = state.ladderDraft;
+      const sensor = (sensorNameLower(state.snapshot) || "sensor").toUpperCase();
+      setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
+        : (pool.length === 0 ? "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…)."
+          : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
+            + ". Add the ones you want on the ladder. Ceilings are Core's."));
+      const depth = document.getElementById("settingsSensorModeDepthFilters");
+      depth.classList.toggle("hidden", pool.length === 0);
+      buildOptionButtons("settingsSensorModeDepthFilters",
+        ladderDepthFilters.map(([value, label]) => ({ value, label, enabled: true })), state.ladderDepth, (value) => {
+          state.ladderDepth = value;
+          renderSensorModes();
+        });
+
+      const groups = document.getElementById("settingsSensorModeGroups");
+      groups.innerHTML = "";
+      ladderGroups.forEach(([groupKey, title]) => {
+        const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey && ladderDepthMatches(entry, state.ladderDepth));
+        if (entries.length === 0)
+          return;
+        const onLadder = entries.filter((entry) => draft.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
+        const open = state.ladderOpen[groupKey] === true;
+        const wrapper = createDomElement("div", "field-stack");
+        const head = createDomElement("button", "ladder-group-head");
+        head.type = "button";
+        head.setAttribute("aria-expanded", open ? "true" : "false");
+        head.innerHTML = ladderIcons.chevron;
+        head.appendChild(createDomElement("span", "", title));
+        head.appendChild(createDomElement("span", "ladder-group-count",
+          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + " on the ladder"));
+        head.addEventListener("click", () => {
+          state.ladderOpen[groupKey] = !open;
+          renderSensorModes();
+        });
+        wrapper.appendChild(head);
+        if (open) {
+          const list = createDomElement("div", "ladder-pool");
+          entries.forEach((entry) => list.appendChild(createSensorModeTile(entry, draft)));
+          wrapper.appendChild(list);
+        }
+        groups.appendChild(wrapper);
+      });
+    }
+
+    function createSensorModeTile(entry, draft) {
+      const mode = { width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits), clear_hdr: entry.clear_hdr === true };
+      const name = ladderModeName(mode);
+      const index = draft.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
+      const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
+      const crop = ladderCrop(mode);
+      const candidate = Object.assign({}, mode, { comp: "none", thr: "" });
+      const why = index >= 0 ? ""
+        : (ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
+          : (draft.length >= ladderMaxResolutions ? "At most " + ladderMaxResolutions + " resolutions."
+            : ladderDraftProblem(normalizeLadderDraft(draft.concat([candidate])))
+              .replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ")));
+      const item = createDomElement("div", "ladder-pool-item");
+      const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
+      frame.setAttribute("aria-hidden", "true");
+      item.appendChild(frame);
+      const text = createDomElement("div", "ladder-pool-text");
+      text.appendChild(createDomElement("div", "ladder-pool-name", name));
+      text.appendChild(createDomElement("div", "ladder-pool-meta", ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · "
+        + ladderClassName(mode) + " · " + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
+        + (crop.cropIn ? " · crop in" : "") + " · " + ladderFrameMB(mode, "none").toFixed(1) + " MB/frame"));
+      item.appendChild(text);
+      const add = createDomElement("button", "ladder-add" + (index >= 0 ? " on-ladder" : ""), index >= 0 ? "Resolution " + (index + 1) : "Add");
+      add.type = "button";
+      add.disabled = index >= 0 || why !== "";
+      add.title = why;
+      add.setAttribute("aria-label", index >= 0 ? name + " is resolution " + (index + 1)
+        : "Add " + name + " to the ladder" + (why ? ": " + why : ""));
+      add.addEventListener("click", () => commitLadderDraft(draft.concat([candidate]), ""));
+      item.appendChild(add);
+      return item;
+    }
+
+    function renderLadderEditor() {
+      renderLadderRows();
+      renderSensorModes();
+      if (state.snapshot)
+        renderModeLadder(state.snapshot);
+    }
+
+    // Every snapshot (the 1 s poll too): the buttons, Running now, the draft line and the coverage.
+    function renderModeLadder(snapshot) {
+      const server = state.ladderServer;
+      const enabled = typeof snapshot.ladder_enabled === "boolean" ? snapshot.ladder_enabled : !!(server && server.enabled);
       const active = snapshot.ladder_active === true;
-      if (!state.ladderServer && !state.ladderFetching)
-        fetchModeLadder();
-      else if (state.ladderSeenActive !== null && state.ladderSeenActive !== active && !state.ladderDirty)
-        fetchModeLadder();
+      const count = isFiniteNumber(snapshot.ladder_count) ? snapshot.ladder_count : (server && server.resolutions ? server.resolutions.length : 0);
+      const recording = !!snapshot.recording;
+
+      // The first fetch, a retry five seconds after a failure, and a refetch when the ladder
+      // starts or stops running (Core's list of resolutions or their ceilings may have changed).
+      if (!server && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
+        void fetchModeLadder(false);
+      else if (server && state.ladderSeenActive !== null && state.ladderSeenActive !== active && !ladderDirty())
+        void fetchModeLadder(false);
       state.ladderSeenActive = active;
 
-      const enabled = state.ladderServer ? !!state.ladderServer.enabled : active;
-      setText("settingsModeLadderValue", !enabled ? "Off"
-        : (active ? (snapshot.ladder_resolution > 0 ? "On · Resolution " + snapshot.ladder_resolution : "On") : "On · idle"));
-      const send = async (payload) => {
-        try {
-          const result = await sendCommand({ cmd: "set_mode_ladder", ...payload });
-          if (!state.ladderDirty)
-            loadLadderDraft(result.mode_ladder);
-          else
-            state.ladderServer = result.mode_ladder;
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      };
+      setText("settingsModeLadderValue", enabled ? "On" : "Off");
+      document.getElementById("settingsModeLadderValue").classList.toggle("off", !enabled);
+      const busy = recording || state.ladderToggling;
       buildOptionButtons("settingsModeLadderOptions", [
-        { label: "Off", value: "Off", enabled: !recording },
-        { label: "On", value: "On", enabled: !recording },
-      ], enabled ? "On" : "Off", (value) => send({ enabled: value === "On" ? "true" : "false" }), 2);
-      const rampReady = state.ladderServer ? !!state.ladderServer.ramp_ready : false;
-      buildOptionButtons("settingsSpeedRampReadyOptions", [
-        { label: "Off", value: "Off", enabled: !recording && enabled },
-        { label: "On", value: "On", enabled: !recording && enabled },
-      ], rampReady ? "On" : "Off", (value) => send({ ramp_ready: value === "On" ? "true" : "false" }), 2);
-      renderLadderActions();
+        { label: "Off", value: "Off", enabled: !busy },
+        { label: "On", value: "On", enabled: !busy && (enabled || count > 0) },
+      ], enabled ? "On" : "Off", (value) => setModeLadderEnabled(value === "On"), 2);
+      setText("settingsModeLadderSwitchNote", recording ? "Stop recording to turn the ladder on or off."
+        : (!enabled && count === 0 ? "Save at least one resolution first."
+          : (!enabled ? "Off: changing FPS never switches resolution."
+            : (active ? "On: changing FPS switches resolution." : "On, but not in use: the ladder works in CinemaDNG and MLV video."))));
+
+      const ladderLine = active ? String(snapshot.ladder_text || "") : "";
+      setText("settingsModeLadderNow", ladderLine || ladderSnapshotLine(snapshot) + (enabled ? " (ladder not in use)" : " (ladder off)"));
+      setText("settingsModeLadderNowNote", active
+        ? "Same line on the camera screen (FORMAT) and next to Frame rate in Camera settings."
+        : "FPS stays inside the current mode.");
+      const running = active && server && Array.isArray(server.resolutions) ? server.resolutions[Number(snapshot.ladder_resolution) - 1] : null;
+      const nowMode = running
+        ? { width: Number(running.width), height: Number(running.height), bits: Number(running.bits), clear_hdr: running.clear_hdr === true }
+        : ladderSnapshotMode(snapshot);
+      const nowCrop = ladderCrop(nowMode);
+      const nowFrame = document.getElementById("settingsModeLadderNowCrop");
+      if (nowFrame.title !== nowCrop.title || nowFrame.childElementCount === 0) {
+        fillCropFrame(nowFrame, nowCrop);
+        nowFrame.setAttribute("aria-label", nowCrop.title);
+      }
+
+      document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
+      renderLadderFooter();
+      renderLadderCoverage(enabled);
+    }
+
+    async function setModeLadderEnabled(enabled) {
+      state.ladderToggling = true;
+      try {
+        const result = await sendCommand({ cmd: "set_mode_ladder", enabled: enabled ? "true" : "false" });
+        applyModeLadder(result.mode_ladder, false);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.ladderToggling = false;
+        if (state.snapshot)
+          renderModeLadder(state.snapshot);
+      }
+    }
+
+    async function saveModeLadder() {
+      if (!ladderDirty())
+        return;
+      state.ladderSaving = true;
+      renderLadderFooter();
+      try {
+        await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
+        await fetchModeLadder(true);
+        showToast("Mode Ladder saved.", false);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.ladderSaving = false;
+        renderLadderFooter();
+      }
+    }
+
+    function revertModeLadder() {
+      clearTimeout(state.ladderCheckTimer);
+      state.ladderDraft = ladderDraftFromServer(state.ladderServer);
+      state.ladderNotice = "";
+      state.ladderCheck = null;
+      renderLadderEditor();
+    }
+
+    // While the Mode Ladder is active the FPS picks the mode: mode pills show it, locked.
+    function ladderLockedOptions(options, locked) {
+      return locked ? normalizeChoiceOptions(options).map((option) => Object.assign(option, { enabled: false })) : options;
     }
 
     // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
@@ -7117,6 +8091,7 @@ std::string_view webControlPageHtml()
       document.body.classList.toggle("settings-open", state.settingsOpen);
       document.getElementById("settingsOverlay").classList.toggle("hidden", !state.settingsOpen);
       if (state.settingsOpen && state.activeSettingsPanel === "audio") void refreshAudioCaptureCapabilities();
+      if (state.settingsOpen && state.activeSettingsPanel === "record") void fetchModeLadder(false);
     }
 
     function setMediaBrowserOpen(open) {
@@ -7150,6 +8125,8 @@ std::string_view webControlPageHtml()
         fetchConfigFile(true);
       if (normalized === "record" && state.snapshot)
         window.requestAnimationFrame(() => drawImuAxisVisual(state.snapshot.imu || {}));
+      if (normalized === "record" && state.settingsOpen)
+        void fetchModeLadder(false);
     }
 
     function setText(id, value) {
@@ -7982,21 +8959,25 @@ std::string_view webControlPageHtml()
             break;
           }
           case "format": {
+            // As the Recording format card: while the Mode Ladder is active the FPS picks the mode.
+            const ladderActive = snapshot.ladder_active === true;
             const grid = createFavoriteFieldGrid();
             if (cropControlsVisible) {
               grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionBaseOptions, resolutionBaseValue, async (value) => {
                 for (const command of resolutionBaseCommands(snapshot, value))
                   await dispatchFavoriteCommand(command);
-              }, false, false));
+              }, false, ladderActive));
               grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoCropLabel(recordFormatText) : "Crop Mode", cropRatioOptions, cropRatioValue, async (value) => {
                 await dispatchFavoriteCommand(cropRatioCommandPayload(snapshot, value));
-              }, false, !cropRatioEnabled));
+              }, false, !cropRatioEnabled || ladderActive));
             } else {
               grid.appendChild(createFavoriteSelectField("Resolution", resolutionOptions, resolutionLabel, async (value) => {
                 await dispatchFavoriteCommand(resolutionCommandPayload(value));
-              }, true, false));
+              }, true, ladderActive));
             }
             card.appendChild(grid);
+            if (ladderActive)
+              card.appendChild(ladderLockNote(recordFormatText === "CinemaDNG"));
             card.appendChild(createFavoriteSelectBlock("Record Format", recordFormatText, availableRecordFormatOptions(snapshot), recordFormatText, async (value) => {
               const formatValue = recordingFormatCommandValue(value);
               await dispatchFavoriteCommand({ cmd: "set_record_format", value: formatValue });
@@ -8008,13 +8989,15 @@ std::string_view webControlPageHtml()
             if (recordFormatText === "CinemaDNG") {
               card.appendChild(createFavoriteSelectEntryField("Compression", availableCompressionOptions(snapshot), cdngCompressionValueForSnapshot(snapshot), async (value) => {
                 await dispatchCdngCompressionSelection(value, dispatchFavoriteCommand);
-              }, true, !!snapshot.recording || !recordingFeatureSupported(snapshot, "raw_compression")));
+              }, true, !!snapshot.recording || !recordingFeatureSupported(snapshot, "raw_compression") || ladderActive));
             }
-            card.appendChild(createFavoriteSelectBlock("Bit Depth", rawBitDepthText, rawBitDepthSelectOptions, rawBitDepthText, async (value) => {
+            const bitDepthBlock = createFavoriteSelectBlock("Bit Depth", rawBitDepthText, ladderLockedOptions(rawBitDepthSelectOptions, ladderActive), rawBitDepthText, async (value) => {
               if (rawBitDepthFixedForH264)
                 return;
               await dispatchFavoriteCommand({ cmd: "set_raw_bit_depth", value: rawBitDepthNumber(value) });
-            }));
+            });
+            bitDepthBlock.lastChild.classList.toggle("ladder-locked", ladderActive);
+            card.appendChild(bitDepthBlock);
             break;
           }
           case "gyroData": {
@@ -9672,6 +10655,14 @@ std::string_view webControlPageHtml()
         snapshot.ladder_active = source.ladder_active;
       if (isFiniteNumber(source.ladder_resolution))
         snapshot.ladder_resolution = Number(source.ladder_resolution);
+      if (typeof source.ladder_enabled === "boolean")
+        snapshot.ladder_enabled = source.ladder_enabled;
+      if (isFiniteNumber(source.ladder_count))
+        snapshot.ladder_count = Number(source.ladder_count);
+      if (typeof source.ladder_text === "string")
+        snapshot.ladder_text = source.ladder_text;
+      if (Array.isArray(source.ladder_tops))
+        snapshot.ladder_tops = source.ladder_tops.map(Number);
       if (typeof source.ladder_ramp_ready === "boolean")
         snapshot.ladder_ramp_ready = source.ladder_ramp_ready;
       if (isFiniteNumber(source.fps_take_max))
@@ -9726,6 +10717,10 @@ std::string_view webControlPageHtml()
             snapshot.fps_speed_ramp_keep_exposure = payload.shutter === "exposure";
           if (typeof payload.audio === "string")
             snapshot.fps_speed_ramp_stretch_audio = payload.audio === "stretch";
+          break;
+        case "set_mode_ladder":
+          if (typeof payload.enabled === "string")
+            snapshot.ladder_enabled = boolValue;
           break;
         case "set_shutter_us":
           if (isFiniteNumber(payload.value)) {
@@ -10571,7 +11566,10 @@ std::string_view webControlPageHtml()
       }
       const ladderActive = snapshot.ladder_active === true;
       setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported || ladderActive);
-      document.getElementById("settingsCdngCompressionLadderNote").classList.toggle("hidden", !ladderActive);
+      setText("settingsRecordLadderNoteTail", recordFormatText === "CinemaDNG"
+        ? " on: the FPS picks the resolution and compression."
+        : " on: the FPS picks the resolution.");
+      document.getElementById("settingsRecordLadderNote").classList.toggle("hidden", !ladderActive);
       setText("settingsRawBitDepthValue", rawBitDepthText);
       setText("settingsRawBitDepthNote", rawBitDepthFixedForH264
         ? recordFormatText + (recordingFeatureSupported(snapshot, "h264_hardware") ? " uses 8-bit YUV420 hardware encoding." : " uses processed video output, so capture is fixed to 10-bit here.")
@@ -10755,8 +11753,8 @@ std::string_view webControlPageHtml()
       setElementDisabled("settingsStillTimerSelect", stillTimelapseArmed);
       setElementDisabled("settingsStillBurstSelect", stillTimelapseArmed);
       setElementDisabled("settingsStillTimelapseSelect", !stillTimelapseArmed);
-      setElementDisabled("settingsRecordResolutionSelect", false);
-      setElementDisabled("settingsRecordCropSelect", !cropRatioEnabled);
+      setElementDisabled("settingsRecordResolutionSelect", ladderActive);
+      setElementDisabled("settingsRecordCropSelect", !cropRatioEnabled || ladderActive);
       const recordResolutionField = document.getElementById("settingsRecordResolutionField");
       const recordCropField = document.getElementById("settingsRecordCropField");
       const h264ResolutionField = document.getElementById("settingsH264ResolutionField");
@@ -10918,13 +11916,53 @@ std::string_view webControlPageHtml()
       state.timecodeBaseLocalMsOfDay = Number(snapshot.timecode_local_ms_of_day || 0);
       updateLiveReadouts();
 
-      buildOptionButtons("fpsOptions", fpsOptionEntriesForSnapshot(snapshot), Number(snapshot.fps).toFixed(3), async (value) => {
+      // Mode Ladder: each FPS pill names the resolution that runs it; a dashed one switches the
+      // resolution, which happens between takes only.
+      const fpsEntries = fpsOptionEntriesForSnapshot(snapshot);
+      const ladderTops = ladderActive && Array.isArray(snapshot.ladder_tops) ? snapshot.ladder_tops.map(Number) : [];
+      const ladderCurrent = state.fpsSwitchingTo || Number(snapshot.ladder_resolution) || 0;
+      const fpsResolution = (value) => (isRecording ? ladderCurrent : ladderResolutionForFps(ladderTops, Number(value)));
+      buildOptionButtons("fpsOptions", fpsEntries, Number(snapshot.fps).toFixed(3), async (value) => {
+        const requested = Number(value);
+        const target = ladderTops.length > 0 ? fpsResolution(value) : 0;
+        // Requests overlap: each one clears only the switch it started.
+        const switching = target !== ladderCurrent ? target : 0;
+        if (switching)
+          state.fpsSwitchingTo = switching;
         try {
-          await sendCommand({ cmd: "set_fps", value: Number(value) });
+          const result = await sendCommand({ cmd: "set_fps", value: requested });
+          const accepted = Number(result && result.fps);
+          if (Number.isFinite(accepted) && accepted < requested - 0.0005 && state.snapshot)
+            showToast(fpsStopToastText(state.snapshot, accepted), false);
         } catch (error) {
           showToast(error.message, true);
+        } finally {
+          if (switching && state.fpsSwitchingTo === switching) {
+            state.fpsSwitchingTo = 0;
+            if (state.snapshot)
+              renderSnapshot(state.snapshot);
+          }
         }
       });
+      if (ladderTops.length > 0) {
+        document.querySelectorAll("#fpsOptions .pill-button").forEach((button, index) => {
+          if (!fpsEntries[index])
+            return;
+          const resolution = fpsResolution(fpsEntries[index].value);
+          button.classList.toggle("ladder-switch", !button.classList.contains("active") && resolution !== ladderCurrent);
+          button.appendChild(createDomElement("span", "pill-sub", "Resolution " + resolution));
+        });
+      }
+      const fpsLadderLine = document.getElementById("fpsLadderLine");
+      setText("fpsLadderLine", state.fpsSwitchingTo > 0
+        ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : (ladderActive ? String(snapshot.ladder_text || "") : ""));
+      fpsLadderLine.classList.toggle("switching", state.fpsSwitchingTo > 0);
+      document.getElementById("quickLadderPill").classList.toggle("hidden", !ladderActive);
+      document.getElementById("quickResolutionLadderNote").classList.toggle("hidden", !ladderActive);
+      document.getElementById("quickCropLadderNote").classList.toggle("hidden", !ladderActive);
+      document.getElementById("resolutionOptions").classList.toggle("ladder-locked", ladderActive);
+      document.getElementById("cropRatioOptions").classList.toggle("ladder-locked", ladderActive);
+      document.getElementById("settingsRawBitDepthOptions").classList.toggle("ladder-locked", ladderActive);
 
       buildOptionButtons("isoOptions", availableIsoOptionsForSnapshot(snapshot), snapshot.iso_auto ? "Auto" : String(snapshot.iso), async (value) => {
         try {
@@ -10967,7 +12005,7 @@ std::string_view webControlPageHtml()
         }
       });
 
-      buildOptionButtons("resolutionOptions", resolutionBaseOptions, resolutionBaseValue, async (value) => {
+      buildOptionButtons("resolutionOptions", ladderLockedOptions(resolutionBaseOptions, ladderActive), resolutionBaseValue, async (value) => {
         try {
           for (const command of resolutionBaseCommands(snapshot, value))
             await sendCommand(command);
@@ -10979,7 +12017,7 @@ std::string_view webControlPageHtml()
       const cropRatioBlock = document.getElementById("cropRatioBlock");
       if (cropRatioBlock)
         cropRatioBlock.classList.toggle("hidden", !cropControlsVisible);
-      buildOptionButtons("cropRatioOptions", cropRatioOptions, cropRatioValue, async (value) => {
+      buildOptionButtons("cropRatioOptions", ladderLockedOptions(cropRatioOptions, ladderActive), cropRatioValue, async (value) => {
         try {
           await sendCommand(cropRatioCommandPayload(snapshot, value));
         } catch (error) {
@@ -11003,7 +12041,7 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsRawBitDepthOptions", rawBitDepthOptions.map((value) => ({
         value,
         label: value,
-        enabled: rawBitDepthOptionEnabled(snapshot, value, rawBitDepthFixedForH264),
+        enabled: rawBitDepthOptionEnabled(snapshot, value, rawBitDepthFixedForH264) && !ladderActive,
       })), rawBitDepthText, async (value) => {
         try {
           if (rawBitDepthFixedForH264)
@@ -11014,7 +12052,7 @@ std::string_view webControlPageHtml()
         }
       }, 3);
 
-      renderSpeedRamp(snapshot, fpsOptions);
+      renderSpeedRamp(snapshot);
       renderValueListsEditor(snapshot);
       renderModeLadder(snapshot);
 
@@ -12468,8 +13506,14 @@ std::string_view webControlPageHtml()
         } catch (error) { showToast(error.message, true); }
       });
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
-      document.getElementById("settingsSpeedRampTargetSelect").addEventListener("change", (event) => {
-        state.speedRampTarget = event.target.value;
+      document.getElementById("settingsModeLadderSave").addEventListener("click", saveModeLadder);
+      document.getElementById("settingsModeLadderRevert").addEventListener("click", revertModeLadder);
+      document.addEventListener("click", (event) => {
+        const link = event.target.closest ? event.target.closest("a[data-ladder-link]") : null;
+        if (!link)
+          return;
+        event.preventDefault();
+        openModeLadderCard();
       });
       document.getElementById("settingsExposureCompensationSelect").addEventListener("change", async (event) => {
         try { await sendCommand({cmd:"set_exposure_compensation",value:Number(event.target.value)}); }
