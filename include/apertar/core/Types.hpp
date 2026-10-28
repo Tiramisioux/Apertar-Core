@@ -133,6 +133,7 @@ struct CaptureSettings {
     bool fpsSpeedRampKeepExposure = false;
     uint32_t iso = 800;
     bool isoAuto = false;
+    bool isoAutoAfterClearHdr = false; // Clear HDR stopped auto ISO; SDR turns it back on.
     uint32_t shutterUs = 20833;
     bool shutterAuto = false;
     double exposureCompensation = 0.0;
@@ -146,6 +147,7 @@ struct CaptureSettings {
     uint32_t timelapseExposureLimitUs = 0; // Runtime constraint derived from the saved UI interval.
     uint32_t whiteBalanceKelvin = 5600;
     bool whiteBalanceAuto = false;
+    bool whiteBalanceAutoAfterClearHdr = false; // Clear HDR stopped auto WB; SDR turns it back on.
     bool whiteBalanceAvailable = false; // Runtime capability of the active tuning, not persisted.
     WhiteBalanceMeasurement whiteBalanceMeasured;
     RecordingFormat recordingFormat = RecordingFormat::Cdng;

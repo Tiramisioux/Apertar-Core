@@ -149,6 +149,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps\":" << std::fixed << std::setprecision(3) << settings.fps
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
         << ",\"exposure_compensation\":" << settings.exposureCompensation
@@ -160,6 +161,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"photo_bracketing_ev\":" << settings.bracketingEv
         << ",\"wb_kelvin\":" << settings.whiteBalanceKelvin
         << ",\"wb_auto\":" << (settings.whiteBalanceAuto ? "true" : "false")
+        << ",\"wb_auto_after_clear_hdr\":" << (settings.whiteBalanceAutoAfterClearHdr ? "true" : "false")
         << ",\"wb_available\":" << (settings.whiteBalanceAvailable ? "true" : "false")
         << ",\"wb_measured\":" << (settings.whiteBalanceMeasured.valid() ? "true" : "false")
         << ",\"wb_actual_kelvin\":" << settings.whiteBalanceMeasured.kelvin
@@ -674,6 +676,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.iso = static_cast<uint32_t>(std::stoul(value));
             else if (key == "iso_auto")
                 settings.isoAuto = std::stoul(value) != 0;
+            else if (key == "iso_auto_after_clear_hdr")
+                settings.isoAutoAfterClearHdr = std::stoul(value) != 0;
             else if (key == "shutter_us")
                 settings.shutterUs = static_cast<uint32_t>(std::stoul(value));
             else if (key == "shutter_auto")
@@ -694,6 +698,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.whiteBalanceKelvin = static_cast<uint32_t>(std::stoul(value));
             else if (key == "wb_auto")
                 settings.whiteBalanceAuto = std::stoul(value) != 0;
+            else if (key == "wb_auto_after_clear_hdr")
+                settings.whiteBalanceAutoAfterClearHdr = std::stoul(value) != 0;
             else if (key == "wb_locked")
                 legacyWhiteBalanceLock = std::stoul(value) != 0;
             else if (key == "recording_format")
@@ -779,6 +785,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "fps=" << std::fixed << std::setprecision(6) << s.fps << '\n';
     output << prefix << "iso=" << s.iso << '\n';
     output << prefix << "iso_auto=" << s.isoAuto << '\n';
+    output << prefix << "iso_auto_after_clear_hdr=" << s.isoAutoAfterClearHdr << '\n';
     output << prefix << "shutter_us=" << s.shutterUs << '\n';
     output << prefix << "shutter_auto=" << s.shutterAuto << '\n';
     output << prefix << "exposure_compensation=" << s.exposureCompensation << '\n';
@@ -789,6 +796,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "bracketing_ev=" << s.bracketingEv << '\n';
     output << prefix << "wb_kelvin=" << s.whiteBalanceKelvin << '\n';
     output << prefix << "wb_auto=" << s.whiteBalanceAuto << '\n';
+    output << prefix << "wb_auto_after_clear_hdr=" << s.whiteBalanceAutoAfterClearHdr << '\n';
     output << prefix << "recording_format=" << toString(s.recordingFormat) << '\n';
     output << prefix << "cdng_compression=" << toString(s.cdngCompression) << '\n';
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
@@ -2556,6 +2564,97 @@ bool isLosslessTwoKCapture(const CaptureSettings &settings, SensorFamily sensorF
            resolution.width == 2028;
 }
 
+// [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap.
+// 12-bit: the sensor merges HG and LG only while GAIN + EXP_GAIN <= 29.1 dB, so with the driver's
+// +12 dB EXP_GAIN up to gain code 57 (17.1 dB), ISO 720. 16-bit: the driver caps Clear HDR gain at
+// code 80 (24 dB), ISO 1585; above it only the preview brightens (ISP digital gain), not the file.
+struct ClearHdrIsoLimits {
+    uint32_t max12 = 720;
+    uint32_t max16 = 1585;
+};
+
+ClearHdrIsoLimits loadClearHdrIsoLimits()
+{
+    ClearHdrIsoLimits limits;
+    std::vector<std::filesystem::path> candidates;
+    if (const char *envPath = std::getenv("APERTAR_HARDWARE_CONFIG"); envPath && *envPath)
+        candidates.emplace_back(envPath);
+    candidates.emplace_back("/home/pi/apertar-hardware.conf");
+    candidates.emplace_back("/boot/firmware/apertar-hardware.conf");
+    candidates.emplace_back("/boot/apertar-hardware.conf");
+    for (const auto &path : candidates) {
+        std::ifstream input(path);
+        if (!input.is_open())
+            continue;
+        bool inCamera = false;
+        std::string line;
+        while (std::getline(input, line)) {
+            if (const auto comment = line.find_first_of("#;"); comment != std::string::npos)
+                line.erase(comment);
+            line.erase(std::remove_if(line.begin(), line.end(),
+                                      [](unsigned char ch) { return std::isspace(ch); }), line.end());
+            if (line.empty())
+                continue;
+            if (line.front() == '[' && line.back() == ']') {
+                inCamera = line == "[camera]";
+                continue;
+            }
+            const auto eq = line.find('=');
+            if (!inCamera || eq == std::string::npos)
+                continue;
+            char *end = nullptr;
+            const long value = std::strtol(line.c_str() + eq + 1, &end, 10);
+            if (!end || *end != '\0' || value < 0 || value > 51200)
+                continue;
+            const std::string key = line.substr(0, eq);
+            if (key == "clear_hdr_iso_max_12bit")
+                limits.max12 = static_cast<uint32_t>(value);
+            else if (key == "clear_hdr_iso_max_16bit")
+                limits.max16 = static_cast<uint32_t>(value);
+        }
+        break; // the first file found is the config, as for the hardware sections
+    }
+    return limits;
+}
+
+// Read once: a change in the file takes effect at the next Core start.
+const ClearHdrIsoLimits &clearHdrIsoLimits()
+{
+    static const ClearHdrIsoLimits limits = loadClearHdrIsoLimits();
+    return limits;
+}
+
+// Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
+// and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
+// the values in use and remembers to give auto back in SDR, so every path (setters, presets, a
+// settings file from before this rule) ends up the same.
+void enforceClearHdrExposureRules(CaptureSettings &settings)
+{
+    if (settings.clearHdr) {
+        if (settings.isoAuto) {
+            settings.isoAuto = false;
+            settings.isoAutoAfterClearHdr = true;
+        }
+        if (settings.whiteBalanceAuto) {
+            settings.whiteBalanceAuto = false;
+            settings.whiteBalanceAutoAfterClearHdr = true;
+        }
+        const ClearHdrIsoLimits &limits = clearHdrIsoLimits();
+        const uint32_t cap = normalizeRawBitDepth(settings.rawBitDepth) == 16 ? limits.max16 : limits.max12;
+        if (cap > 0)
+            settings.iso = std::min(settings.iso, cap);
+        return;
+    }
+    if (settings.isoAutoAfterClearHdr) {
+        settings.isoAuto = true;
+        settings.isoAutoAfterClearHdr = false;
+    }
+    if (settings.whiteBalanceAutoAfterClearHdr) {
+        settings.whiteBalanceAuto = true;
+        settings.whiteBalanceAutoAfterClearHdr = false;
+    }
+}
+
 void enforceLosslessCaptureLimits(CaptureSettings &settings, SensorFamily sensorFamily)
 {
     if (settings.photoModeEnabled || sensorFamily == SensorFamily::Imx294)
@@ -2861,6 +2960,7 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     // mode (cropped to 3840x2160). Any other size is rejected by libcamera.
     if (sensorFamily == SensorFamily::Imx585 && settings.clearHdr)
         settings.resolution = Resolution{ 3840, 2160 };
+    enforceClearHdrExposureRules(settings);
 
     if (sensorFamily == SensorFamily::Imx294)
         settings.resolution = normalizedImx294ResolutionForBitDepth(settings.resolution, settings.rawBitDepth);
@@ -6848,6 +6948,16 @@ public:
 #endif
     }
 
+    float measuredAnalogueGain() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        std::lock_guard<std::mutex> lock(whiteBalanceMutex_);
+        return measuredAnalogueGain_;
+#else
+        return 0.0f;
+#endif
+    }
+
     SensorFamily sensorFamily() const
     {
         return sensorFamily_;
@@ -9172,12 +9282,17 @@ bool CameraController::setIso(uint32_t iso)
     CaptureSettings next = settings_;
     next.iso = iso;
     next.isoAuto = false;
+    next.isoAutoAfterClearHdr = false; // the operator's ISO stays, also after Clear HDR
     return applySettingsLocked(next, false);
 }
 
 bool CameraController::setIsoAuto()
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (settings_.clearHdr) {
+        setErrorLocked("Auto ISO is off in Clear HDR: ISO holds its value and auto comes back in SDR.");
+        return false;
+    }
     CaptureSettings next = settings_;
     next.isoAuto = true;
     return applySettingsLocked(next, false);
@@ -9292,6 +9407,7 @@ bool CameraController::setWhiteBalanceKelvin(uint32_t kelvin)
     CaptureSettings next = settings_;
     next.whiteBalanceKelvin = kelvin;
     next.whiteBalanceAuto = false;
+    next.whiteBalanceAutoAfterClearHdr = false; // the operator's WB stays, also after Clear HDR
     return applySettingsLocked(next, false);
 }
 
@@ -9300,6 +9416,10 @@ bool CameraController::setWhiteBalanceAuto()
     std::lock_guard<std::mutex> lock(mutex_);
     if (!settings_.whiteBalanceAvailable) {
         setErrorLocked("White balance is unavailable: the active tuning has no calibrated AWB/CT curve.");
+        return false;
+    }
+    if (settings_.clearHdr) {
+        setErrorLocked("Auto WB is off in Clear HDR: WB holds its value and auto comes back in SDR.");
         return false;
     }
     CaptureSettings next = settings_;
@@ -9552,6 +9672,18 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    if (enabled && !settings_.clearHdr && !simulateCamera_ && session_) {
+        // Auto ISO and WB stop in Clear HDR (the sanitiser turns them off); hold the values
+        // they are using now rather than the last manual ones.
+        if (settings_.isoAuto) {
+            if (const float gain = session_->measuredAnalogueGain(); std::isfinite(gain) && gain > 0.0f)
+                next.iso = static_cast<uint32_t>(std::clamp(std::lround(gain * 100.0f), 50l, 51200l));
+        }
+        if (settings_.whiteBalanceAuto) {
+            if (const WhiteBalanceMeasurement wb = session_->measuredWhiteBalance(); wb.valid() && wb.kelvin)
+                next.whiteBalanceKelvin = std::clamp<uint32_t>(wb.kelvin, 1500, 12000);
+        }
+    }
     next = sanitizeSettingsForSensor(next, sensorFamily);
     if (enabled && !next.clearHdr) {
         // The sanitiser clears it for ProRes/H.264 (10-bit by rule) and for sensors other than the IMX585.

@@ -185,6 +185,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps\":" << std::fixed << std::setprecision(3) << settings.fps
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
         << ",\"exposure_compensation\":" << settings.exposureCompensation
@@ -196,6 +197,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"photo_bracketing_ev\":" << settings.bracketingEv
         << ",\"wb_kelvin\":" << settings.whiteBalanceKelvin
         << ",\"wb_auto\":" << (settings.whiteBalanceAuto ? "true" : "false")
+        << ",\"wb_auto_after_clear_hdr\":" << (settings.whiteBalanceAutoAfterClearHdr ? "true" : "false")
         << ",\"wb_available\":" << (settings.whiteBalanceAvailable ? "true" : "false")
         << ",\"wb_measured\":" << (settings.whiteBalanceMeasured.valid() ? "true" : "false")
         << ",\"wb_actual_kelvin\":" << settings.whiteBalanceMeasured.kelvin
@@ -4344,6 +4346,13 @@ address=0x34
 mount_path=/media/RAW
 pcie_controller=1000110000.pcie
 
+[camera]
+# Highest ISO in Clear HDR, per sensor mode; 0 = no cap. SDR is never capped. Restart Core after a change.
+# 12-bit: the sensor merges HG/LG only up to gain code 57 (17.1 dB) = ISO 720.
+# 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
+clear_hdr_iso_max_12bit=720
+clear_hdr_iso_max_16bit=1585
+
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
 # Layouts:
@@ -8018,6 +8027,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps\":" << jsonNumber(settings.fps, 3)
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
+        << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
         << ",\"exposure_compensation\":" << settings.exposureCompensation
@@ -8025,6 +8035,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << "," << exposureMeteringJson(settings)
         << ",\"wb_kelvin\":" << settings.whiteBalanceKelvin
         << ",\"wb_auto\":" << (settings.whiteBalanceAuto ? "true" : "false")
+        << ",\"wb_auto_after_clear_hdr\":" << (settings.whiteBalanceAutoAfterClearHdr ? "true" : "false")
         << ",\"wb_available\":" << (settings.whiteBalanceAvailable ? "true" : "false")
         << ",\"timecode_mode\":\"" << toString(settings.timecodeMode) << "\""
         << ",\"wb_measured\":" << (settings.whiteBalanceMeasured.valid() ? "true" : "false")
