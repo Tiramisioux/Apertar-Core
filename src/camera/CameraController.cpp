@@ -2714,7 +2714,9 @@ void enforceClearHdrExposureRules(CaptureSettings &settings)
     }
 }
 
-constexpr uint32_t kLosslessMaxIso = 800;
+// Lossless JPEG slows down as noise grows, so ISO is capped; 1600 on Patrik's request
+// (temp 753f181, 2026-10-27: 12-bit lossless 4K25 had queue headroom, C0013 peak 2/24).
+constexpr uint32_t kLosslessMaxIso = 1600;
 
 // Whether the lossless cDNG limits (ISO, manual ISO, FPS) apply to these settings.
 bool losslessCaptureLimited(const CaptureSettings &settings, SensorFamily sensorFamily)
