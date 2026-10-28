@@ -6485,7 +6485,8 @@ std::string_view webControlPageHtml()
       groups.innerHTML = "";
       ladderGroups.forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
-          && (state.ladderAspect === "all" || ladderAspectText(entry) === state.ladderAspect));
+          && (state.ladderAspect === "all" || ladderAspectText(entry) === state.ladderAspect))
+          .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
         const onLadder = entries.filter((entry) => draft.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
