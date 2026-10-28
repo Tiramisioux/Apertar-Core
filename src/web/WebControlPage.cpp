@@ -3600,30 +3600,6 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsSpeedRampCard">
-              <div class="settings-card-head wrap-head">
-                <div>
-                  <h3 class="settings-card-title">Speed Ramp</h3>
-                  <p class="settings-card-copy">Change the frame rate during recording. The clip keeps the rate it started at, so the faster parts play back as slow motion.</p>
-                  <p class="settings-card-copy hidden" id="settingsSpeedRampNote"></p>
-                </div>
-                <div class="switch-field">
-                  <span>Allow speed ramping</span>
-                  <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
-                </div>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Shutter Sync</span>
-                <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
-                <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Audio (experimental)</span>
-                <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
-                <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
-              </div>
-            </div>
-
             <div class="settings-card" id="settingsSensorModesCard">
               <div class="settings-card-head">
                 <div>
@@ -3660,6 +3636,30 @@ std::string_view webControlPageHtml()
                 </div>
               </div>
               <div class="field-stack" id="settingsValueLists"></div>
+            </div>
+
+            <div class="settings-card" id="settingsSpeedRampCard">
+              <div class="settings-card-head wrap-head">
+                <div>
+                  <h3 class="settings-card-title">Speed Ramp</h3>
+                  <p class="settings-card-copy">Change the frame rate during recording. The clip keeps the rate it started at, so the faster parts play back as slow motion.</p>
+                  <p class="settings-card-copy hidden" id="settingsSpeedRampNote"></p>
+                </div>
+                <div class="switch-field">
+                  <span>Allow speed ramping</span>
+                  <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
+                </div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Shutter Sync</span>
+                <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
+                <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Audio (experimental)</span>
+                <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
+                <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
+              </div>
             </div>
 
             <div class="settings-card">
