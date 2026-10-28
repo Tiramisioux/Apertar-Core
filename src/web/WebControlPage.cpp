@@ -1332,6 +1332,15 @@ std::string_view webControlPageHtml()
       }
     }
 
+    .ladder-line {
+      cursor: pointer;
+    }
+
+    .select-note.ladder-line:hover {
+      color: #f4f4f5;
+      text-decoration: underline;
+    }
+
     .ladder-link {
       color: inherit;
       font-weight: 600;
@@ -3141,14 +3150,14 @@ std::string_view webControlPageHtml()
                 <img class="icon-image" src="/icons/settings.png" alt="">
               </div>
               <h2 class="section-title">Camera settings</h2>
-              <div class="online-pill hidden" id="quickLadderPill">Resolution ladder on</div>
+              <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
             </div>
 
             <div class="stack">
               <section class="select-block">
                 <div class="select-topline">
                   <span>Frame rate</span>
-                  <span class="select-note" id="fpsLadderLine"></span>
+                  <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder"></span>
                 </div>
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
@@ -13429,7 +13438,7 @@ std::string_view webControlPageHtml()
       });
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
       document.addEventListener("click", (event) => {
-        const link = event.target.closest ? event.target.closest("a[data-ladder-link]") : null;
+        const link = event.target.closest ? event.target.closest("[data-ladder-link]") : null;
         if (!link) {
           const field = event.target.closest ? event.target.closest("[data-ladder-lock]") : null;
           if (field)
@@ -13439,6 +13448,13 @@ std::string_view webControlPageHtml()
         event.preventDefault();
         document.getElementById("toast").classList.remove("visible", "with-link");
         openModeLadderCard();
+      });
+      document.addEventListener("keydown", (event) => {
+        const target = event.target;
+        if ((event.key === "Enter" || event.key === " ") && target && target.getAttribute && target.getAttribute("role") === "link" && target.dataset.ladderLink) {
+          event.preventDefault();
+          openModeLadderCard();
+        }
       });
       document.getElementById("settingsExposureCompensationSelect").addEventListener("change", async (event) => {
         try { await sendCommand({cmd:"set_exposure_compensation",value:Number(event.target.value)}); }
