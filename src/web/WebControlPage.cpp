@@ -787,6 +787,17 @@ std::string_view webControlPageHtml()
       box-shadow: 0 16px 32px rgba(255, 255, 255, 0.08);
     }
 
+    /* A value the camera sets, not the operator: auto ISO/WB, held for Clear HDR, landed on
+       a mode's ceiling, or driven by a speed ramp. */
+    .badge.system-value {
+      color: var(--ok);
+    }
+
+    .pill-button.active.system-value {
+      border-color: var(--ok);
+      background: var(--ok);
+    }
+
     .pill-button.disabled,
     .pill-button:disabled {
       color: rgba(228, 228, 231, 0.34);
@@ -5213,10 +5224,37 @@ std::string_view webControlPageHtml()
       }, 3);
     }
 
+    // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none.
+    // The first step above it stays and lands on the ceiling, as in Cinemate; no Auto under a
+    // ceiling or in Clear HDR, where Core runs on manual ISO. With auto on, Lock freezes the gain.
     function availableIsoOptionsForSnapshot(snapshot) {
-      return isLosslessImx585Snapshot(snapshot) || isLosslessFourKSnapshot(snapshot) || isLosslessTwoKSnapshot(snapshot)
-        ? ["100", "200", "400", "800"]
-        : isoOptions;
+      const maximum = Number(snapshot && snapshot.iso_max) || 0;
+      let options = isoOptions;
+      if (maximum > 0) {
+        const values = isoOptions.filter((value) => value !== "Auto");
+        options = values.filter((value) => Number(value) <= maximum);
+        if (values.some((value) => Number(value) > maximum) && !options.includes(String(maximum)))
+          options.push(String(maximum));
+      } else if (snapshot && snapshot.clear_hdr) {
+        options = isoOptions.filter((value) => value !== "Auto");
+      }
+      return snapshot && snapshot.iso_auto && options.includes("Auto")
+        ? ["Auto", "Lock", ...options.filter((value) => value !== "Auto")]
+        : options;
+    }
+
+    // True when the ISO on screen is the camera's: auto, held for Clear HDR, or on the ceiling.
+    function isoSetByCamera(snapshot) {
+      const maximum = Number(snapshot && snapshot.iso_max) || 0;
+      return !!snapshot && (!!snapshot.iso_auto || snapshot.iso_auto_after_clear_hdr === true ||
+        (maximum > 0 && Number(snapshot.iso) === maximum));
+    }
+
+    function markActiveSystemValue(containerId, isSystem) {
+      const container = document.getElementById(containerId);
+      const active = container && container.querySelector(".pill-button.active");
+      if (active)
+        active.classList.toggle("system-value", !!isSystem);
     }
 
     function formatResolutionValue(width, height) {
@@ -8836,6 +8874,16 @@ std::string_view webControlPageHtml()
         snapshot.iso = Math.round(Number(source.iso));
       if (typeof source.iso_auto === "boolean")
         snapshot.iso_auto = source.iso_auto;
+      if (isFiniteNumber(source.iso_actual))
+        snapshot.iso_actual = Number(source.iso_actual);
+      if (isFiniteNumber(source.iso_max))
+        snapshot.iso_max = Number(source.iso_max);
+      if (typeof source.iso_auto_after_clear_hdr === "boolean")
+        snapshot.iso_auto_after_clear_hdr = source.iso_auto_after_clear_hdr;
+      if (typeof source.wb_auto_after_clear_hdr === "boolean")
+        snapshot.wb_auto_after_clear_hdr = source.wb_auto_after_clear_hdr;
+      if (isFiniteNumber(source.wb_actual_kelvin))
+        snapshot.wb_actual_kelvin = Number(source.wb_actual_kelvin);
       if (isFiniteNumber(source.shutter_us))
         snapshot.shutter_us = Math.max(1, Math.round(Number(source.shutter_us)));
       if (typeof source.shutter_auto === "boolean")
@@ -8933,7 +8981,9 @@ std::string_view webControlPageHtml()
           }
           break;
         case "set_iso_auto":
-          snapshot.iso_auto = true;
+          if (payload.enabled === "false" && isFiniteNumber(snapshot.iso_actual) && snapshot.iso_actual > 0)
+            snapshot.iso = Number(snapshot.iso_actual);
+          snapshot.iso_auto = payload.enabled !== "false";
           break;
         case "set_fps":
           if (isFiniteNumber(payload.value))
@@ -9733,9 +9783,16 @@ std::string_view webControlPageHtml()
       setText("recordingStatus", !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
       setText("resolutionBadge", h264RecordFormat ? h264OutputResolutionLabel(snapshot) : resolutionLabel);
       setText("fpsBadge", String(Math.round(snapshot.fps)) + " FPS");
-      const isoLabel = snapshot.iso_auto ? "Auto" : String(snapshot.iso);
-      setText("isoBadge", snapshot.iso_auto ? "ISO Auto" : ("ISO " + isoLabel));
-      setText("wbBadge", "WB " + whiteBalanceLabel);
+      // Auto shows the value in use, not the word; green whenever the camera set it.
+      const isoInUse = snapshot.iso_auto && Number(snapshot.iso_actual) > 0 ? Number(snapshot.iso_actual) : 0;
+      const isoLabel = snapshot.iso_auto ? (isoInUse > 0 ? String(isoInUse) : "Auto") : String(snapshot.iso);
+      setText("isoBadge", "ISO " + isoLabel);
+      document.getElementById("isoBadge").classList.toggle("system-value", isoSetByCamera(snapshot));
+      const wbInUse = whiteBalanceAuto && snapshot.wb_measured && Number(snapshot.wb_actual_kelvin) > 0
+        ? String(Math.round(Number(snapshot.wb_actual_kelvin))) + "K" : whiteBalanceLabel;
+      setText("wbBadge", "WB " + wbInUse);
+      document.getElementById("wbBadge").classList.toggle("system-value",
+        whiteBalanceAuto || snapshot.wb_auto_after_clear_hdr === true);
       const timelapseShots = Math.max(0, Math.floor(Number(snapshot.timelapse_shot_count) || 0));
       setText("timelapseShotCounter", timelapseShots + (timelapseShots === 1 ? " SHOT" : " SHOTS"));
       document.getElementById("timelapseShotCounter").classList.toggle("hidden", !stillModeEnabled || !stillTimelapseArmed);
@@ -9789,7 +9846,7 @@ std::string_view webControlPageHtml()
               smpteEnabled
                 ? "SMPTE Bars"
                 : (resolutionLabel + " / " + formatFpsLabel(snapshot.fps)));
-      setText("settingsIsoSummary", snapshot.iso_auto ? "ISO Auto" : ("ISO " + isoLabel));
+      setText("settingsIsoSummary", "ISO " + isoLabel);
       setText("settingsWbSummary", whiteBalanceLabel);
       setText("settingsShutterSummary", shutterLabel);
       setText("settingsCodecSummary", snapshot.capture.codec);
@@ -10126,12 +10183,15 @@ std::string_view webControlPageHtml()
         try {
           if (value === "Auto")
             await sendCommand({ cmd: "set_iso_auto" });
+          else if (value === "Lock")
+            await sendCommand({ cmd: "set_iso_auto", enabled: "false" });
           else
             await sendCommand({ cmd: "set_iso", value: Number(value) });
         } catch (error) {
           showToast(error.message, true);
         }
       });
+      markActiveSystemValue("isoOptions", isoSetByCamera(snapshot));
 
       buildOptionButtons("shutterOptions", shutterOptionSet, shutterLabel, async (value) => {
         try {
@@ -10143,9 +10203,12 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       });
+      // In a ramp take with the Exposure policy Core moves the angle with the frame rate.
+      markActiveSystemValue("shutterOptions", !!snapshot.shutter_auto ||
+        (!!snapshot.recording && snapshot.fps_speed_ramp === true && snapshot.fps_speed_ramp_keep_exposure === true));
 
       buildOptionButtons("whiteBalanceModeOptions", ["Auto", "Manual"].map((value) => ({
-        value: value, enabled: whiteBalanceAvailable
+        value: value, enabled: whiteBalanceAvailable && !(value === "Auto" && snapshot.clear_hdr)
       })), whiteBalanceAuto ? "Auto" : "Manual", async (value) => {
         try {
           if (value === "Auto")
