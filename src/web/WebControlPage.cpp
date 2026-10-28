@@ -943,6 +943,16 @@ std::string_view webControlPageHtml()
       color: #d4d4d8;
     }
 
+    .ladder-fps-chip {
+      flex: 0 0 auto;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: #27272a;
+      color: #f4f4f5;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
     .ladder-transition svg {
       flex: 0 0 auto;
     }
@@ -6400,7 +6410,8 @@ std::string_view webControlPageHtml()
           : "Same mode: a ramp crosses without a switch, in a take too.";
         const transition = createDomElement("div", "ladder-transition");
         transition.innerHTML = ladderIcons.down;
-        transition.appendChild(createDomElement("span", "", "Above " + stop + (rowState.after ? "" : " fps") + ": " + parts.join(", ") + ". " + inTake));
+        transition.appendChild(createDomElement("span", "ladder-fps-chip", rowState.after ? "Max of Resolution " + rowState.after : stop + " fps"));
+        transition.appendChild(createDomElement("span", "", "Above it: " + parts.join(", ") + ". " + inTake));
         item.appendChild(transition);
       }
 
