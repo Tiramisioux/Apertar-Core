@@ -2970,6 +2970,7 @@ std::string_view webControlPageHtml()
                     <option value="lossy_5to1">Lossy 5:1</option>
                   </select>
                 </label>
+                <p class="settings-card-copy field-span-2 hidden" id="settingsCdngCompressionLadderNote">The Mode Ladder is active: it sets the compression for each resolution. Turn it off to choose it here.</p>
               </div>
               <div class="settings-card-head compact-head">
                 <div>
@@ -9226,6 +9227,8 @@ std::string_view webControlPageHtml()
         snapshot.timelapse_interval_seconds = Math.max(0, Number(source.interval_seconds));
       if (isFiniteNumber(source.recording_elapsed_seconds))
         snapshot.recording_elapsed_seconds = Number(source.recording_elapsed_seconds);
+      if (typeof source.ladder_active === "boolean")
+        snapshot.ladder_active = source.ladder_active;
       if (typeof source.fps_speed_ramp === "boolean")
         snapshot.fps_speed_ramp = source.fps_speed_ramp;
       if (typeof source.fps_speed_ramp_keep_exposure === "boolean")
@@ -10117,7 +10120,9 @@ std::string_view webControlPageHtml()
         option.hidden = option.value !== "none" && !rawCompressionSupported;
         option.disabled = option.hidden;
       }
-      setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported);
+      const ladderActive = snapshot.ladder_active === true;
+      setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported || ladderActive);
+      document.getElementById("settingsCdngCompressionLadderNote").classList.toggle("hidden", !ladderActive);
       setText("settingsRawBitDepthValue", rawBitDepthText);
       setText("settingsRawBitDepthNote", rawBitDepthFixedForH264
         ? recordFormatText + (recordingFeatureSupported(snapshot, "h264_hardware") ? " uses 8-bit YUV420 hardware encoding." : " uses processed video output, so capture is fixed to 10-bit here.")
