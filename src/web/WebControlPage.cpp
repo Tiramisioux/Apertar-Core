@@ -809,6 +809,88 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
+    /* Mode Ladder editor (T34): one row per resolution, a handle to drag it. */
+    .ladder-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      border-radius: 18px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.72);
+      padding: 10px 12px;
+    }
+
+    .ladder-row.dragging {
+      opacity: 0.6;
+      border-color: #52525b;
+    }
+
+    .ladder-row.drop-target {
+      border-color: #ffffff;
+    }
+
+    .ladder-handle {
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 20px;
+    }
+
+    .ladder-title {
+      flex: 1 1 180px;
+      min-width: 0;
+      font-size: 14px;
+      color: #f4f4f5;
+    }
+
+    .ladder-title small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .ladder-row .settings-select,
+    .ladder-row .settings-input {
+      width: auto;
+      min-height: 44px;
+    }
+
+    .ladder-row .ladder-threshold {
+      width: 7em;
+    }
+
+    .ladder-button {
+      min-width: 44px;
+      min-height: 44px;
+      border-radius: 14px;
+      border: 1px solid #27272a;
+      background: #18181b;
+      color: #f4f4f5;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .ladder-button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .ladder-message {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .ladder-message.error {
+      color: var(--danger);
+    }
+
     /* Value lists (T33): one chip per value, x removes it. */
     .value-list-row {
       gap: 12px;
@@ -2989,6 +3071,10 @@ std::string_view webControlPageHtml()
               </div>
               <div class="pill-grid" id="settingsSpeedRampOptions"></div>
               <div class="field-stack">
+                <span class="input-label">Ramp-ready (Mode Ladder)</span>
+                <div class="pill-grid" id="settingsSpeedRampReadyOptions"></div>
+              </div>
+              <div class="field-stack">
                 <span class="input-label">Shutter Sync</span>
                 <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
                 <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
@@ -3017,6 +3103,23 @@ std::string_view webControlPageHtml()
               </div>
               <div class="pill-grid three-col" id="settingsSpeedRampActions"></div>
               <p class="settings-card-copy" id="settingsSpeedRampRange"></p>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Mode Ladder</h3>
+                </div>
+                <div class="online-pill" id="settingsModeLadderValue">Off</div>
+              </div>
+              <div class="pill-grid" id="settingsModeLadderOptions"></div>
+              <div class="field-stack" id="settingsModeLadderList"></div>
+              <div class="settings-field-grid">
+                <select class="settings-select" id="settingsModeLadderAddSelect"></select>
+                <div class="pill-grid" id="settingsModeLadderAddActions"></div>
+              </div>
+              <div class="field-stack" id="settingsModeLadderMessages"></div>
+              <div class="pill-grid" id="settingsModeLadderSaveActions"></div>
             </div>
 
             <div class="settings-card">
@@ -4327,6 +4430,13 @@ std::string_view webControlPageHtml()
       speedRampStop: false,
       speedRampTakeBase: 0,
       valueListsSignature: "",
+      ladderServer: null,      // Core's last mode_ladder reply
+      ladderDraft: null,       // {enabled, rampReady, rows} being edited
+      ladderDirty: false,
+      ladderDrag: null,
+      ladderCheckTimer: 0,
+      ladderFetching: false,
+      ladderSeenActive: null,
       fetchInFlight: false,
       fetchQueued: false,
       fetchQueuedSilent: true,
@@ -5121,7 +5231,8 @@ std::string_view webControlPageHtml()
         (sensorLower.indexOf("imx477") !== -1 || sensorLower.indexOf("imx577") !== -1)
           ? fpsPresets
           : fpsPresets.filter((value) => value <= 60.0005));
-      const coreMax = Number(snapshot && snapshot.fps_max) || 0;
+      const takeMax = snapshot && snapshot.recording && snapshot.ladder_active ? Number(snapshot.fps_take_max) || 0 : 0;
+      const coreMax = takeMax > 0 ? takeMax : (Number(snapshot && snapshot.fps_max) || 0);
       let max = coreMax > 0 ? coreMax : maximumSupportedFpsForSnapshot(snapshot);
       const h264MaxFps = Number(snapshot && snapshot.recording_capabilities && snapshot.recording_capabilities.h264_max_fps) || 0;
       if (processedVideoRecordFormatForSnapshot(snapshot) && h264MaxFps > 0)
@@ -5363,6 +5474,336 @@ std::string_view webControlPageHtml()
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
     // Auto in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
+    // ---- Mode Ladder editor (T34) ----------------------------------------------------------------
+    // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
+    // its limit. Core owns the ladder (mode_ladder.conf) and checks every draft; this page edits a
+    // draft. The rows are rebuilt only after a fetch, a save, a revert or a local edit, never by the
+    // poll, so typing in a field is not interrupted.
+    const ladderCompressionChoices = [
+      { value: "", label: "Default" },
+      { value: "none", label: "Uncompressed" },
+      { value: "lossless_jpeg", label: "Lossless JPEG" },
+      { value: "lossy_3to1", label: "Lossy 3:1" },
+      { value: "lossy_5to1", label: "Lossy 5:1" },
+    ];
+
+    function ladderRowText(row) {
+      const threshold = Number(row.threshold) > 0 ? String(Number(row.threshold)) : "";
+      return row.width + "x" + row.height + ":" + row.bits + ":" + (row.clear_hdr ? "hdr" : "sdr")
+        + (threshold || row.compression ? ":" + threshold : "") + (row.compression ? ":" + row.compression : "");
+    }
+
+    function ladderText(rows) {
+      return rows.map(ladderRowText).join(",");
+    }
+
+    function ladderRowsFromServer(ladder) {
+      return (ladder.resolutions || []).map((entry) => ({
+        width: entry.width, height: entry.height, bits: entry.bits, clear_hdr: !!entry.clear_hdr, label: entry.label,
+        threshold: Number(entry.threshold) || 0, compression: entry.compression_set ? entry.compression : "",
+      }));
+    }
+
+    function loadLadderDraft(ladder) {
+      state.ladderServer = ladder;
+      state.ladderDraft = { enabled: !!ladder.enabled, rampReady: !!ladder.ramp_ready, rows: ladderRowsFromServer(ladder) };
+      state.ladderDirty = false;
+      renderLadderRows();
+      updateLadderChecks(ladder);
+    }
+
+    async function fetchModeLadder() {
+      if (state.ladderFetching)
+        return;
+      state.ladderFetching = true;
+      try {
+        const result = await sendCommand({ cmd: "get_mode_ladder" });
+        loadLadderDraft(result.mode_ladder);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.ladderFetching = false;
+      }
+    }
+
+    // Core's answer for the draft: the range each resolution serves, the errors and the warnings.
+    function updateLadderChecks(ladder) {
+      const entries = (ladder && ladder.resolutions) || [];
+      const rows = document.querySelectorAll("#settingsModeLadderList .ladder-row");
+      rows.forEach((rowElement, index) => {
+        const entry = entries[index];
+        const caption = rowElement.querySelector(".ladder-caption");
+        const threshold = rowElement.querySelector(".ladder-threshold");
+        if (!entry || !caption)
+          return;
+        caption.textContent = entry.usable
+          ? "Serves " + (Number(entry.from) > 0 ? "above " + entry.from : "from the lowest") + " up to " + entry.ceiling + " fps"
+          : "Cannot run in this format";
+        if (threshold)
+          threshold.placeholder = entry.mode_ceiling > 0 ? "max " + entry.mode_ceiling : "fps";
+      });
+      const box = document.getElementById("settingsModeLadderMessages");
+      if (!box)
+        return;
+      box.innerHTML = "";
+      for (const [list, kind] of [[(ladder && ladder.errors) || [], "error"], [(ladder && ladder.warnings) || [], ""]]) {
+        for (const text of list) {
+          const line = document.createElement("div");
+          line.className = "ladder-message" + (kind ? " " + kind : "");
+          line.textContent = text;
+          box.appendChild(line);
+        }
+      }
+    }
+
+    function showLadderError(text) {
+      const box = document.getElementById("settingsModeLadderMessages");
+      if (!box)
+        return;
+      box.innerHTML = "";
+      const line = document.createElement("div");
+      line.className = "ladder-message error";
+      line.textContent = text;
+      box.appendChild(line);
+    }
+
+    function scheduleLadderCheck() {
+      window.clearTimeout(state.ladderCheckTimer);
+      state.ladderCheckTimer = window.setTimeout(checkLadderDraft, 350);
+    }
+
+    async function checkLadderDraft() {
+      if (!state.ladderDraft)
+        return;
+      try {
+        const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderText(state.ladderDraft.rows), dry_run: "true" });
+        updateLadderChecks(result.mode_ladder);
+      } catch (error) {
+        showLadderError(error.message);
+      }
+    }
+
+    function markLadderDirty() {
+      state.ladderDirty = true;
+      scheduleLadderCheck();
+      renderLadderActions();
+    }
+
+    function moveLadderRow(from, to) {
+      const rows = state.ladderDraft.rows;
+      if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length)
+        return;
+      rows.splice(to, 0, rows.splice(from, 1)[0]);
+      renderLadderRows();
+      markLadderDirty();
+    }
+
+    // Pointer events with capture, because touch screens do not fire HTML5 drag events.
+    function installLadderDrag(handle, index) {
+      const rowElements = () => Array.from(document.querySelectorAll("#settingsModeLadderList .ladder-row"));
+      handle.addEventListener("pointerdown", (event) => {
+        if (state.snapshot && state.snapshot.recording)
+          return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        state.ladderDrag = { index, target: index };
+        rowElements()[index].classList.add("dragging");
+      });
+      handle.addEventListener("pointermove", (event) => {
+        const drag = state.ladderDrag;
+        if (!drag)
+          return;
+        const rows = rowElements();
+        let target = rows.findIndex((element) => {
+          const box = element.getBoundingClientRect();
+          return event.clientY >= box.top && event.clientY <= box.bottom;
+        });
+        if (target < 0)
+          target = event.clientY < rows[0].getBoundingClientRect().top ? 0 : rows.length - 1;
+        drag.target = target;
+        rows.forEach((element, i) => element.classList.toggle("drop-target", i === target && i !== drag.index));
+      });
+      const finish = (cancelled) => {
+        const drag = state.ladderDrag;
+        state.ladderDrag = null;
+        rowElements().forEach((element) => element.classList.remove("dragging", "drop-target"));
+        if (drag && !cancelled)
+          moveLadderRow(drag.index, drag.target);
+      };
+      handle.addEventListener("pointerup", () => finish(false));
+      handle.addEventListener("pointercancel", () => finish(true));
+    }
+
+    function renderLadderRows() {
+      const list = document.getElementById("settingsModeLadderList");
+      const draft = state.ladderDraft;
+      if (!list || !draft)
+        return;
+      const recording = !!(state.snapshot && state.snapshot.recording);
+      list.innerHTML = "";
+      draft.rows.forEach((row, index) => {
+        const element = document.createElement("div");
+        element.className = "ladder-row";
+
+        const handle = document.createElement("span");
+        handle.className = "ladder-handle";
+        handle.textContent = "⋮⋮";
+        handle.title = "Drag to reorder";
+        installLadderDrag(handle, index);
+        element.appendChild(handle);
+
+        const title = document.createElement("div");
+        title.className = "ladder-title";
+        title.textContent = (index + 1) + ". " + row.label;
+        const caption = document.createElement("small");
+        caption.className = "ladder-caption";
+        title.appendChild(caption);
+        element.appendChild(title);
+
+        const compression = document.createElement("select");
+        compression.className = "settings-select";
+        compression.title = "Compression";
+        for (const choice of ladderCompressionChoices) {
+          const option = document.createElement("option");
+          option.value = choice.value;
+          option.textContent = choice.value === "" ? "Default (" + (row.clear_hdr ? "uncompressed" : "lossless") + ")" : choice.label;
+          option.disabled = row.clear_hdr && choice.value.indexOf("lossy") === 0;
+          compression.appendChild(option);
+        }
+        compression.value = row.compression;
+        compression.disabled = recording;
+        compression.addEventListener("change", () => {
+          row.compression = compression.value;
+          markLadderDirty();
+        });
+        element.appendChild(compression);
+
+        const threshold = document.createElement("input");
+        threshold.className = "settings-input ladder-threshold";
+        threshold.type = "number";
+        threshold.min = "0";
+        threshold.step = "any";
+        threshold.title = "Highest fps this resolution serves";
+        threshold.value = row.threshold > 0 ? String(row.threshold) : "";
+        threshold.disabled = recording;
+        threshold.addEventListener("input", () => {
+          row.threshold = Number(threshold.value) > 0 ? Number(threshold.value) : 0;
+          markLadderDirty();
+        });
+        element.appendChild(threshold);
+
+        for (const [text, title2, action, off] of [
+          ["↑", "Move up", () => moveLadderRow(index, index - 1), index === 0],
+          ["↓", "Move down", () => moveLadderRow(index, index + 1), index === draft.rows.length - 1],
+          ["×", "Remove", () => {
+            draft.rows.splice(index, 1);
+            renderLadderRows();
+            markLadderDirty();
+          }, false],
+        ]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "ladder-button";
+          button.textContent = text;
+          button.title = title2;
+          button.disabled = recording || off;
+          button.addEventListener("click", action);
+          element.appendChild(button);
+        }
+        list.appendChild(element);
+      });
+
+      // The sensor's modes that are not in the ladder yet.
+      const select = document.getElementById("settingsModeLadderAddSelect");
+      if (select) {
+        const pool = ((state.ladderServer && state.ladderServer.pool) || []).filter((mode) => !draft.rows.some((row) =>
+          row.width === mode.width && row.height === mode.height && row.bits === mode.bits && row.clear_hdr === !!mode.clear_hdr));
+        select.innerHTML = "";
+        pool.forEach((mode, i) => {
+          const option = document.createElement("option");
+          option.value = String(i);
+          option.textContent = mode.label + (mode.usable ? " · up to " + mode.mode_ceiling + " fps" : " · not in this format");
+          select.appendChild(option);
+        });
+        select.disabled = recording || pool.length === 0;
+        select._pool = pool;
+      }
+      renderLadderActions();
+      if (state.ladderServer)
+        updateLadderChecks(state.ladderServer);
+    }
+
+    function renderLadderActions() {
+      const recording = !!(state.snapshot && state.snapshot.recording);
+      const select = document.getElementById("settingsModeLadderAddSelect");
+      buildOptionButtons("settingsModeLadderAddActions", [
+        { value: "add", label: "Add", enabled: !recording && !!select && !!select._pool && select._pool.length > 0 },
+      ], "", (value) => {
+        const mode = select && select._pool && select._pool[Number(select.value)];
+        if (!mode || !state.ladderDraft)
+          return;
+        state.ladderDraft.rows.push({
+          width: mode.width, height: mode.height, bits: mode.bits, clear_hdr: !!mode.clear_hdr, label: mode.label,
+          threshold: 0, compression: "",
+        });
+        renderLadderRows();
+        markLadderDirty();
+      }, 1);
+      buildOptionButtons("settingsModeLadderSaveActions", [
+        { value: "save", label: "Save", enabled: !recording && state.ladderDirty },
+        { value: "revert", label: "Revert", enabled: state.ladderDirty },
+      ], "", async (value) => {
+        if (value === "revert") {
+          if (state.ladderServer)
+            loadLadderDraft(state.ladderServer);
+          return;
+        }
+        try {
+          const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderText(state.ladderDraft.rows) });
+          loadLadderDraft(result.mode_ladder);
+          showToast("Mode Ladder saved", false);
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+    }
+
+    // Called on every snapshot: only pills, states and the first or a changed fetch.
+    function renderModeLadder(snapshot) {
+      const recording = !!snapshot.recording;
+      const active = snapshot.ladder_active === true;
+      if (!state.ladderServer && !state.ladderFetching)
+        fetchModeLadder();
+      else if (state.ladderSeenActive !== null && state.ladderSeenActive !== active && !state.ladderDirty)
+        fetchModeLadder();
+      state.ladderSeenActive = active;
+
+      const enabled = state.ladderServer ? !!state.ladderServer.enabled : active;
+      setText("settingsModeLadderValue", !enabled ? "Off"
+        : (active ? (snapshot.ladder_resolution > 0 ? "On · Resolution " + snapshot.ladder_resolution : "On") : "On · idle"));
+      const send = async (payload) => {
+        try {
+          const result = await sendCommand({ cmd: "set_mode_ladder", ...payload });
+          if (!state.ladderDirty)
+            loadLadderDraft(result.mode_ladder);
+          else
+            state.ladderServer = result.mode_ladder;
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      };
+      buildOptionButtons("settingsModeLadderOptions", [
+        { label: "Off", value: "Off", enabled: !recording },
+        { label: "On", value: "On", enabled: !recording },
+      ], enabled ? "On" : "Off", (value) => send({ enabled: value === "On" ? "true" : "false" }), 2);
+      const rampReady = state.ladderServer ? !!state.ladderServer.ramp_ready : false;
+      buildOptionButtons("settingsSpeedRampReadyOptions", [
+        { label: "Off", value: "Off", enabled: !recording && enabled },
+        { label: "On", value: "On", enabled: !recording && enabled },
+      ], rampReady ? "On" : "Off", (value) => send({ ramp_ready: value === "On" ? "true" : "false" }), 2);
+      renderLadderActions();
+    }
+
     // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
     // fields has focus, so typing is not interrupted.
     const valueListDefinitions = [
@@ -9229,6 +9670,14 @@ std::string_view webControlPageHtml()
         snapshot.recording_elapsed_seconds = Number(source.recording_elapsed_seconds);
       if (typeof source.ladder_active === "boolean")
         snapshot.ladder_active = source.ladder_active;
+      if (isFiniteNumber(source.ladder_resolution))
+        snapshot.ladder_resolution = Number(source.ladder_resolution);
+      if (typeof source.ladder_ramp_ready === "boolean")
+        snapshot.ladder_ramp_ready = source.ladder_ramp_ready;
+      if (isFiniteNumber(source.fps_take_max))
+        snapshot.fps_take_max = Number(source.fps_take_max);
+      if (isFiniteNumber(source.fps_max))
+        snapshot.fps_max = Number(source.fps_max);
       if (typeof source.fps_speed_ramp === "boolean")
         snapshot.fps_speed_ramp = source.fps_speed_ramp;
       if (typeof source.fps_speed_ramp_keep_exposure === "boolean")
@@ -10567,6 +11016,7 @@ std::string_view webControlPageHtml()
 
       renderSpeedRamp(snapshot, fpsOptions);
       renderValueListsEditor(snapshot);
+      renderModeLadder(snapshot);
 
       buildOptionButtons("settingsGyroDataOptions", toggleOptions, formatToggleLabel(recordGyroEnabled), async (value) => {
         try {
