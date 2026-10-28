@@ -1,6 +1,7 @@
 #pragma once
 
 #include "camera/FramePhaseLock.hpp"
+#include "camera/ModeLadder.hpp"
 #include <apertar/core/Types.hpp>
 #include "util/RecordingDropWarning.hpp"
 
@@ -86,6 +87,14 @@ public:
     bool setConformFps(double fps);
     bool setFpsPhaseLock(bool enabled);
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio);
+    // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
+    // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors).
+    bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
+                       std::optional<bool> rampReady, bool dryRun, std::string *json, std::string *error);
+    std::string modeLadderJson() const;
+    // A preset that names a mode (namesMode) must be the one the ladder would pick for its FPS;
+    // one that names none follows the ladder. False with *error otherwise.
+    bool applyLadderToPreset(CaptureSettings &settings, bool namesMode, std::string *error) const;
     bool setAutofocusMode(AutofocusMode mode);
     bool setAutofocusRange(AutofocusRange range);
     bool setAutofocusSpeed(AutofocusSpeed speed);
@@ -124,7 +133,18 @@ private:
     class CameraSession;
 
     bool applySettingsLocked(CaptureSettings nextSettings, bool requiresReconfigure, bool commit = true);
-    bool applyFpsStepLocked(double effectiveFps, bool rampingTake, bool commit);
+    bool applyFpsStepLocked(double effectiveFps, bool rampingTake, bool commit, const CaptureSettings *rung = nullptr);
+    // T34: what the ladder knows of each rung in base's format, the active test, the rewrite of a
+    // request into the rung its FPS picks, the derived state fields, the file.
+    std::vector<ladder::RungState> ladderStatesLocked(const ladder::Ladder &ladder, const CaptureSettings &base) const;
+    bool ladderActiveForLocked(const CaptureSettings &base) const;
+    bool ladderRewriteLocked(CaptureSettings &next) const;
+    void fillLadderFieldsLocked(CaptureSettings &out) const;
+    bool ladderYieldLocked();       // a manual mode change switches the ladder off; true if it did
+    void ladderResumeLocked();      // ... and back on when that change failed
+    void saveModeLadderLocked() const;
+    std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
+                                     const std::vector<std::string> &warnings) const;
     void restoreFpsAfterRampLocked();
     bool commitHdrKnobsLocked(const CaptureSettings &next);
     void persistSettingsLocked();
@@ -174,6 +194,7 @@ private:
     uint32_t rampNominalShutterUs_ = 0;
     double rampTakeBaseFps_ = 0.0;
     bool rampTakeChanged_ = false;
+    ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
     std::unique_ptr<CameraSession> session_;
 };
 

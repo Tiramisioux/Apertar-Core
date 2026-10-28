@@ -158,7 +158,11 @@ struct CaptureSettings {
     WhiteBalanceMeasurement whiteBalanceMeasured;
     uint32_t isoMeasured = 0; // Runtime: the analogue gain in use x 100, not persisted.
     uint32_t isoMax = 0;      // Runtime: the current mode's ISO ceiling (Clear HDR, lossless), 0 = none.
-    double fpsMax = 0.0;      // Runtime: the current mode's FPS ceiling (sensor, lossless).
+    double fpsMax = 0.0;      // Runtime: the current mode's FPS ceiling (sensor, lossless); with the mode ladder, the ladder's.
+    double fpsTakeMax = 0.0;  // Runtime (T34): the highest FPS a take in the current mode reaches (its rung's ceiling).
+    bool ladderActive = false;     // Runtime (T34): the mode ladder picks the sensor mode from the FPS.
+    uint32_t ladderRung = 0;       // Runtime (T34): the running rung, 1-based, 0 = the mode is not a rung.
+    bool ladderRampReady = false;  // Runtime (T34): Ramp-ready is choosing (with Speed Ramp on).
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
     LossyDngRatio lossyDngRatio = LossyDngRatio::R3;
