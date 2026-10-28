@@ -909,8 +909,7 @@ std::string_view webControlPageHtml()
       font-size: 11px;
     }
 
-    .ladder-list-head,
-    .ladder-coverage-head {
+    .ladder-list-head {
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
@@ -1133,89 +1132,6 @@ std::string_view webControlPageHtml()
     .ladder-icon-button:disabled {
       color: #52525b;
       cursor: default;
-    }
-
-    .ladder-draft-row {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .ladder-draft-row .subtle-note.dirty {
-      color: #fbbf24;
-    }
-
-    .ladder-draft-row .subtle-note.notice,
-    .ladder-messages .error {
-      color: #fca5a5;
-    }
-
-    .ladder-actions {
-      display: flex;
-      gap: 8px;
-    }
-
-    .ladder-messages {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      font-size: 13px;
-    }
-
-    .ladder-messages .warning,
-    .ladder-gap {
-      color: #fdba74;
-    }
-
-    .ladder-coverage {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 10px;
-      padding: 16px;
-    }
-
-    .ladder-bar {
-      display: flex;
-      height: 34px;
-      border-radius: 12px;
-      overflow: hidden;
-      background: #27272a;
-    }
-
-    .ladder-bar span {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #4ade80;
-      color: #09090b;
-      font-size: 13px;
-      font-weight: 700;
-      border-right: 2px solid #18181b;
-    }
-
-    .ladder-bar.off span {
-      background: #52525b;
-    }
-
-    .ladder-ticks {
-      position: relative;
-      height: 18px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .ladder-ticks span {
-      position: absolute;
-      top: 0;
-    }
-
-    .ladder-gap {
-      font-size: 13px;
     }
 
     .pill-grid.ladder-pair {
@@ -3633,14 +3549,6 @@ std::string_view webControlPageHtml()
                   <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
-              </div>
-              <div class="ladder-box ladder-coverage">
-                <div class="ladder-coverage-head">
-                  <span class="input-label" id="settingsModeLadderCoverageTitle">FPS coverage</span>
-                </div>
-                <div class="ladder-bar" id="settingsModeLadderBar" role="img"></div>
-                <div class="ladder-ticks" id="settingsModeLadderTicks"></div>
-                <div class="ladder-gap hidden" id="settingsModeLadderGap"></div>
               </div>
             </div>
 
@@ -6532,52 +6440,6 @@ std::string_view webControlPageHtml()
       state.ladderDraft.forEach((rung, index) => list.appendChild(createLadderRow(rung, index, rowStates[index])));
     }
 
-    function renderLadderCoverage(enabled) {
-      // The bar stops at the first resolution whose ceiling nobody knows (empty max, not probed).
-      const allRows = ladderRowStates(state.ladderDraft);
-      const openIndex = allRows.findIndex((row) => row.open);
-      const rowStates = openIndex < 0 ? allRows : allRows.slice(0, openIndex);
-      const covered = rowStates.reduce((top, row) => (row.problem ? top : Math.max(top, row.top)), 0);
-      // The scale ends at the highest ceiling among the resolutions; a gap shows when a max stops short of it.
-      const scaleMax = Math.max(1, rowStates.reduce((top, row) => (row.problem ? top : Math.max(top, row.ceiling)), 0));
-      setText("settingsModeLadderCoverageTitle", "FPS coverage, 1 to " + scaleMax);
-      const bar = document.getElementById("settingsModeLadderBar");
-      bar.parentElement.classList.toggle("hidden", !state.ladderServer || state.ladderDraft.length === 0);
-      bar.innerHTML = "";
-      bar.classList.toggle("off", !enabled);
-      const covers = [];
-      rowStates.forEach((row, index) => {
-        if (row.problem || row.top <= row.from)
-          return;
-        const segment = createDomElement("span", "", String(index + 1));
-        segment.style.width = ((row.top - row.from) / scaleMax * 100) + "%";
-        bar.appendChild(segment);
-        covers.push("resolution " + (index + 1) + " up to " + row.top);
-      });
-      bar.setAttribute("aria-label", "FPS coverage from 1 to " + scaleMax + ": " + covers.join(", "));
-      const ticks = document.getElementById("settingsModeLadderTicks");
-      ticks.innerHTML = "";
-      const values = [1];
-      rowStates.forEach((row) => {
-        if (!row.problem && values.indexOf(row.top) < 0)
-          values.push(row.top);
-      });
-      if (values.indexOf(scaleMax) < 0)
-        values.push(scaleMax);
-      values.forEach((value) => {
-        const tick = createDomElement("span", "", String(value));
-        tick.style.left = Math.min(100, value / scaleMax * 100) + "%";
-        tick.style.transform = value <= 1 ? "none" : (value >= scaleMax ? "translateX(-100%)" : "translateX(-50%)");
-        ticks.appendChild(tick);
-      });
-      const gap = openIndex >= 0
-        ? "The bar stops at Resolution " + (openIndex + 1) + ": its ceiling is unknown here. Core checks it."
-        : (enabled && state.ladderDraft.length > 0 && covered < scaleMax
-          ? "Above " + covered + " fps no resolution can run: FPS stops at " + covered + ". Add a resolution or raise a max." : "");
-      setText("settingsModeLadderGap", gap);
-      document.getElementById("settingsModeLadderGap").classList.toggle("hidden", gap === "");
-    }
-
     // Activated sensor modes: the probe's pool in collapsible groups, one column; Add puts a mode
     // at the end of the draft.
     function renderSensorModes() {
@@ -6675,7 +6537,6 @@ std::string_view webControlPageHtml()
       if (index >= 0) {
         // On the ladder: its number, and Remove (same list, same rules as the × on its row).
         const actions = createDomElement("div", "ladder-pool-actions");
-        actions.appendChild(createDomElement("span", "ladder-pool-number", "Resolution " + (index + 1)));
         const remove = createDomElement("button", "ladder-add remove", "Remove");
         remove.type = "button";
         remove.disabled = locked;
@@ -6753,7 +6614,6 @@ std::string_view webControlPageHtml()
       }
 
       document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
-      renderLadderCoverage(enabled);
     }
 
     async function setModeLadderEnabled(enabled) {
