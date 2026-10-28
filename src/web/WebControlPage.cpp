@@ -943,14 +943,25 @@ std::string_view webControlPageHtml()
       color: #d4d4d8;
     }
 
-    .ladder-fps-chip {
+    .ladder-transition .ladder-fps-input {
       flex: 0 0 auto;
-      padding: 4px 12px;
+      width: 84px;
+      min-height: 40px;
       border-radius: 999px;
-      background: #27272a;
-      color: #f4f4f5;
+      text-align: center;
       font-size: 15px;
       font-weight: 700;
+    }
+
+    .ladder-transition .ladder-fps-input.problem {
+      border-color: var(--danger);
+    }
+
+    .ladder-fps-unit {
+      flex: 0 0 auto;
+      margin-left: -4px;
+      font-weight: 700;
+      color: #f4f4f5;
     }
 
     .ladder-transition svg {
@@ -6391,30 +6402,6 @@ std::string_view webControlPageHtml()
       const rate = megabytes * rowState.top;
       const item = createDomElement("div", "ladder-item");
 
-      if (index > 0) {
-        const above = draft[index - 1];
-        const classChange = ladderClassName(above) !== ladderClassName(rung) || above.bits !== rung.bits;
-        const sizeChange = above.width !== rung.width || above.height !== rung.height;
-        const parts = [];
-        if (classChange)
-          parts.push(ladderClassName(above) + " " + above.bits + "-bit → " + ladderClassName(rung) + " " + rung.bits + "-bit");
-        if (sizeChange)
-          parts.push("picture " + ladderSizeText(above) + " → " + ladderSizeText(rung));
-        if (above.comp !== rung.comp)
-          parts.push(ladderCompression(above.comp).label + " → " + ladderCompression(rung.comp).label);
-        if (!parts.length)
-          parts.push("same class and size");
-        const stop = rowState.after ? "the max of Resolution " + rowState.after : String(rowState.from);
-        const inTake = classChange || sizeChange
-          ? "Switches between takes only, with a short preview blink; in a take FPS stops at " + stop + "."
-          : "Same mode: a ramp crosses without a switch, in a take too.";
-        const transition = createDomElement("div", "ladder-transition");
-        transition.innerHTML = ladderIcons.down;
-        transition.appendChild(createDomElement("span", "ladder-fps-chip", rowState.after ? "Max of Resolution " + rowState.after : stop + " fps"));
-        transition.appendChild(createDomElement("span", "", "Above it: " + parts.join(", ") + ". " + inTake));
-        item.appendChild(transition);
-      }
-
       const row = createDomElement("div", "ladder-row");
       const main = createDomElement("div", "ladder-row-main");
       const handle = createDomElement("span", "ladder-handle");
@@ -6441,26 +6428,6 @@ std::string_view webControlPageHtml()
       row.appendChild(main);
 
       const controls = createDomElement("div", "ladder-row-controls");
-      const thrField = createDomElement("div", "field-stack ladder-thr");
-      const thrLabel = createDomElement("label", "input-label", "Max (fps)");
-      thrLabel.htmlFor = "settingsModeLadderThr" + index;
-      const thrInput = createDomElement("input", "settings-input" + (rowState.problem ? " problem" : ""));
-      thrInput.id = "settingsModeLadderThr" + index;
-      thrInput.type = "number";
-      thrInput.inputMode = "numeric";
-      thrInput.step = "1";
-      thrInput.min = String(rowState.from + 1);
-      thrInput.max = String(ceiling);
-      thrInput.placeholder = known ? String(ceiling) : "";
-      thrInput.value = rung.thr;
-      thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
-      thrField.appendChild(thrLabel);
-      thrField.appendChild(thrInput);
-      thrField.appendChild(createDomElement("span", "ladder-note", !known
-        ? "Ceiling: Core checks it"
-        : "Ceiling " + ceiling + (rung.comp === "lossless_jpeg" && ceiling < uncompressedCeiling ? " (lossless cap)" : " (sensor mode)")));
-      controls.appendChild(thrField);
-
       const compField = createDomElement("div", "field-stack ladder-comp");
       const compLabel = createDomElement("label", "input-label", "Compression");
       compLabel.htmlFor = "settingsModeLadderComp" + index;
@@ -6501,6 +6468,48 @@ std::string_view webControlPageHtml()
       controls.appendChild(buttons);
       row.appendChild(controls);
       item.appendChild(row);
+
+      // The max of this resolution, between it and the next one: the FPS where the next takes over
+      // (after the last one, where FPS stops). Empty = the ceiling.
+      const below = draft[index + 1];
+      const line = createDomElement("div", "ladder-transition");
+      line.innerHTML = ladderIcons.down;
+      const thrInput = createDomElement("input", "settings-input ladder-fps-input" + (rowState.problem ? " problem" : ""));
+      thrInput.id = "settingsModeLadderThr" + index;
+      thrInput.type = "number";
+      thrInput.inputMode = "numeric";
+      thrInput.step = "1";
+      thrInput.min = String(rowState.from + 1);
+      thrInput.max = String(ceiling);
+      thrInput.placeholder = known ? String(ceiling) : "";
+      thrInput.value = rung.thr;
+      thrInput.title = "Max FPS of Resolution " + (index + 1) + ": the highest FPS it runs";
+      thrInput.setAttribute("aria-label", "Max FPS of Resolution " + (index + 1));
+      thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
+      line.appendChild(thrInput);
+      line.appendChild(createDomElement("span", "ladder-fps-unit", "fps"));
+      const ceilingText = !known ? "Ceiling: Core checks it."
+        : "Ceiling " + ceiling + (rung.comp === "lossless_jpeg" && ceiling < uncompressedCeiling ? " (lossless cap)" : " (sensor mode)") + ".";
+      let aboveText = "Above it no resolution runs: FPS stops here.";
+      if (below) {
+        const parts = [];
+        const classChange = ladderClassName(below) !== ladderClassName(rung) || below.bits !== rung.bits;
+        const sizeChange = below.width !== rung.width || below.height !== rung.height;
+        if (classChange)
+          parts.push(ladderClassName(rung) + " " + rung.bits + "-bit → " + ladderClassName(below) + " " + below.bits + "-bit");
+        if (sizeChange)
+          parts.push("picture " + ladderSizeText(rung) + " → " + ladderSizeText(below));
+        if (rung.comp !== below.comp)
+          parts.push(ladderCompression(rung.comp).label + " → " + ladderCompression(below.comp).label);
+        if (!parts.length)
+          parts.push("same class and size");
+        const stop = rowState.open ? "the max of Resolution " + (index + 1) : String(rowState.top);
+        aboveText = "Above it: " + parts.join(", ") + ". " + (classChange || sizeChange
+          ? "Switches between takes only, with a short preview blink; in a take FPS stops at " + stop + "."
+          : "Same mode: a ramp crosses without a switch, in a take too.");
+      }
+      line.appendChild(createDomElement("span", "", ceilingText + " " + aboveText));
+      item.appendChild(line);
       return item;
     }
 
