@@ -9528,7 +9528,7 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
     next.fps = effectiveFps;
     if (rung) {   // T34: the FPS moved the camera to another rung; one reconfigure applies the whole mode
         std::cerr << "ApertarCore mode ladder: " << ladder::label({rung->resolution.width, rung->resolution.height,
-                                                                    rung->rawBitDepth, rung->clearHdr, 0.0})
+                                                                    rung->rawBitDepth, rung->clearHdr, 0.0, ""})
                   << " at " << effectiveFps << " fps\n";
         next.resolution = rung->resolution;
         next.rawBitDepth = rung->rawBitDepth;
@@ -9792,7 +9792,7 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return true;
     }
     const auto text = [](const CaptureSettings &s) {
-        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, 0.0 });
+        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, 0.0, "" });
     };
     if (wanted.resolution.width == settings.resolution.width && wanted.resolution.height == settings.resolution.height &&
         wanted.rawBitDepth == settings.rawBitDepth && wanted.clearHdr == settings.clearHdr) {
