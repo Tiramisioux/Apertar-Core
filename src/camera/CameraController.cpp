@@ -8430,7 +8430,7 @@ private:
         const int nominal = std::max(1, static_cast<int>(std::llround(baseFps)));
         auto timecodeAtBase = [nominal](uint64_t frame) {
             const uint64_t seconds = frame / static_cast<uint64_t>(nominal);
-            char text[16];
+            char text[48]; // wide enough for four unsigned values, so -Wformat-truncation stays quiet
             std::snprintf(text, sizeof(text), "%02u:%02u:%02u:%02u",
                           static_cast<unsigned>((seconds / 3600) % 24), static_cast<unsigned>((seconds / 60) % 60),
                           static_cast<unsigned>(seconds % 60), static_cast<unsigned>(frame % static_cast<uint64_t>(nominal)));
