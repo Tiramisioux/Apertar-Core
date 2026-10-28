@@ -1297,6 +1297,12 @@ std::string_view webControlPageHtml()
       font-weight: 600;
     }
 
+    .ladder-pool-why {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #fbbf24;
+    }
+
     .ladder-pool-meta {
       margin-top: 3px;
       font-size: 12px;
@@ -1320,6 +1326,26 @@ std::string_view webControlPageHtml()
     .ladder-add:disabled {
       opacity: 0.4;
       cursor: default;
+    }
+
+    .ladder-pool-actions {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .ladder-pool-number {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .ladder-add.remove {
+      background: transparent;
+      border-color: rgba(252, 165, 165, 0.5);
+      color: #fca5a5;
     }
 
     .ladder-add.on-ladder {
@@ -6694,6 +6720,23 @@ std::string_view webControlPageHtml()
       });
     }
 
+    // Where a new mode fits: the end, else the last place where the maxes still rise (a mode with a
+    // lower ceiling goes in front of the faster ones). {list} when it fits, else {problem}.
+    function ladderWithMode(draft, candidate) {
+      if (draft.length >= ladderMaxResolutions)
+        return { problem: "At most " + ladderMaxResolutions + " resolutions." };
+      let firstProblem = "";
+      for (let position = draft.length; position >= 0; position--) {
+        const list = draft.slice(0, position).concat([candidate], draft.slice(position));
+        const problem = ladderOrderProblem(list) || ladderDraftProblem(normalizeLadderDraft(list));
+        if (!problem)
+          return { list };
+        if (!firstProblem)
+          firstProblem = problem;
+      }
+      return { problem: firstProblem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") };
+    }
+
     function createSensorModeTile(entry, draft) {
       const mode = { width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits), clear_hdr: entry.clear_hdr === true };
       const name = ladderModeName(mode);
@@ -6701,11 +6744,10 @@ std::string_view webControlPageHtml()
       const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
       const crop = ladderCrop(mode);
       const candidate = Object.assign({}, mode, { comp: "none", thr: "" });
+      const placed = index >= 0 || ceiling <= 0 ? null : ladderWithMode(draft, candidate);
       const why = index >= 0 ? ""
         : (ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
-          : (draft.length >= ladderMaxResolutions ? "At most " + ladderMaxResolutions + " resolutions."
-            : ladderDraftProblem(normalizeLadderDraft(draft.concat([candidate])))
-              .replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ")));
+          : (placed.problem || ""));
       const item = createDomElement("div", "ladder-pool-item" + (index >= 0 ? "" : " inactive"));
       const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
       frame.setAttribute("aria-hidden", "true");
@@ -6715,14 +6757,27 @@ std::string_view webControlPageHtml()
       text.appendChild(createDomElement("div", "ladder-pool-meta", ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · "
         + ladderClassName(mode) + " · " + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
         + (crop.cropIn ? " · crop in" : "") + " · " + ladderFrameMB(mode, "none").toFixed(1) + " MB/frame"));
+      if (why)
+        text.appendChild(createDomElement("div", "ladder-pool-why", why));
       item.appendChild(text);
-      const add = createDomElement("button", "ladder-add" + (index >= 0 ? " on-ladder" : ""), index >= 0 ? "Resolution " + (index + 1) : "Add");
+      if (index >= 0) {
+        // On the ladder: its number, and Remove (same list, same rules as the × on its row).
+        const actions = createDomElement("div", "ladder-pool-actions");
+        actions.appendChild(createDomElement("span", "ladder-pool-number", "Resolution " + (index + 1)));
+        const remove = createDomElement("button", "ladder-add remove", "Remove");
+        remove.type = "button";
+        remove.setAttribute("aria-label", "Remove " + name + " from the ladder");
+        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), ""));
+        actions.appendChild(remove);
+        item.appendChild(actions);
+        return item;
+      }
+      const add = createDomElement("button", "ladder-add", "Add");
       add.type = "button";
-      add.disabled = index >= 0 || why !== "";
+      add.disabled = why !== "";
       add.title = why;
-      add.setAttribute("aria-label", index >= 0 ? name + " is resolution " + (index + 1)
-        : "Add " + name + " to the ladder" + (why ? ": " + why : ""));
-      add.addEventListener("click", () => commitLadderDraft(draft.concat([candidate]), ""));
+      add.setAttribute("aria-label", "Add " + name + " to the ladder" + (why ? ": " + why : ""));
+      add.addEventListener("click", () => commitLadderDraft(placed.list, ""));
       item.appendChild(add);
       return item;
     }
