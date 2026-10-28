@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <vector>
 #include "ProresColorProfile.hpp"
 
 namespace apertar {
