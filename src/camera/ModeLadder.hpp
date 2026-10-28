@@ -236,9 +236,9 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling);
     };
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
-        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"rungs_text\":" + quote(rungsText(l.rungs)) +
-        ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_rung\":" + std::to_string(running + 1) +
-        ",\"rungs\":[";
+        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(rungsText(l.rungs)) +
+        ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_resolution\":" + std::to_string(running + 1) +
+        ",\"resolutions\":[";
     double from = 0.0;  // a rung serves (from, ceiling]
     for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
         const double ceiling = rungCeiling(l.rungs[i], s[i]);
@@ -258,7 +258,7 @@ inline std::string fileText(const Ladder &l)
     return "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Record > Mode Ladder).\n"
            "enabled=" + std::string(l.enabled ? "true" : "false") + "\n"
            "ramp_ready=" + std::string(l.rampReady ? "true" : "false") + "\n"
-           "rungs=" + rungsText(l.rungs) + "\n";
+           "resolutions=" + rungsText(l.rungs) + "\n";
 }
 
 inline Ladder parseFile(const std::string &text)
@@ -273,7 +273,7 @@ inline Ladder parseFile(const std::string &text)
         const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
         if (key == "enabled") l.enabled = value == "true";
         else if (key == "ramp_ready") l.rampReady = value == "true";
-        else if (key == "rungs" && !parseRungs(value, l.rungs, error)) l.rungs.clear();
+        else if ((key == "resolutions" || key == "rungs") && !parseRungs(value, l.rungs, error)) l.rungs.clear();   // "rungs": the first name
     }
     if (l.rungs.empty())
         l.enabled = false;  // a broken file never switches the camera

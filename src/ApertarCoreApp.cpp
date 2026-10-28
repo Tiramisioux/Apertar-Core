@@ -191,7 +191,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_max\":" << settings.fpsMax
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
-        << ",\"ladder_rung\":" << settings.ladderRung
+        << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
@@ -8235,7 +8235,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_max\":" << jsonNumber(settings.fpsMax, 3)
         << ",\"fps_take_max\":" << jsonNumber(settings.fpsTakeMax, 3)
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
-        << ",\"ladder_rung\":" << settings.ladderRung
+        << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
@@ -10971,7 +10971,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, "\"mode_ladder\":" + camera_.modeLadderJson());
 
     if (command.name == "set_mode_ladder") {
-        // T34: any of rungs (WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], comma-separated), enabled, ramp_ready
+        // T34: any of resolutions (WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], comma-separated), enabled, ramp_ready
         // (true|false); dry_run=true only validates and returns the errors and warnings.
         const auto boolField = [&command](const char *name) -> std::optional<bool> {
             const auto value = command.string(name);
@@ -10981,7 +10981,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         };
         const bool dryRun = boolField("dry_run").value_or(false);
         std::string json, error;
-        if (!camera_.setModeLadder(command.string("rungs"), boolField("enabled"), boolField("ramp_ready"), dryRun,
+        if (!camera_.setModeLadder(command.string("resolutions"), boolField("enabled"), boolField("ramp_ready"), dryRun,
                                    &json, &error))
             return errorReply(command.id, error);
         return okReply(command.id, "\"mode_ladder\":" + json + (dryRun ? "" : "," + settingsBody(camera_.settings())));

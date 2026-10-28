@@ -155,7 +155,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_max\":" << settings.fpsMax
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
-        << ",\"ladder_rung\":" << settings.ladderRung
+        << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
