@@ -192,6 +192,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
+        << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -748,6 +749,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.fpsSpeedRamp = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_keep_exposure")
                 settings.fpsSpeedRampKeepExposure = (value == "true" || value == "1");
+            else if (key == "fps_speed_ramp_stretch_audio")
+                settings.fpsSpeedRampStretchAudio = (value == "true" || value == "1");
             else if (key == "af_mode")
                 settings.autofocusMode = autofocusModeFromString(value);
             else if (key == "af_range")
@@ -823,6 +826,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
+    output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
     output << prefix << "af_range=" << toString(s.autofocusRange) << '\n';
     output << prefix << "af_speed=" << toString(s.autofocusSpeed) << '\n';
@@ -2573,6 +2577,38 @@ bool isLosslessTwoKCapture(const CaptureSettings &settings, SensorFamily sensorF
 
 // The ISO that keeps the sensor on the gain code it is measured at. The gain-to-code step rounds
 // down (0.3 dB per code), so ISO 794 for a measured 7.94x lands one code lower; rounding up keeps it.
+// Sample rate from a WAV's fmt chunk (Core's WAVs carry a bext chunk first); 0 if unreadable.
+uint32_t wavSampleRate(const std::filesystem::path &path)
+{
+    std::ifstream input(path, std::ios::binary);
+    char riff[12] = {};
+    if (!input.read(riff, sizeof(riff)) || std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(riff + 8, "WAVE", 4) != 0)
+        return 0;
+    char header[8] = {};
+    while (input.read(header, sizeof(header))) {
+        uint32_t size = 0;
+        std::memcpy(&size, header + 4, sizeof(size));
+        if (std::memcmp(header, "fmt ", 4) == 0) {
+            char fmt[8] = {};
+            if (size < 8 || !input.read(fmt, sizeof(fmt)))
+                return 0;
+            uint32_t rate = 0;
+            std::memcpy(&rate, fmt + 4, sizeof(rate));
+            return rate;
+        }
+        input.seekg(static_cast<std::streamoff>(size + (size & 1u)), std::ios::cur);
+    }
+    return 0;
+}
+
+std::string shellQuote(const std::string &text)
+{
+    std::string quoted = "'";
+    for (char ch : text)
+        quoted += ch == '\'' ? std::string("'\\''") : std::string(1, ch);
+    return quoted + "'";
+}
+
 uint32_t isoForMeasuredGain(float gain)
 {
     return static_cast<uint32_t>(std::clamp(static_cast<long>(std::ceil(gain * 100.0f)), 50l, 51200l));
@@ -6543,7 +6579,11 @@ public:
             recordingBaseFps_ = settings.fps;
             rampMinFps_ = settings.fps;
             rampMaxFps_ = settings.fps;
+            rampFirstSensorUs_ = 0;
+            rampFrameCount_ = 0;
         }
+        rampStretchAudio_ = settings.fpsSpeedRamp && settings.fpsSpeedRampStretchAudio;
+        pendingAudioStretch_.reset();
         rampFirstWallClockUs_ = 0;
         rampLastTimestampUs_ = 0;
         haveLastRecordingSensorTimestamp_ = false;
@@ -6710,6 +6750,10 @@ public:
         writeFpsRampLog(mediumGone);
         timed("prores_ms", [&] { proresRecorder_.stop(); });
         timed("audio_ms", [&] { audioRecorder_.stop(/*finalize=*/!mediumGone); });
+        if (!mediumGone)
+            launchAudioStretch();
+        else
+            pendingAudioStretch_.reset();
         if (mediumGone)
             std::cerr << "ApertarCore recording stop: dead-medium stages" << stageTimes.str() << "\n";
         haveLastRecordingSensorTimestamp_ = false;
@@ -8486,6 +8530,9 @@ private:
         const int64_t deltaUs = rampLastTimestampUs_ > 0 ? timestampUs - rampLastTimestampUs_ : 0;
         rampLastTimestampUs_ = timestampUs;
         std::lock_guard<std::mutex> lock(rampMutex_);
+        if (frameIndex == 0 || rampFirstSensorUs_ == 0)
+            rampFirstSensorUs_ = timestampUs;
+        rampFrameCount_ = std::max<uint64_t>(rampFrameCount_, frameIndex + 1);
         const size_t stamped = std::min(rampEventsStamped_, rampEvents_.size());
         for (size_t i = 0; i < stamped; ++i) {
             FpsRampEvent &event = rampEvents_[i];
@@ -8507,6 +8554,7 @@ private:
                 older.seen = (j == i);
                 older.appliedFrameIndex = frameIndex;
                 older.frameUs = frameUs;
+                older.appliedOffsetUs = timestampUs - rampFirstSensorUs_;
                 if (j != i) ++superseded;
             }
             std::cerr << "ApertarCore fps ramp: frame=" << frameIndex << " frame_us=" << frameUs
@@ -8523,10 +8571,12 @@ private:
     {
         std::vector<FpsRampEvent> events;
         double baseFps = 0.0, minFps = 0.0, maxFps = 0.0;
+        uint64_t frames = 0;
         {
             std::lock_guard<std::mutex> lock(rampMutex_);
             const size_t stamped = std::min(rampEventsStamped_, rampEvents_.size());
             events.assign(rampEvents_.begin(), rampEvents_.begin() + static_cast<std::ptrdiff_t>(stamped));
+            frames = rampFrameCount_;
             baseFps = recordingBaseFps_;
             minFps = rampMinFps_;
             maxFps = rampMaxFps_;
@@ -8563,7 +8613,7 @@ private:
         out << "# Apertar speed ramp log. Frames are numbered by count; the clip's timeline rate is base_fps.\n"
             << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n"
             << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
-            << "# requested_frame applied_frame frame_us seen tc_at_base boot_us from_fps to_fps shutter_us\n";
+            << "# requested_frame applied_frame frame_us seen tc_at_base boot_us from_fps to_fps shutter_us applied_us\n";
         for (const FpsRampEvent &event : events) {
             out << event.frameIndex << ' ';
             if (event.applied)
@@ -8572,8 +8622,99 @@ private:
             else
                 out << "- - - -";
             out << ' ' << event.bootUs << ' ' << event.fromFps << ' ' << event.toFps << ' '
-                << event.shutterUs << '\n';
+                << event.shutterUs << ' ';
+            if (event.applied)
+                out << event.appliedOffsetUs << '\n';
+            else
+                out << "-\n";
         }
+        if (rampStretchAudio_ && baseFps > 0.0 && frames > 0) {
+            PendingAudioStretch job;
+            job.folder = folder;
+            job.baseFps = baseFps;
+            job.frames = frames;
+            for (const FpsRampEvent &event : events) {
+                if (event.applied && event.seen &&
+                    (job.points.empty() || event.appliedFrameIndex > job.points.back().first))
+                    job.points.emplace_back(event.appliedFrameIndex, event.appliedOffsetUs);
+            }
+            if (!job.points.empty())
+                pendingAudioStretch_ = std::move(job);
+        }
+    }
+
+    // Experimental (request 19): Rubber Band writes <clip>_stretched.wav, the clip's WAV
+    // conformed to its timeline: each ramp segment slowed or sped by base_fps over its capture
+    // rate, pitch kept. A key-frame map pins every applied change to its frame's place on the
+    // timeline, so the stretch cannot drift (tempo commands in ffmpeg drift 20-50 ms per
+    // change, measured 2026-10-28). Runs detached at low priority after the take; the
+    // real-time WAV stays as it is. Needs the rubberband-cli package.
+    void launchAudioStretch()
+    {
+        if (!pendingAudioStretch_)
+            return;
+        const PendingAudioStretch job = std::move(*pendingAudioStretch_);
+        pendingAudioStretch_.reset();
+        const std::filesystem::path folder(job.folder);
+        const std::string clip = folder.filename().string();
+        const std::filesystem::path wav = folder / (clip + ".wav");
+        const uint32_t sampleRate = wavSampleRate(wav);
+        if (sampleRate == 0) {
+            std::cerr << "ApertarCore audio stretch (experimental): no readable WAV at " << wav << "\n";
+            return;
+        }
+        const std::filesystem::path map = std::filesystem::temp_directory_path() / ("apertar-stretch-" + clip + ".map");
+        {
+            std::ofstream out(map, std::ios::trunc);
+            if (!out) {
+                std::cerr << "ApertarCore audio stretch (experimental): could not write " << map << "\n";
+                return;
+            }
+            out << "0 0\n";
+            int64_t lastSource = 0, lastTarget = 0;
+            for (const auto &[frame, offsetUs] : job.points) {
+                const int64_t source = std::llround(static_cast<double>(offsetUs) * sampleRate / 1000000.0);
+                const int64_t target = std::llround(static_cast<double>(frame) * sampleRate / job.baseFps);
+                if (source <= lastSource || target <= lastTarget)
+                    continue;
+                out << source << ' ' << target << '\n';
+                lastSource = source;
+                lastTarget = target;
+            }
+        }
+        const std::filesystem::path partial = folder / (clip + "_stretched.partial.wav");
+        const std::filesystem::path stretched = folder / (clip + "_stretched.wav");
+        std::ostringstream duration;
+        duration << std::fixed << std::setprecision(6) << static_cast<double>(job.frames) / job.baseFps;
+        const std::string command =
+            "nice -n 15 rubberband --fine --quiet -D " + duration.str() + " --timemap " + shellQuote(map.string()) + ' ' +
+            shellQuote(wav.string()) + ' ' + shellQuote(partial.string()) + " >/dev/null 2>&1"
+            " && mv " + shellQuote(partial.string()) + ' ' + shellQuote(stretched.string()) +
+            " && echo 'ApertarCore audio stretch (experimental): wrote '" + shellQuote(stretched.string()) + " >&2"
+            " || { rm -f " + shellQuote(partial.string()) +
+            "; echo 'ApertarCore audio stretch (experimental) failed for '" + shellQuote(wav.string()) +
+            "'; is rubberband-cli installed?' >&2; }; rm -f " + shellQuote(map.string());
+        std::cerr << "ApertarCore audio stretch (experimental): " << job.points.size() << " key frames, "
+                  << job.frames << " frames at " << job.baseFps << " fps -> " << duration.str() << " s\n";
+        // Detached: the grandchild belongs to init, so nothing has to wait for it.
+        const pid_t child = ::fork();
+        if (child == 0) {
+            if (::fork() == 0) {
+                ::setsid();
+                const int nullFd = ::open("/dev/null", O_RDWR);
+                if (nullFd >= 0) {
+                    ::dup2(nullFd, STDIN_FILENO);
+                    ::dup2(nullFd, STDOUT_FILENO);
+                    ::close(nullFd);
+                }
+                ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char *>(nullptr));
+                _exit(127);
+            }
+            _exit(0);
+        }
+        if (child > 0)
+            while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+            }
     }
 
     void trackRecordingCadence(int64_t timestampUs, int64_t frameDurationUs)
@@ -8961,7 +9102,18 @@ private:
         bool seen = false;             // this period itself was seen on a frame
         uint64_t appliedFrameIndex = 0;
         int64_t frameUs = 0;           // that frame's FrameDuration
+        int64_t appliedOffsetUs = 0;   // that frame's sensor time after the take's first frame
     };
+    // Experimental audio stretch (request 19): queued by writeFpsRampLog(), started once the
+    // WAV is finalised (launchAudioStretch()). Stop path only.
+    struct PendingAudioStretch {
+        std::string folder;
+        double baseFps = 0.0;
+        uint64_t frames = 0;
+        std::vector<std::pair<uint64_t, int64_t>> points; // applied frame, its sensor offset
+    };
+    std::optional<PendingAudioStretch> pendingAudioStretch_;
+    bool rampStretchAudio_ = false;     // the take's setting, taken at start
     std::mutex rampMutex_;
     std::vector<FpsRampEvent> rampEvents_;
     size_t rampEventsStamped_ = 0;
@@ -8969,6 +9121,8 @@ private:
     double recordingBaseFps_ = 0.0;
     double rampMinFps_ = 0.0;
     double rampMaxFps_ = 0.0;
+    int64_t rampFirstSensorUs_ = 0;     // first recorded frame's sensor time (WAV time 0)
+    uint64_t rampFrameCount_ = 0;
     uint64_t rampFirstWallClockUs_ = 0;   // completion thread only
     int64_t rampLastTimestampUs_ = 0;     // completion thread only
     std::atomic<uint64_t> h264FrameCounter_{0};
@@ -9494,6 +9648,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
             const bool fpsPhaseLock = next.fpsPhaseLock;
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
+            const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
             const double conformFps = next.conformFps;
             next = saved->second;
             next.tuningFile = tuningFile;
@@ -9501,6 +9656,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.exposureMetering = metering;
             next.fpsSpeedRamp = fpsSpeedRamp;
             next.fpsSpeedRampKeepExposure = fpsSpeedRampKeepExposure;
+            next.fpsSpeedRampStretchAudio = fpsSpeedRampStretchAudio;
             next.conformFps = conformFps;
             next.fpsPhaseLock = fpsPhaseLock;
             if (format == RecordingFormat::Cdng)
@@ -9899,7 +10055,7 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     return applySettingsLocked(next, false);
 }
 
-bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure)
+bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (recording_ && enabled != settings_.fpsSpeedRamp) {
@@ -9912,6 +10068,7 @@ bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure)
     CaptureSettings next = settings_;
     next.fpsSpeedRamp = enabled;
     next.fpsSpeedRampKeepExposure = keepExposure;
+    next.fpsSpeedRampStretchAudio = stretchAudio;
     return applySettingsLocked(next, false);
 }
 

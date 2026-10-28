@@ -85,7 +85,7 @@ public:
     bool setTimecodeMode(TimecodeMode mode);
     bool setConformFps(double fps);
     bool setFpsPhaseLock(bool enabled);
-    bool setFpsSpeedRamp(bool enabled, bool keepExposure);
+    bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio);
     bool setAutofocusMode(AutofocusMode mode);
     bool setAutofocusRange(AutofocusRange range);
     bool setAutofocusSpeed(AutofocusSpeed speed);

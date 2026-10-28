@@ -218,6 +218,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
+        << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -6808,6 +6809,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addString("cameraIso", settings.isoAuto ? "Auto" : formatPresetIso(settings.iso));
     addBool("cameraFpsSpeedRamp", settings.fpsSpeedRamp);
     addString("cameraFpsSpeedRampShutter", settings.fpsSpeedRampKeepExposure ? "exposure" : "angle");
+    addString("cameraFpsSpeedRampAudio", settings.fpsSpeedRampStretchAudio ? "stretch" : "real");
     addBool("cameraFpsPhaseLock", settings.fpsPhaseLock);
     addString("cameraTimecodeMode", toString(settings.timecodeMode));
     addNumberString("cameraConformFps", jsonNumber(settings.conformFps, 3));
@@ -8069,6 +8071,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
+        << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -9901,7 +9904,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         // shutter: "angle" (default, motion blur constant) or "exposure" (brightness constant).
         const auto shutter = command.string("shutter");
         const bool keepExposure = shutter ? (*shutter == "exposure") : camera_.settings().fpsSpeedRampKeepExposure;
-        return camera_.setFpsSpeedRamp(*enabled == "true" || *enabled == "1", keepExposure)
+        // audio: "real" (the WAV only) or "stretch" (experimental: also the WAV conformed to the clip).
+        const auto audio = command.string("audio");
+        const bool stretchAudio = audio ? (*audio == "stretch") : camera_.settings().fpsSpeedRampStretchAudio;
+        return camera_.setFpsSpeedRamp(*enabled == "true" || *enabled == "1", keepExposure, stretchAudio)
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
     }
@@ -10870,6 +10876,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             if (*value != "angle" && *value != "exposure")
                 return errorReply(command.id, "Invalid preset speed-ramp shutter.");
             presetSettings.fpsSpeedRampKeepExposure = *value == "exposure";
+        }
+        if (const auto value = command.string("cameraFpsSpeedRampAudio")) {
+            if (*value != "real" && *value != "stretch")
+                return errorReply(command.id, "Invalid preset speed-ramp audio.");
+            presetSettings.fpsSpeedRampStretchAudio = *value == "stretch";
         }
         if (const auto value = command.string("cameraFpsPhaseLock"))
             presetSettings.fpsPhaseLock = parseUiSettingsBool(*value, presetSettings.fpsPhaseLock);

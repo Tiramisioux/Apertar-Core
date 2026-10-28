@@ -2929,6 +2929,11 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
                 <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
               </div>
+              <div class="field-stack">
+                <span class="input-label">Audio (experimental)</span>
+                <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
+                <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
+              </div>
               <div class="settings-field-grid">
                 <label class="field-stack">
                   <span class="input-label">Ramp to</span>
@@ -5155,6 +5160,18 @@ std::string_view webControlPageHtml()
       ], keepExposure ? "exposure" : "angle", async (value) => {
         try {
           await sendCommand({ cmd: "set_fps_speed_ramp", enabled: "true", shutter: value });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      const stretchAudio = snapshot.fps_speed_ramp_stretch_audio !== false;
+      buildOptionButtons("settingsSpeedRampAudioOptions", [
+        { label: "Real time", value: "real", enabled: enabled && !recording },
+        { label: "Stretched", value: "stretch", enabled: enabled && !recording },
+      ], stretchAudio ? "stretch" : "real", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: "true", audio: value });
         } catch (error) {
           showToast(error.message, true);
         }
@@ -8886,6 +8903,8 @@ std::string_view webControlPageHtml()
         snapshot.fps_speed_ramp = source.fps_speed_ramp;
       if (typeof source.fps_speed_ramp_keep_exposure === "boolean")
         snapshot.fps_speed_ramp_keep_exposure = source.fps_speed_ramp_keep_exposure;
+      if (typeof source.fps_speed_ramp_stretch_audio === "boolean")
+        snapshot.fps_speed_ramp_stretch_audio = source.fps_speed_ramp_stretch_audio;
     }
 
     function applyCommandSnapshotPatch(payload, result, optimistic) {
@@ -8924,6 +8943,8 @@ std::string_view webControlPageHtml()
           snapshot.fps_speed_ramp = boolValue;
           if (typeof payload.shutter === "string")
             snapshot.fps_speed_ramp_keep_exposure = payload.shutter === "exposure";
+          if (typeof payload.audio === "string")
+            snapshot.fps_speed_ramp_stretch_audio = payload.audio === "stretch";
           break;
         case "set_shutter_us":
           if (isFiniteNumber(payload.value)) {
@@ -10828,7 +10849,7 @@ std::string_view webControlPageHtml()
         "wifiOrder", "infoOrder", "sidebarOrder", "favoritesOrder",
         "cameraRawBitDepth",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
-        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter",
+        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio",
       ];
 
       for (const key of allowedKeys) {

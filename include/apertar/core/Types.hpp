@@ -134,6 +134,9 @@ struct CaptureSettings {
     // true: an FPS change keeps the exposure time (brightness); false: keeps the
     // shutter angle (motion blur) through Core's existing rescale.
     bool fpsSpeedRampKeepExposure = false;
+    // Experimental: after a ramped take also write <clip>_stretched.wav, the WAV conformed to
+    // the clip's timeline with its pitch kept (Rubber Band). The real-time WAV is always kept.
+    bool fpsSpeedRampStretchAudio = true;
     uint32_t iso = 800;
     bool isoAuto = false;
     bool isoAutoAfterClearHdr = false; // Clear HDR stopped auto ISO; SDR turns it back on.
