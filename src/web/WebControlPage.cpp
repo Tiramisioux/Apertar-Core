@@ -3048,7 +3048,6 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Value Lists</h3>
-                  <p class="settings-card-copy">What the pickers, dials and buttons step through. A value above what the current mode allows stays in the list, greyed out; the camera offers its limit instead, in green. Free steps the dials by the increment between the list's lowest and highest value.</p>
                 </div>
               </div>
               <div class="field-stack" id="settingsValueLists"></div>
