@@ -3630,7 +3630,7 @@ std::string_view webControlPageHtml()
               <div class="field-stack">
                 <div class="ladder-list-head">
                   <span class="input-label">Resolutions array</span>
-                  <span class="ladder-note">Drag the handle, or use the arrows</span>
+                  <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
@@ -4989,7 +4989,6 @@ std::string_view webControlPageHtml()
       ladderSaveAgain: false,
       ladderRecordingSeen: null,
       ladderCheckTimer: 0,
-      ladderDrag: null,
       ladderSaving: false,
       ladderToggling: false,
       ladderFetching: false,
@@ -6052,7 +6051,40 @@ std::string_view webControlPageHtml()
         comp: ladderCompression(rung.compression).value,
         thr: Number(rung.threshold) > 0 ? String(Number(rung.threshold)) : "",
       }));
-      return server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
+      const result = server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
+      // A max that is the default of its place follows the place; any other one was set by hand.
+      result.forEach((rung, index) => {
+        const ceiling = ladderCeiling(rung);
+        rung.auto = rung.thr !== "" ? Number(rung.thr) === ladderDefaultMax(index) : ladderDefaultMax(index) >= ceiling;
+      });
+      return result;
+    }
+
+    // The default max of the n-th resolution: 25, 33, 50, then 25 more for each.
+    function ladderDefaultMax(index) {
+      return index < 3 ? [25, 33, 50][index] : 50 + 25 * (index - 2);
+    }
+
+    // Resolution 1 is the best picture (it serves the lowest FPS): Clear HDR first (16-bit, then
+    // 12-bit), then the larger picture, then the deeper one.
+    function ladderQualityCompare(a, b) {
+      if (a.clear_hdr !== b.clear_hdr)
+        return a.clear_hdr ? -1 : 1;
+      if (a.clear_hdr && a.bits !== b.bits)
+        return b.bits - a.bits;
+      const areaA = a.width * a.height;
+      const areaB = b.width * b.height;
+      return areaA !== areaB ? areaB - areaA : b.bits - a.bits;
+    }
+
+    // In quality order, with the default max on every row that was not set by hand.
+    function ladderArranged(list) {
+      return list.slice().sort(ladderQualityCompare).map((rung, index) => {
+        if (rung.auto === false)
+          return rung;
+        const fallback = ladderDefaultMax(index);
+        return Object.assign({}, rung, { auto: true, thr: fallback < ladderCeiling(rung) ? String(fallback) : "" });
+      });
     }
 
     // Core's text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
@@ -6318,8 +6350,9 @@ std::string_view webControlPageHtml()
     // Every local edit goes through here: refused (with the reason) when the result is illegal, else
     // saved on the camera a moment later. The ladder on screen is always the saved one.
     function commitLadderDraft(next, notice) {
-      const normalized = normalizeLadderDraft(next);
-      const problem = ladderOrderProblem(next) || ladderDraftProblem(normalized);
+      const arranged = ladderArranged(next);
+      const normalized = normalizeLadderDraft(arranged);
+      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalized);
       if (problem) {
         showToast(problem, true);
       } else {
@@ -6347,59 +6380,7 @@ std::string_view webControlPageHtml()
           notice = "Resolution " + (index + 1) + ": FPS must be between " + low + " and " + high + ". Set to " + clamped + ".";
         thr = clamped === span.ceiling ? "" : String(clamped);
       }
-      commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr }) : rung)), notice);
-    }
-
-    function moveLadderRung(from, to) {
-      const list = state.ladderDraft.slice();
-      if (to < 0 || to >= list.length || from === to)
-        return;
-      const [rung] = list.splice(from, 1);
-      list.splice(to, 0, rung);
-      commitLadderDraft(list, "");
-    }
-
-    // Drag a resolution by its handle: pointer events, so it works with a finger too.
-    function installLadderDrag(handle, row, index) {
-      const rows = () => Array.from(document.querySelectorAll("#settingsModeLadderList .ladder-row"));
-      const finish = (event, drop) => {
-        const drag = state.ladderDrag;
-        if (!drag || drag.pointerId !== event.pointerId)
-          return;
-        state.ladderDrag = null;
-        rows().forEach((element) => element.classList.remove("dragging", "drop-target"));
-        if (drop && drag.over !== drag.from)
-          moveLadderRung(drag.from, drag.over);
-      };
-      handle.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0 || (state.snapshot && state.snapshot.recording))
-          return;
-        event.preventDefault();
-        handle.setPointerCapture(event.pointerId);
-        state.ladderDrag = { pointerId: event.pointerId, from: index, over: index };
-        row.classList.add("dragging");
-      });
-      handle.addEventListener("pointermove", (event) => {
-        const drag = state.ladderDrag;
-        if (!drag || drag.pointerId !== event.pointerId)
-          return;
-        // The drop goes before the first row whose middle is below the pointer (gaps and
-        // transition lines count too); over = the row whose place the dragged one takes.
-        const all = rows();
-        let slot = all.length;
-        for (let i = 0; i < all.length; i++) {
-          const box = all[i].getBoundingClientRect();
-          if (event.clientY < box.top + box.height / 2) {
-            slot = i;
-            break;
-          }
-        }
-        const over = slot > drag.from ? slot - 1 : slot;
-        drag.over = over;
-        all.forEach((element, i) => element.classList.toggle("drop-target", i === over && i !== drag.from));
-      });
-      handle.addEventListener("pointerup", (event) => finish(event, true));
-      handle.addEventListener("pointercancel", (event) => finish(event, false));
+      commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr, auto: false }) : rung)), notice);
     }
 
     function createLadderIconButton(icon, label, className, disabled, onClick) {
@@ -6428,11 +6409,6 @@ std::string_view webControlPageHtml()
 
       const row = createDomElement("div", "ladder-row");
       const main = createDomElement("div", "ladder-row-main");
-      const handle = createDomElement("span", "ladder-handle");
-      handle.innerHTML = ladderIcons.handle;
-      handle.title = "Drag to reorder";
-      installLadderDrag(handle, row, index);
-      main.appendChild(handle);
       main.appendChild(createDomElement("span", "ladder-badge", String(index + 1)));
       const frame = fillCropFrame(createDomElement("div", "crop-frame"), crop);
       frame.setAttribute("aria-hidden", "true");
@@ -6486,8 +6462,6 @@ std::string_view webControlPageHtml()
       controls.appendChild(compField);
 
       const buttons = createDomElement("div", "ladder-row-buttons");
-      buttons.appendChild(createLadderIconButton("up", "Move " + name + " up", "", locked || index === 0, () => moveLadderRung(index, index - 1)));
-      buttons.appendChild(createLadderIconButton("down", "Move " + name + " down", "", locked || index === draft.length - 1, () => moveLadderRung(index, index + 1)));
       buttons.appendChild(createLadderIconButton("remove", "Remove " + name + " from the ladder", "remove", locked,
         () => commitLadderDraft(draft.filter((other, i) => i !== index), "")));
       controls.appendChild(buttons);
@@ -6665,21 +6639,13 @@ std::string_view webControlPageHtml()
       });
     }
 
-    // Where a new mode fits: the end, else the last place where the maxes still rise (a mode with a
-    // lower ceiling goes in front of the faster ones). {list} when it fits, else {problem}.
+    // A new mode takes its place by quality. {list} when the ladder stays legal, else {problem}.
     function ladderWithMode(draft, candidate) {
       if (draft.length >= ladderMaxResolutions)
         return { problem: "At most " + ladderMaxResolutions + " resolutions." };
-      let firstProblem = "";
-      for (let position = draft.length; position >= 0; position--) {
-        const list = draft.slice(0, position).concat([candidate], draft.slice(position));
-        const problem = ladderOrderProblem(list) || ladderDraftProblem(normalizeLadderDraft(list));
-        if (!problem)
-          return { list };
-        if (!firstProblem)
-          firstProblem = problem;
-      }
-      return { problem: firstProblem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") };
+      const arranged = ladderArranged(draft.concat([candidate]));
+      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalizeLadderDraft(arranged));
+      return problem ? { problem: problem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") } : { list: arranged };
     }
 
     function createSensorModeTile(entry, draft) {
@@ -6688,7 +6654,7 @@ std::string_view webControlPageHtml()
       const index = draft.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
       const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
       const crop = ladderCrop(mode);
-      const candidate = Object.assign({}, mode, { comp: "none", thr: "" });
+      const candidate = Object.assign({}, mode, { comp: "none", thr: "", auto: true });
       const locked = !!(state.snapshot && state.snapshot.recording);
       const placed = index >= 0 || ceiling <= 0 ? null : ladderWithMode(draft, candidate);
       const why = index >= 0 ? ""
