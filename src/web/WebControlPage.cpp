@@ -6803,7 +6803,7 @@ std::string_view webControlPageHtml()
           mains.className = "pill-grid";
           flickerGrid.appendChild(flicker);
           flickerGrid.appendChild(mains);
-          buildOptionButtonsInto(flicker, [{ value: "false", label: "Flicker-free off" }, { value: "true", label: "Flicker-free on" }],
+          buildOptionButtonsInto(flicker, [{ value: "false", label: "Flicker-free angles off" }, { value: "true", label: "Flicker-free angles on" }],
             ui.flicker_free_shutter_angles ? "true" : "false",
             (value) => sendValueSteps({ name: "shutter_angle", flicker_free: value }));
           buildOptionButtonsInto(mains, [{ value: "50", label: "50 Hz" }, { value: "60", label: "60 Hz" }],
