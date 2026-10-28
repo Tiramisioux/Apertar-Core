@@ -1315,9 +1315,10 @@ std::string_view webControlPageHtml()
     }
 
     .pill-grid.ladder-locked .pill-button.active {
-      border-color: rgba(255, 255, 255, 0.9);
-      background: #ffffff;
-      color: #09090b;
+      border-color: #52525b;
+      background: #3f3f46;
+      color: #a1a1aa;
+      box-shadow: none;
     }
 
     @media (max-width: 560px) {
@@ -2591,6 +2592,18 @@ std::string_view webControlPageHtml()
       transform: translateY(0);
     }
 
+    .toast.with-link {
+      pointer-events: auto;
+    }
+
+    .toast .ladder-link {
+      color: #fca5a5;
+    }
+
+    [data-ladder-lock] select:disabled {
+      pointer-events: none;
+    }
+
     .toast.error {
       border-color: rgba(239, 68, 68, 0.42);
       background: rgba(48, 9, 9, 0.95);
@@ -3157,7 +3170,6 @@ std::string_view webControlPageHtml()
               <section class="select-block">
                 <div class="select-topline">
                   <span id="quickResolutionLabel">Resolution</span>
-                  <span class="select-note ladder-on hidden" id="quickResolutionLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a> on: the FPS picks the resolution.</span>
                 </div>
                 <div class="pill-grid three-col" id="resolutionOptions"></div>
               </section>
@@ -3165,7 +3177,6 @@ std::string_view webControlPageHtml()
               <section class="select-block hidden" id="cropRatioBlock">
                 <div class="select-topline">
                   <span id="quickCropLabel">Crop mode</span>
-                  <span class="select-note ladder-on hidden" id="quickCropLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a> on: the FPS picks the resolution.</span>
                 </div>
                 <div class="pill-grid three-col" id="cropRatioOptions"></div>
               </section>
@@ -3470,7 +3481,6 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="settingsH264ResolutionSelect"></select>
                 </label>
               </div>
-              <p class="settings-card-copy hidden" id="settingsRecordLadderNote"><a class="ladder-link" href="#settingsModeLadderCard" data-ladder-link="1">Mode Ladder</a><span id="settingsRecordLadderNoteTail"> on: the FPS picks the resolution.</span></p>
               <div class="pill-grid" id="settingsRecordFormatOptions"></div>
               <div class="field-stack hidden" id="settingsProresColorField">
                 <label class="input-label" for="settingsProresColorSelect">Color Profile</label>
@@ -3495,7 +3505,7 @@ std::string_view webControlPageHtml()
                 <p class="settings-card-copy" id="settingsCdngPreviewColorNote">Preview only, including HDMI and WebUI. DNG stays sensor RAW; Resolve decoding is unchanged.</p>
               </div>
               <div class="settings-field-grid" id="settingsCdngCompressionField">
-                <label class="field-stack field-span-2">
+                <label class="field-stack field-span-2" id="settingsCdngCompressionLockField">
                   <span class="input-label">Compression</span>
                   <select class="settings-select" id="settingsCdngCompressionSelect">
                     <option value="none">Uncompressed</option>
@@ -6180,15 +6190,18 @@ std::string_view webControlPageHtml()
       return where + " stops at " + accepted + " fps" + (snapshot.recording ? " in a take." : ".");
     }
 
-    // The line under a greyed control while the ladder is on; "Mode Ladder" jumps to the card.
-    function ladderLockNote(withCompression) {
-      const note = createDomElement("p", "settings-card-copy");
+    // The red warning when someone tries a control the ladder has greyed: "Mode Ladder" links to the card.
+    function showLadderLockWarning(withCompression) {
+      const toast = document.getElementById("toast");
+      toast.textContent = "";
       const link = createDomElement("a", "ladder-link", "Mode Ladder");
       link.href = "#settingsModeLadderCard";
       link.dataset.ladderLink = "1";
-      note.appendChild(link);
-      note.appendChild(document.createTextNode(" on: the FPS picks the resolution" + (withCompression ? " and compression." : ".")));
-      return note;
+      toast.appendChild(link);
+      toast.appendChild(document.createTextNode(" on: the FPS picks the resolution" + (withCompression ? " and compression." : ".")));
+      toast.classList.add("error", "visible", "with-link");
+      clearTimeout(state.toastTimer);
+      state.toastTimer = window.setTimeout(() => toast.classList.remove("visible", "with-link"), 6000);
     }
 
     function openModeLadderCard() {
@@ -6663,7 +6676,7 @@ std::string_view webControlPageHtml()
 
     // While the Mode Ladder is active the FPS picks the mode: mode pills show it, locked.
     function ladderLockedOptions(options, locked) {
-      return locked ? normalizeChoiceOptions(options).map((option) => Object.assign(option, { enabled: false })) : options;
+      return locked ? normalizeChoiceOptions(options).map((option) => Object.assign(option, { enabled: false, locked: true })) : options;
     }
 
     // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
@@ -8173,6 +8186,7 @@ std::string_view webControlPageHtml()
                 label: String(label),
                 enabled: option.enabled !== false,
                 system: option.system === true,
+                locked: option.locked === true,
               };
             }
             return {
@@ -8454,8 +8468,12 @@ std::string_view webControlPageHtml()
           option.label
         );
         button.type = "button";
-        button.disabled = !option.enabled;
+        button.disabled = !option.enabled && !option.locked;
         button.addEventListener("click", () => {
+          if (option.locked) {
+            showLadderLockWarning(false);
+            return;
+          }
           if (!option.enabled)
             return;
           void onSelect(option.value);
@@ -8865,7 +8883,7 @@ std::string_view webControlPageHtml()
             }
             card.appendChild(grid);
             if (ladderActive)
-              card.appendChild(ladderLockNote(recordFormatText === "CinemaDNG"));
+              grid.querySelectorAll("label.field-stack").forEach((field) => { field.dataset.ladderLock = "1"; });
             card.appendChild(createFavoriteSelectBlock("Record Format", recordFormatText, availableRecordFormatOptions(snapshot), recordFormatText, async (value) => {
               const formatValue = recordingFormatCommandValue(value);
               await dispatchFavoriteCommand({ cmd: "set_record_format", value: formatValue });
@@ -8875,9 +8893,12 @@ std::string_view webControlPageHtml()
                 await dispatchFavoriteCommand({ cmd: "set_lossy_dng_ratio", value: lossyDngRatioCommandValue(value) });
             }));
             if (recordFormatText === "CinemaDNG") {
-              card.appendChild(createFavoriteSelectEntryField("Compression", availableCompressionOptions(snapshot), cdngCompressionValueForSnapshot(snapshot), async (value) => {
+              const compressionField = createFavoriteSelectEntryField("Compression", availableCompressionOptions(snapshot), cdngCompressionValueForSnapshot(snapshot), async (value) => {
                 await dispatchCdngCompressionSelection(value, dispatchFavoriteCommand);
-              }, true, !!snapshot.recording || !recordingFeatureSupported(snapshot, "raw_compression") || ladderActive));
+              }, true, !!snapshot.recording || !recordingFeatureSupported(snapshot, "raw_compression") || ladderActive);
+              if (ladderActive)
+                compressionField.dataset.ladderLock = "compression";
+              card.appendChild(compressionField);
             }
             const bitDepthBlock = createFavoriteSelectBlock("Bit Depth", rawBitDepthText, ladderLockedOptions(rawBitDepthSelectOptions, ladderActive), rawBitDepthText, async (value) => {
               if (rawBitDepthFixedForH264)
@@ -9661,6 +9682,7 @@ std::string_view webControlPageHtml()
       const toast = document.getElementById("toast");
       toast.textContent = message;
       toast.classList.toggle("error", !!isError);
+      toast.classList.remove("with-link");
       toast.classList.add("visible");
       clearTimeout(state.toastTimer);
       state.toastTimer = window.setTimeout(() => {
@@ -11069,8 +11091,12 @@ std::string_view webControlPageHtml()
           + (option.enabled ? "" : " disabled")
           + (option.system ? " system-value" : "");
         button.textContent = option.label;
-        button.disabled = !option.enabled;
+        button.disabled = !option.enabled && !option.locked;
         button.addEventListener("click", () => {
+          if (option.locked) {
+            showLadderLockWarning(false);
+            return;
+          }
           if (!option.enabled)
             return;
           onClick(option.value);
@@ -11454,10 +11480,6 @@ std::string_view webControlPageHtml()
       }
       const ladderActive = snapshot.ladder_active === true;
       setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported || ladderActive);
-      setText("settingsRecordLadderNoteTail", recordFormatText === "CinemaDNG"
-        ? " on: the FPS picks the resolution and compression."
-        : " on: the FPS picks the resolution.");
-      document.getElementById("settingsRecordLadderNote").classList.toggle("hidden", !ladderActive);
       setText("settingsRawBitDepthValue", rawBitDepthText);
       setText("settingsRawBitDepthNote", rawBitDepthFixedForH264
         ? recordFormatText + (recordingFeatureSupported(snapshot, "h264_hardware") ? " uses 8-bit YUV420 hardware encoding." : " uses processed video output, so capture is fixed to 10-bit here.")
@@ -11849,8 +11871,16 @@ std::string_view webControlPageHtml()
         ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : (ladderActive ? String(snapshot.ladder_text || "") : ""));
       fpsLadderLine.classList.toggle("switching", state.fpsSwitchingTo > 0);
       document.getElementById("quickLadderPill").classList.toggle("hidden", !ladderActive);
-      document.getElementById("quickResolutionLadderNote").classList.toggle("hidden", !ladderActive);
-      document.getElementById("quickCropLadderNote").classList.toggle("hidden", !ladderActive);
+      // Greyed selects ignore clicks: the fields say why when someone tries.
+      for (const [id, kind] of [["settingsRecordResolutionField", "1"], ["settingsRecordCropField", "1"], ["settingsCdngCompressionLockField", "compression"]]) {
+        const field = document.getElementById(id);
+        if (!field)
+          continue;
+        if (ladderActive)
+          field.dataset.ladderLock = kind;
+        else
+          delete field.dataset.ladderLock;
+      }
       document.getElementById("resolutionOptions").classList.toggle("ladder-locked", ladderActive);
       document.getElementById("cropRatioOptions").classList.toggle("ladder-locked", ladderActive);
       document.getElementById("settingsRawBitDepthOptions").classList.toggle("ladder-locked", ladderActive);
@@ -11933,6 +11963,7 @@ std::string_view webControlPageHtml()
         value,
         label: value,
         enabled: rawBitDepthOptionEnabled(snapshot, value, rawBitDepthFixedForH264) && !ladderActive,
+        locked: ladderActive,
       })), rawBitDepthText, async (value) => {
         try {
           if (rawBitDepthFixedForH264)
@@ -13399,9 +13430,14 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
       document.addEventListener("click", (event) => {
         const link = event.target.closest ? event.target.closest("a[data-ladder-link]") : null;
-        if (!link)
+        if (!link) {
+          const field = event.target.closest ? event.target.closest("[data-ladder-lock]") : null;
+          if (field)
+            showLadderLockWarning(field.dataset.ladderLock === "compression");
           return;
+        }
         event.preventDefault();
+        document.getElementById("toast").classList.remove("visible", "with-link");
         openModeLadderCard();
       });
       document.getElementById("settingsExposureCompensationSelect").addEventListener("change", async (event) => {
