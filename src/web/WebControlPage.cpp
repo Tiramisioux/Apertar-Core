@@ -2916,6 +2916,38 @@ std::string_view webControlPageHtml()
                 <div class="online-pill" id="settingsRawBitDepthValue">12-bit</div>
               </div>
               <div class="pill-grid three-col" id="settingsRawBitDepthOptions"></div>
+              <div class="settings-card-head compact-head">
+                <div>
+                  <h3 class="settings-card-title">Speed Ramp</h3>
+                  <p class="settings-card-copy" id="settingsSpeedRampNote">Change FPS during a CinemaDNG or MLV take.</p>
+                </div>
+                <div class="online-pill" id="settingsSpeedRampValue">Off</div>
+              </div>
+              <div class="pill-grid" id="settingsSpeedRampOptions"></div>
+              <div class="field-stack">
+                <span class="input-label">Shutter Sync</span>
+                <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
+                <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
+              </div>
+              <div class="settings-field-grid">
+                <label class="field-stack">
+                  <span class="input-label">Ramp to</span>
+                  <select class="settings-select" id="settingsSpeedRampTargetSelect"></select>
+                </label>
+                <label class="field-stack">
+                  <span class="input-label">Over</span>
+                  <select class="settings-select" id="settingsSpeedRampSecondsSelect">
+                    <option value="0">Cut</option>
+                    <option value="1">1 s</option>
+                    <option value="2">2 s</option>
+                    <option value="5" selected>5 s</option>
+                    <option value="10">10 s</option>
+                    <option value="20">20 s</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pill-grid three-col" id="settingsSpeedRampActions"></div>
+              <p class="settings-card-copy" id="settingsSpeedRampRange"></p>
             </div>
 
             <div class="settings-card">
@@ -4203,6 +4235,11 @@ std::string_view webControlPageHtml()
 
     const state = {
       snapshot: null,
+      speedRampTarget: "",
+      speedRampReturnFps: 0,
+      speedRampStepping: false,
+      speedRampStop: false,
+      speedRampTakeBase: 0,
       fetchInFlight: false,
       fetchQueued: false,
       fetchQueuedSilent: true,
@@ -5019,6 +5056,144 @@ std::string_view webControlPageHtml()
         max = Math.min(max, 60.0);
       const filtered = presets.filter((value) => value <= max + 0.0005);
       return (filtered.length > 0 ? filtered : [max]).map((value) => Number(value).toFixed(3));
+    }
+
+    // Speed ramp (T31). Cinemate's SHUTTER SYNC, FPS DOUBLE and _ramp_fps as one block.
+    // Core refuses an FPS change in a take unless fps_speed_ramp is on and the take is
+    // CinemaDNG (any compression) or MLV; fps_speed_ramp itself only changes between takes.
+    // Core has no ramp command: the page steps set_fps itself, one fps per step.
+    function speedRampFormatSupported(snapshot) {
+      const format = String(snapshot && snapshot.recording_format || "").toLowerCase();
+      return !stillCaptureForSnapshot(snapshot) && (format === "cdng" || format === "lossydng" || format === "mlv");
+    }
+
+    function speedRampFpsLabel(value) {
+      return String(Number(value)) + " fps";
+    }
+
+    // Walks from the current FPS to toFps over the chosen seconds, the way Cinemate's
+    // _ramp_fps does. Stops at the first refusal, when Core no longer moves the rate (the
+    // mode's ceiling), and when a take starts or ends under it, so a mid-ramp value never
+    // becomes a take's start rate or outlives its take.
+    async function startSpeedRamp(toFps) {
+      if (state.speedRampStepping || !state.snapshot)
+        return;
+      const seconds = Number(document.getElementById("settingsSpeedRampSecondsSelect").value) || 0;
+      const fromFps = Number(state.snapshot.fps) || 0;
+      const target = Number(toFps);
+      const steps = seconds > 0 ? Math.max(1, Math.min(200, Math.round(Math.abs(target - fromFps)))) : 1;
+      const intervalMs = seconds > 0 ? seconds * 1000 / steps : 0;
+      const takeRecording = !!state.snapshot.recording;
+      let lastFps = fromFps;
+      state.speedRampStepping = true;
+      state.speedRampStop = false;
+      renderSnapshot(state.snapshot);
+      try {
+        for (let step = 1; step <= steps; ++step) {
+          if (intervalMs > 0)
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          if (state.speedRampStop || !state.snapshot || !!state.snapshot.recording !== takeRecording)
+            break;
+          const fps = step === steps ? target : fromFps + (target - fromFps) * step / steps;
+          const result = await sendCommand({ cmd: "set_fps", value: Math.round(fps * 1000) / 1000 });
+          const accepted = result && isFiniteNumber(result.fps) ? Number(result.fps) : Number(state.snapshot.fps);
+          if (Math.abs(accepted - lastFps) < 0.0005)
+            break;
+          lastFps = accepted;
+        }
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.speedRampStepping = false;
+        if (state.snapshot)
+          renderSnapshot(state.snapshot);
+      }
+    }
+
+    function renderSpeedRamp(snapshot, fpsOptions) {
+      const enabled = snapshot.fps_speed_ramp === true;
+      const keepExposure = snapshot.fps_speed_ramp_keep_exposure === true;
+      const stepping = state.speedRampStepping;
+      const recording = !!snapshot.recording;
+      const formatSupported = speedRampFormatSupported(snapshot);
+      // The take's start rate as this page saw it start; a page opened mid-take counts
+      // from the rate it first sees (Core does not publish the base).
+      if (!recording)
+        state.speedRampTakeBase = 0;
+      else if (!(state.speedRampTakeBase > 0))
+        state.speedRampTakeBase = Number(snapshot.fps) || 0;
+      const takeBase = recording && enabled ? state.speedRampTakeBase : 0;
+      const currentFps = Number(snapshot.fps) || 0;
+      // The highest value in the selectable list, as the camera UI's maximumSelectableFps().
+      const highestFps = fpsOptions.length > 0 ? Number(fpsOptions[fpsOptions.length - 1]) : currentFps;
+      const canRamp = !stepping && (!recording || (enabled && formatSupported));
+      const nearly = (a, b) => Math.abs(a - b) < 0.0005;
+
+      setText("settingsSpeedRampValue", !enabled ? "Off" : (stepping ? "Ramping" : (keepExposure ? "On · Exposure" : "On · Angle")));
+      setText("settingsSpeedRampNote", !formatSupported
+        ? "Works in CinemaDNG and MLV. H.264, ProRes and stills keep one rate per clip."
+        : (takeBase > 0 && enabled
+          ? "This take runs at " + speedRampFpsLabel(takeBase) + ": every frame is numbered at that rate, so a faster stretch plays as slow motion. Stop returns to it."
+          : "Change FPS during a CinemaDNG or MLV take. The clip keeps the rate it started with, so a faster stretch plays as slow motion."));
+      setText("settingsSpeedRampRange", "Selectable in this mode: " + speedRampFpsLabel(fpsOptions[0] || currentFps)
+        + " to " + speedRampFpsLabel(highestFps) + "." + (recording && !enabled ? " Turn ramping on before the take." : ""));
+
+      buildOptionButtons("settingsSpeedRampOptions", [
+        { label: "Off", value: "Off", enabled: !recording },
+        { label: "On", value: "On", enabled: !recording },
+      ], enabled ? "On" : "Off", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      buildOptionButtons("settingsSpeedRampShutterOptions", [
+        { label: "Angle", value: "angle", enabled },
+        { label: "Exposure", value: "exposure", enabled },
+      ], keepExposure ? "exposure" : "angle", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_fps_speed_ramp", enabled: "true", shutter: value });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      // Same list as the FPS pills: edit fpsPresets and both follow.
+      const targets = fpsOptions.filter((value) => !nearly(Number(value), currentFps));
+      ensureSelectEntries("settingsSpeedRampTargetSelect", targets.map((value) => ({ value, label: speedRampFpsLabel(value) })));
+      const targetSelect = document.getElementById("settingsSpeedRampTargetSelect");
+      if (targetSelect) {
+        if (targets.includes(state.speedRampTarget))
+          targetSelect.value = state.speedRampTarget;
+        else if (targets.length > 0)
+          targetSelect.value = targets[targets.length - 1];
+        targetSelect.disabled = !canRamp || targets.length === 0;
+      }
+
+      // ×2 doubles the take's start rate (Cinemate's FPS DOUBLE); Back returns to it,
+      // or outside a take to the rate before the last ×2.
+      const doubleBase = takeBase > 0 ? takeBase : currentFps;
+      const doubleFps = doubleBase * 2;
+      const backFps = takeBase > 0 ? takeBase : (Number(state.speedRampReturnFps) || 0);
+      buildOptionButtons("settingsSpeedRampActions", [
+        { label: stepping ? "Stop" : "Ramp", value: stepping ? "stop" : "ramp", enabled: stepping || (canRamp && targets.length > 0) },
+        { label: "×2 → " + speedRampFpsLabel(doubleFps), value: "double", enabled: canRamp && doubleFps <= highestFps + 0.0005 && !nearly(doubleFps, currentFps) },
+        { label: backFps > 0 ? "Back → " + speedRampFpsLabel(backFps) : "Back", value: "back", enabled: canRamp && backFps > 0 && !nearly(backFps, currentFps) },
+      ], "", async (value) => {
+        if (value === "stop") {
+          state.speedRampStop = true;
+        } else if (value === "ramp" && targetSelect) {
+          await startSpeedRamp(targetSelect.value);
+        } else if (value === "double") {
+          if (takeBase <= 0)
+            state.speedRampReturnFps = currentFps;
+          await startSpeedRamp(doubleFps);
+        } else if (value === "back") {
+          await startSpeedRamp(backFps);
+        }
+      }, 3);
     }
 
     function availableIsoOptionsForSnapshot(snapshot) {
@@ -8707,6 +8882,10 @@ std::string_view webControlPageHtml()
         snapshot.timelapse_interval_seconds = Math.max(0, Number(source.interval_seconds));
       if (isFiniteNumber(source.recording_elapsed_seconds))
         snapshot.recording_elapsed_seconds = Number(source.recording_elapsed_seconds);
+      if (typeof source.fps_speed_ramp === "boolean")
+        snapshot.fps_speed_ramp = source.fps_speed_ramp;
+      if (typeof source.fps_speed_ramp_keep_exposure === "boolean")
+        snapshot.fps_speed_ramp_keep_exposure = source.fps_speed_ramp_keep_exposure;
     }
 
     function applyCommandSnapshotPatch(payload, result, optimistic) {
@@ -8740,6 +8919,11 @@ std::string_view webControlPageHtml()
         case "set_fps":
           if (isFiniteNumber(payload.value))
             snapshot.fps = Number(payload.value);
+          break;
+        case "set_fps_speed_ramp":
+          snapshot.fps_speed_ramp = boolValue;
+          if (typeof payload.shutter === "string")
+            snapshot.fps_speed_ramp_keep_exposure = payload.shutter === "exposure";
           break;
         case "set_shutter_us":
           if (isFiniteNumber(payload.value)) {
@@ -9999,6 +10183,8 @@ std::string_view webControlPageHtml()
         }
       }, 3);
 
+      renderSpeedRamp(snapshot, fpsOptions);
+
       buildOptionButtons("settingsGyroDataOptions", toggleOptions, formatToggleLabel(recordGyroEnabled), async (value) => {
         try {
           await sendCommand({ cmd: "set_record_gyro_enabled", enabled: value === "On" ? "true" : "false" });
@@ -10641,6 +10827,8 @@ std::string_view webControlPageHtml()
         "monitoringOrder", "recordOrder", "audioOrder", "powerOrder", "systemOrder",
         "wifiOrder", "infoOrder", "sidebarOrder", "favoritesOrder",
         "cameraRawBitDepth",
+        "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
+        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter",
       ];
 
       for (const key of allowedKeys) {
@@ -11427,6 +11615,9 @@ std::string_view webControlPageHtml()
         } catch (error) { showToast(error.message, true); }
       });
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
+      document.getElementById("settingsSpeedRampTargetSelect").addEventListener("change", (event) => {
+        state.speedRampTarget = event.target.value;
+      });
       document.getElementById("settingsExposureCompensationSelect").addEventListener("change", async (event) => {
         try { await sendCommand({cmd:"set_exposure_compensation",value:Number(event.target.value)}); }
         catch (error) { showToast(error.message, true); }
