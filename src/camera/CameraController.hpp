@@ -141,6 +141,7 @@ private:
     bool ladderRewriteLocked(CaptureSettings &next) const;
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void saveModeLadderLocked() const;
+    void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;
     void restoreFpsAfterRampLocked();

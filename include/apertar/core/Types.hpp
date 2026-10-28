@@ -163,6 +163,10 @@ struct CaptureSettings {
     bool ladderActive = false;     // Runtime (T34): the mode ladder picks the sensor mode from the FPS.
     uint32_t ladderRung = 0;       // Runtime (T34): the running rung, 1-based, 0 = the mode is not a rung.
     bool ladderRampReady = false;  // Runtime (T34): Ramp-ready is choosing (with Speed Ramp on).
+    bool ladderEnabled = false;    // Runtime (T34): the ladder is switched on (it may be idle, e.g. in H.264).
+    uint32_t ladderCount = 0;      // Runtime (T34): resolutions in the ladder.
+    std::vector<double> ladderTops; // Runtime (T34): each resolution's top FPS, in order (for the FPS pill labels).
+    std::string ladderText;        // Runtime (T34): the running line, e.g. "Resolution 1 · 3840×2160 · ClearHDR16 · ≤25 · Uncompressed".
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
     LossyDngRatio lossyDngRatio = LossyDngRatio::R3;

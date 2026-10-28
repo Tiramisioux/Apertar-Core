@@ -138,6 +138,16 @@ std::string escapeJson(const std::string &value)
     return out.str();
 }
 
+std::string ladderTopsJson(const std::vector<double> &tops)
+{
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < tops.size(); ++i)
+        out << (i ? "," : "") << tops[i];
+    out << ']';
+    return out.str();
+}
+
 std::string settingsEvent(const CaptureSettings &settings)
 {
     std::ostringstream out;
@@ -157,6 +167,10 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
+        << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_count\":" << settings.ladderCount
+        << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
+        << ",\"ladder_tops\":" << ladderTopsJson(settings.ladderTops)
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -2727,6 +2741,16 @@ void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
         settings.recordingFormat = RecordingFormat::Cdng;
         settings.cdngCompression = compression == "none" ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
     }
+}
+
+// The compression of the raw format in use, for the running line.
+std::string compressionLabel(const CaptureSettings &settings)
+{
+    if (settings.recordingFormat == RecordingFormat::LossyDng)
+        return settings.lossyDngRatio == LossyDngRatio::R5 ? "Lossy 5:1" : "Lossy 3:1";
+    if (settings.recordingFormat == RecordingFormat::Mlv)
+        return "MLV";
+    return settings.cdngCompression == CdngCompression::LosslessJpeg ? "Lossless JPEG" : "Uncompressed";
 }
 
 constexpr const char *kLadderOwnsMode =
@@ -9647,9 +9671,27 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     out.ladderActive = ladderActiveForLocked(out);
     out.ladderRung = 0;
     out.ladderRampReady = false;
-    if (!out.ladderActive)
+    out.ladderEnabled = modeLadder_.enabled;
+    out.ladderCount = static_cast<uint32_t>(modeLadder_.rungs.size());
+    out.ladderTops.clear();
+    out.ladderText.clear();
+    // The running line: what the camera records now, in the words of the editor (decision 9).
+    const auto runningText = [&out]() {
+        if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat))
+            return std::string();
+        std::string line = std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
+            (out.clearHdr ? "ClearHDR" : "SDR") + std::to_string(out.rawBitDepth);
+        return line;
+    };
+    const std::string base = runningText();
+    if (!out.ladderActive) {
+        if (!base.empty())
+            out.ladderText = base + " \u00b7 " + compressionLabel(out) + (modeLadder_.enabled ? "" : " (ladder off)");
         return;
+    }
     const auto states = ladderStatesLocked(modeLadder_, out);
+    for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i)
+        out.ladderTops.push_back(ladder::rungCeiling(modeLadder_.rungs[i], states[i]));
     out.fpsMax = ladder::ladderCeiling(modeLadder_, states);
     for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i) {
         const ladder::Rung &rung = modeLadder_.rungs[i];
@@ -9661,6 +9703,14 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
         }
     }
     out.ladderRampReady = modeLadder_.rampReady && out.fpsSpeedRamp;
+    if (out.ladderRung > 0 && !base.empty()) {
+        std::ostringstream top;
+        top << out.fpsTakeMax;
+        out.ladderText = "Resolution " + std::to_string(out.ladderRung) + " \u00b7 " + base + " \u00b7 \u2264" + top.str() +
+                         " \u00b7 " + compressionLabel(out);
+    } else if (!base.empty()) {
+        out.ladderText = base + " \u00b7 " + compressionLabel(out);
+    }
 }
 
 void CameraController::saveModeLadderLocked() const
@@ -9671,10 +9721,40 @@ void CameraController::saveModeLadderLocked() const
         std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
 }
 
+// The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
+// ceiling in each compression (0 where the compression cannot run the mode).
+void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const
+{
+    static const char *const kinds[4] = { "none", "lossless_jpeg", "lossy_3to1", "lossy_5to1" };
+    for (int i = 0; i < 4; ++i) {
+        ladder::Ladder single;
+        single.rungs.push_back(rung);
+        single.rungs.back().compression = kinds[i];
+        const bool lossy = i >= 2;
+        const ladder::RungState probe = (lossy && rung.clearHdr) ? ladder::RungState{} : ladderStatesLocked(single, settings_).front();
+        state.ceilingBy[i] = probe.usable ? probe.modeCeiling : 0.0;
+    }
+    for (const SensorMode &mode : sensorModes()) {
+        const bool sizeMatches = mode.size.width == rung.width &&
+            (mode.size.height == rung.height || (rung.clearHdr && mode.size.width == 3840 && mode.size.height == 2200 && rung.height == 2160));
+        if (!sizeMatches || mode.clearHdr != rung.clearHdr || mode.bitDepth != rung.bits)
+            continue;
+        unsigned windowW = 0, windowH = 0;
+        if (std::sscanf(mode.crop.c_str(), "(%*d, %*d)/%ux%u", &windowW, &windowH) == 2) {
+            state.windowWidth = windowW;
+            state.windowHeight = windowH;
+        }
+        state.binning = mode.binning;
+        break;
+    }
+}
+
 std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
                                                    const std::vector<std::string> &warnings) const
 {
-    const auto states = ladderStatesLocked(draft, settings_);
+    auto states = ladderStatesLocked(draft, settings_);
+    for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i)
+        fillRungExtrasLocked(states[i], draft.rungs[i]);
     int running = -1;
     for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i) {
         const ladder::Rung &rung = draft.rungs[i];
@@ -9699,7 +9779,9 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
             continue;
         ladder::Ladder single;
         single.rungs.push_back(rung);
-        pool.push_back({ rung, ladderStatesLocked(single, settings_).front() });
+        ladder::RungState poolState = ladderStatesLocked(single, settings_).front();
+        fillRungExtrasLocked(poolState, rung);
+        pool.push_back({ rung, poolState });
     }
     return ladder::toJson(draft, states, running, pool, errors, warnings);
 }

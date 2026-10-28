@@ -176,6 +176,8 @@ std::string sensorBinningBody(const CameraController::SensorBinning &binning)
     return out.str();
 }
 
+std::string jsonNumberArray(const std::vector<double> &values);
+
 std::string settingsBody(const CaptureSettings &settings)
 {
     std::ostringstream out;
@@ -193,6 +195,10 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
+        << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_count\":" << settings.ladderCount
+        << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
+        << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -8237,6 +8243,10 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
+        << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_count\":" << settings.ladderCount
+        << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
+        << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")

@@ -45,6 +45,13 @@ struct RungState {
     bool valid = false;        // a mode of this sensor (sanitiser keeps it in uncompressed cDNG)
     bool usable = false;       // the sanitiser keeps it in the current format and compression
     double modeCeiling = 0.0;  // the sanitiser's FPS ceiling (table, probe, lossless cap)
+    // For the editor (filled when the reply is built, not by the chooser): the sensor window the mode reads,
+    // in native pixels (the probe's crop rectangle), its binning, and the FPS ceiling in each compression
+    // (none, lossless_jpeg, lossy_3to1, lossy_5to1; 0 = not available in that compression).
+    uint32_t windowWidth = 0;
+    uint32_t windowHeight = 0;
+    uint32_t binning = 0;
+    double ceilingBy[4] = { 0.0, 0.0, 0.0, 0.0 };
 };
 
 inline bool sameMode(const Rung &a, const Rung &b)
@@ -260,7 +267,11 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"label\":" + quote(label(r)) + ",\"class\":" + quote(classLabel(r)) +
                ",\"compression\":" + quote(effectiveCompression(r)) +
                ",\"compression_set\":" + (r.compression.empty() ? "false" : "true") +
-               ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling);
+               ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling) +
+               ",\"window_w\":" + std::to_string(st.windowWidth) + ",\"window_h\":" + std::to_string(st.windowHeight) +
+               ",\"binning\":" + std::to_string(st.binning) + ",\"ceilings\":{\"none\":" + number(st.ceilingBy[0]) +
+               ",\"lossless_jpeg\":" + number(st.ceilingBy[1]) + ",\"lossy_3to1\":" + number(st.ceilingBy[2]) +
+               ",\"lossy_5to1\":" + number(st.ceilingBy[3]) + "}";
     };
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
         ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(rungsText(l.rungs)) +
