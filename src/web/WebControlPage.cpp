@@ -801,8 +801,8 @@ std::string_view webControlPageHtml()
       box-shadow: 0 16px 32px rgba(255, 255, 255, 0.08);
     }
 
-    /* A value the camera sets, not the operator: auto ISO/WB, held for Clear HDR, landed on
-       a mode's ceiling, or driven by a speed ramp. */
+    /* A value the camera decides beyond the operator's settings: held for Clear HDR, a ceiling
+       it added, a flicker-free angle it added, an angle a speed ramp moves. Auto modes stay white. */
     .badge.system-value {
       color: var(--ok);
     }
@@ -5516,12 +5516,12 @@ std::string_view webControlPageHtml()
       return (snapshot && snapshot.iso_auto ? [{ value: "Auto" }, { value: "Lock" }] : [{ value: "Auto" }]).concat(entries);
     }
 
-    // True when the ISO on screen is the camera's: auto, held for Clear HDR, or the ceiling the
-    // camera added (not one of the operator's values: ISO 800 in lossless is the operator's).
+    // True when the camera decided the ISO on screen: held for Clear HDR, or the ceiling it added
+    // (not one of the operator's values: ISO 800 in lossless is the operator's). Auto stays white.
     function isoSetByCamera(snapshot) {
       const maximum = Number(snapshot && snapshot.iso_max) || 0;
       const steps = valueStepsFromSnapshot(snapshot, "iso_steps", []);
-      return !!snapshot && (!!snapshot.iso_auto || snapshot.iso_auto_after_clear_hdr === true ||
+      return !!snapshot && (snapshot.iso_auto_after_clear_hdr === true ||
         (maximum > 0 && Number(snapshot.iso) === maximum && !steps.some((value) => Math.abs(value - maximum) < 0.5)));
     }
 
@@ -10083,8 +10083,7 @@ std::string_view webControlPageHtml()
       const wbInUse = whiteBalanceAuto && snapshot.wb_measured && Number(snapshot.wb_actual_kelvin) > 0
         ? String(Math.round(Number(snapshot.wb_actual_kelvin))) + "K" : whiteBalanceLabel;
       setText("wbBadge", "WB " + wbInUse);
-      document.getElementById("wbBadge").classList.toggle("system-value",
-        whiteBalanceAuto || snapshot.wb_auto_after_clear_hdr === true);
+      document.getElementById("wbBadge").classList.toggle("system-value", snapshot.wb_auto_after_clear_hdr === true);
       const timelapseShots = Math.max(0, Math.floor(Number(snapshot.timelapse_shot_count) || 0));
       setText("timelapseShotCounter", timelapseShots + (timelapseShots === 1 ? " SHOT" : " SHOTS"));
       document.getElementById("timelapseShotCounter").classList.toggle("hidden", !stillModeEnabled || !stillTimelapseArmed);
@@ -10497,7 +10496,7 @@ std::string_view webControlPageHtml()
         }
       });
       // In a ramp take with the Exposure policy Core moves the angle with the frame rate.
-      markActiveSystemValue("shutterOptions", !!snapshot.shutter_auto ||
+      markActiveSystemValue("shutterOptions",
         (!!snapshot.recording && snapshot.fps_speed_ramp === true && snapshot.fps_speed_ramp_keep_exposure === true));
 
       buildOptionButtons("whiteBalanceModeOptions", ["Auto", "Manual"].map((value) => ({
