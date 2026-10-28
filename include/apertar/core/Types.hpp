@@ -124,6 +124,9 @@ struct WhiteBalanceMeasurement {
 struct CaptureSettings {
     Resolution resolution{};
     double fps = 24.0;
+    // The project's timeline rate (what a take is conformed to in the edit). Stored for the
+    // camera as a whole, like the timecode mode; nothing derives from it yet.
+    double conformFps = 25.0;
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
     // numbered by count and the clip keeps the FPS it started with as its timeline rate.

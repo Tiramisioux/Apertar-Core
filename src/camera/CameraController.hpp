@@ -83,6 +83,7 @@ public:
     bool setHdrGainAdder(uint32_t value);
     bool setH264Resolution(Resolution resolution);
     bool setTimecodeMode(TimecodeMode mode);
+    bool setConformFps(double fps);
     bool setFpsPhaseLock(bool enabled);
     bool setFpsSpeedRamp(bool enabled, bool keepExposure);
     bool setAutofocusMode(AutofocusMode mode);

@@ -147,6 +147,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"width\":" << settings.resolution.width
         << ",\"height\":" << settings.resolution.height
         << ",\"fps\":" << std::fixed << std::setprecision(3) << settings.fps
+        << ",\"conform_fps\":" << settings.conformFps
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
@@ -558,6 +559,8 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         ? std::round(std::clamp(settings.exposureCompensation, -3.0, 3.0) * 3.0) / 3.0 : 0.0;
     settings.bracketingEv = std::isfinite(settings.bracketingEv)
         ? std::round(std::clamp(settings.bracketingEv, 1.0 / 3.0, 3.0) * 3.0) / 3.0 : 1.0;
+    settings.conformFps = std::isfinite(settings.conformFps) && settings.conformFps >= 1.0 && settings.conformFps <= 120.0
+        ? settings.conformFps : 25.0;
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -673,6 +676,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.resolution.height = static_cast<uint32_t>(std::stoul(value));
             else if (key == "fps")
                 settings.fps = std::stod(value);
+            else if (key == "conform_fps")
+                settings.conformFps = std::stod(value);
             else if (key == "iso")
                 settings.iso = static_cast<uint32_t>(std::stoul(value));
             else if (key == "iso_auto")
@@ -784,6 +789,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "resolution_width=" << s.resolution.width << '\n';
     output << prefix << "resolution_height=" << s.resolution.height << '\n';
     output << prefix << "fps=" << std::fixed << std::setprecision(6) << s.fps << '\n';
+    output << prefix << "conform_fps=" << std::fixed << std::setprecision(6) << s.conformFps << '\n';
     output << prefix << "iso=" << s.iso << '\n';
     output << prefix << "iso_auto=" << s.isoAuto << '\n';
     output << prefix << "iso_auto_after_clear_hdr=" << s.isoAutoAfterClearHdr << '\n';
@@ -9487,12 +9493,14 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             // (where it waits) must mean on in cDNG and MLV too.
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
+            const double conformFps = next.conformFps;
             next = saved->second;
             next.tuningFile = tuningFile;
             next.timecodeMode = timecodeMode;
             next.exposureMetering = metering;
             next.fpsSpeedRamp = fpsSpeedRamp;
             next.fpsSpeedRampKeepExposure = fpsSpeedRampKeepExposure;
+            next.conformFps = conformFps;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
@@ -9866,6 +9874,18 @@ bool CameraController::setTimecodeMode(TimecodeMode mode)
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings next = settings_;
     next.timecodeMode = mode;
+    return applySettingsLocked(next, false);
+}
+
+bool CameraController::setConformFps(double fps)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!std::isfinite(fps) || fps < 1.0 || fps > 120.0) {
+        setErrorLocked("Conform FPS must be between 1 and 120.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.conformFps = fps;
     return applySettingsLocked(next, false);
 }
 

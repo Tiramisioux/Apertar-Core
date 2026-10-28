@@ -10828,7 +10828,7 @@ std::string_view webControlPageHtml()
         "wifiOrder", "infoOrder", "sidebarOrder", "favoritesOrder",
         "cameraRawBitDepth",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
-        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter",
+        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter",
       ];
 
       for (const key of allowedKeys) {
