@@ -157,6 +157,7 @@ struct CaptureSettings {
     bool whiteBalanceAvailable = false; // Runtime capability of the active tuning, not persisted.
     WhiteBalanceMeasurement whiteBalanceMeasured;
     uint32_t isoMeasured = 0; // Runtime: the analogue gain in use x 100, not persisted.
+    uint32_t isoMax = 0;      // Runtime: the current mode's ISO ceiling (Clear HDR, lossless), 0 = none.
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
     LossyDngRatio lossyDngRatio = LossyDngRatio::R3;

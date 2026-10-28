@@ -187,6 +187,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
+        << ",\"iso_max\":" << settings.isoMax
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -8043,6 +8044,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"iso\":" << settings.iso
         << ",\"iso_auto\":" << (settings.isoAuto ? "true" : "false")
         << ",\"iso_actual\":" << settings.isoMeasured
+        << ",\"iso_max\":" << settings.isoMax
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
