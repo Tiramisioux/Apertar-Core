@@ -2712,6 +2712,27 @@ void applyClearHdrCompression(CaptureSettings &next, bool wasClearHdr)
         next.cdngCompression = next.clearHdr ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
 }
 
+// T34: a ladder resolution names its own raw format (Patrik, 2026-10-28): uncompressed or lossless
+// cDNG, or lossy DNG at 3:1 or 5:1 (another recording format in Core, no Clear HDR). Unnamed means
+// the default: Clear HDR uncompressed, SDR lossless. MLV has no compression to choose.
+void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
+{
+    if (settings.recordingFormat != RecordingFormat::Cdng && settings.recordingFormat != RecordingFormat::LossyDng)
+        return;
+    const std::string compression = ladder::effectiveCompression(rung);
+    if (compression == "lossy_3to1" || compression == "lossy_5to1") {
+        settings.recordingFormat = RecordingFormat::LossyDng;
+        settings.lossyDngRatio = compression == "lossy_5to1" ? LossyDngRatio::R5 : LossyDngRatio::R3;
+    } else {
+        settings.recordingFormat = RecordingFormat::Cdng;
+        settings.cdngCompression = compression == "none" ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
+    }
+}
+
+constexpr const char *kLadderOwnsCompression =
+    "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
+    "(Settings > Record > Mode Ladder) to choose it by hand.";
+
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
 // the values in use and remembers to give auto back in SDR, so every path (setters, presets, a
@@ -9512,7 +9533,9 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
         next.resolution = rung->resolution;
         next.rawBitDepth = rung->rawBitDepth;
         next.clearHdr = rung->clearHdr;
-        next.cdngCompression = rung->cdngCompression;   // Clear HDR is uncompressed, SDR lossless
+        next.recordingFormat = rung->recordingFormat;   // the resolution's own compression (applyRungFormat)
+        next.cdngCompression = rung->cdngCompression;
+        next.lossyDngRatio = rung->lossyDngRatio;
     }
     if (rampingTake) {
         rampTakeChanged_ = true;
@@ -9563,6 +9586,7 @@ std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder
         probe.resolution = Resolution{ rung.width, rung.height };
         probe.rawBitDepth = rung.bits;
         probe.clearHdr = rung.clearHdr;
+        applyRungFormat(probe, rung);                       // the resolution's own compression
         probe.fps = 280.0;                                  // ask for the most; the sanitiser answers the ceiling
         const CaptureSettings kept = sanitizeSettingsForSensor(probe, family);
         const bool same = kept.resolution.width == rung.width && kept.resolution.height == rung.height &&
@@ -9603,11 +9627,10 @@ bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
     const ladder::Rung &rung = modeLadder_.rungs[static_cast<size_t>(index)];
     const bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
         next.rawBitDepth != rung.bits || next.clearHdr != rung.clearHdr;
-    const bool wasClearHdr = next.clearHdr;
     next.resolution = Resolution{ rung.width, rung.height };
     next.rawBitDepth = rung.bits;
     next.clearHdr = rung.clearHdr;
-    applyClearHdrCompression(next, wasClearHdr);
+    applyRungFormat(next, rung);
     next.fps = std::min(next.fps, ladder::rungCeiling(rung, states[static_cast<size_t>(index)]));
     return changed;
 }
@@ -9741,7 +9764,10 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     modeLadder_ = draft;
     // Switching the ladder on (or changing it) may put the camera in another rung: one apply.
     CaptureSettings next = settings_;
-    if (ladderRewriteLocked(next) && !applySettingsLocked(next, true)) {
+    const bool modeChanged = ladderRewriteLocked(next);
+    const bool formatChanged = next.recordingFormat != settings_.recordingFormat ||
+        next.cdngCompression != settings_.cdngCompression || next.lossyDngRatio != settings_.lossyDngRatio;
+    if ((modeChanged || formatChanged) && !applySettingsLocked(next, modeChanged)) {
         modeLadder_ = previous;
         *error = lastError_;
         return false;
@@ -9769,8 +9795,12 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, 0.0 });
     };
     if (wanted.resolution.width == settings.resolution.width && wanted.resolution.height == settings.resolution.height &&
-        wanted.rawBitDepth == settings.rawBitDepth && wanted.clearHdr == settings.clearHdr)
+        wanted.rawBitDepth == settings.rawBitDepth && wanted.clearHdr == settings.clearHdr) {
+        settings.recordingFormat = wanted.recordingFormat;   // the ladder sets the compression
+        settings.cdngCompression = wanted.cdngCompression;
+        settings.lossyDngRatio = wanted.lossyDngRatio;
         return true;
+    }
     *error = "This preset records " + text(settings) + " at " + std::to_string(static_cast<int>(settings.fps)) +
              " fps; the Mode Ladder runs that rate in " + text(wanted) +
              ". Turn the ladder off to load it, or save the preset again.";
@@ -9968,6 +9998,12 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
         return false;
     }
 
+    // T34: cDNG and lossy DNG differ only in compression, which the ladder owns while it is active.
+    if (format != settings_.recordingFormat && settingsProfileFormat(format) == settingsProfileFormat(settings_.recordingFormat) &&
+        !settings_.photoModeEnabled && ladderActiveForLocked(settings_)) {
+        setErrorLocked(kLadderOwnsCompression);
+        return false;
+    }
     const bool fixedTenBitFormat = !settings_.photoModeEnabled && isFixedTenBitRecordingFormat(format);
     if (settings_.recordingFormat == format && (!fixedTenBitFormat || settings_.rawBitDepth == 10)) {
         lastError_.clear();
@@ -10029,6 +10065,10 @@ bool CameraController::setCdngCompression(CdngCompression compression)
         setErrorLocked("Compression changes are blocked while recording.");
         return false;
     }
+    if (ladderActiveForLocked(settings_)) {
+        setErrorLocked(kLadderOwnsCompression);
+        return false;
+    }
     CaptureSettings next = settings_;
     next.cdngCompression = compression;
     return applySettingsLocked(next, false);
@@ -10043,6 +10083,10 @@ bool CameraController::setLossyDngRatio(LossyDngRatio ratio)
     }
     if (recording_) {
         setErrorLocked("Lossy cDNG ratio changes are blocked while recording.");
+        return false;
+    }
+    if (ladderActiveForLocked(settings_)) {
+        setErrorLocked(kLadderOwnsCompression);
         return false;
     }
     CaptureSettings next = settings_;

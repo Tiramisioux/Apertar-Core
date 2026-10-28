@@ -18,7 +18,21 @@ struct Rung {
     uint32_t bits = 12;       // 10, 12 or 16
     bool clearHdr = false;
     double threshold = 0.0;   // highest FPS this rung serves; 0 = the mode's own ceiling
+    // The raw format of this resolution: "none" (uncompressed cDNG), "lossless_jpeg", "lossy_3to1" or
+    // "lossy_5to1" (lossy DNG, no Clear HDR). Empty = the default: Clear HDR uncompressed, SDR lossless.
+    std::string compression;
 };
+
+inline bool knownCompression(const std::string &c)
+{
+    return c.empty() || c == "none" || c == "lossless_jpeg" || c == "lossy_3to1" || c == "lossy_5to1";
+}
+
+// What this resolution records with: the named compression, else the default for its class.
+inline std::string effectiveCompression(const Rung &r)
+{
+    return !r.compression.empty() ? r.compression : (r.clearHdr ? "none" : "lossless_jpeg");
+}
 
 struct Ladder {
     bool enabled = false;     // the toggle: Core honours the ladder
@@ -86,8 +100,8 @@ inline int chooseRung(const Ladder &l, const std::vector<RungState> &s, double t
     return best;
 }
 
-// Rung text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], rungs joined by ",".
-// Example: 3840x2160:16:hdr:25,3840x2160:12:sdr
+// Resolution text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
+// Example: 3840x2160:16:hdr:25:none,3840x2160:12:sdr::lossless_jpeg
 inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::string &error)
 {
     out.clear();
@@ -104,8 +118,8 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
         Rung r;
         char *end = nullptr;
         const auto x = f.empty() ? std::string::npos : f[0].find('x');
-        if (f.size() < 3 || f.size() > 4 || x == std::string::npos) {
-            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr or WIDTHxHEIGHT:BITS:hdr|sdr:FPS.";
+        if (f.size() < 3 || f.size() > 5 || x == std::string::npos) {
+            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]].";
             return false;
         }
         r.width = static_cast<uint32_t>(std::strtoul(f[0].c_str(), &end, 10));
@@ -117,10 +131,17 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
             return false;
         }
         r.clearHdr = f[2] == "hdr";
-        if (f.size() == 4 && !f[3].empty()) {
+        if (f.size() >= 4 && !f[3].empty()) {
             r.threshold = std::strtod(f[3].c_str(), &end);
             if (!end || *end != '\0' || !(r.threshold > 0.0 && r.threshold <= 280.0)) {
                 error = "\"" + item + "\": the threshold must be an FPS above 0 and at most 280, or empty.";
+                return false;
+            }
+        }
+        if (f.size() == 5) {
+            r.compression = f[4];
+            if (!knownCompression(r.compression)) {
+                error = "\"" + item + "\": compression must be none, lossless_jpeg, lossy_3to1 or lossy_5to1.";
                 return false;
             }
         }
@@ -147,7 +168,9 @@ inline std::string rungsText(const std::vector<Rung> &rungs)
         if (!text.empty())
             text += ",";
         text += std::to_string(r.width) + "x" + std::to_string(r.height) + ":" + std::to_string(r.bits) + ":" +
-                (r.clearHdr ? "hdr" : "sdr") + (r.threshold > 0.0 ? ":" + number(r.threshold) : "");
+                (r.clearHdr ? "hdr" : "sdr") +
+                (r.threshold > 0.0 || !r.compression.empty() ? ":" + (r.threshold > 0.0 ? number(r.threshold) : "") : "") +
+                (!r.compression.empty() ? ":" + r.compression : "");
     }
     return text;
 }
@@ -174,6 +197,8 @@ inline void validate(const Ladder &l, const std::vector<RungState> &s,
             lastThreshold = r.threshold;
             lastThresholdRung = i;
         }
+        if (r.clearHdr && (r.compression == "lossy_3to1" || r.compression == "lossy_5to1"))
+            errors.push_back(name(i) + ": lossy DNG does not support Clear HDR.");
         if (i >= s.size())
             continue;
         if (!s[i].valid) {
@@ -233,6 +258,8 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
         return "\"width\":" + std::to_string(r.width) + ",\"height\":" + std::to_string(r.height) +
                ",\"bits\":" + std::to_string(r.bits) + ",\"clear_hdr\":" + (r.clearHdr ? "true" : "false") +
                ",\"label\":" + quote(label(r)) + ",\"class\":" + quote(classLabel(r)) +
+               ",\"compression\":" + quote(effectiveCompression(r)) +
+               ",\"compression_set\":" + (r.compression.empty() ? "false" : "true") +
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling);
     };
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
