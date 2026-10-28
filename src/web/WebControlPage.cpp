@@ -802,13 +802,11 @@ std::string_view webControlPageHtml()
     }
 
     /* A value the camera decides beyond the operator's settings: held for Clear HDR, a ceiling
-       it added, a flicker-free angle it added, an angle a speed ramp moves. Auto modes stay white. */
-    .badge.system-value {
-      color: var(--ok);
-    }
-
+       it added, a flicker-free angle it added, an angle a speed ramp moves. Shown in italics (not
+       colour). Auto modes are plain. */
+    .badge.system-value,
     .pill-button.system-value {
-      color: var(--ok);
+      font-style: italic;
     }
 
     /* Value lists (T33): one chip per value, x removes it. */
@@ -850,12 +848,6 @@ std::string_view webControlPageHtml()
 
     .value-chip button:hover {
       color: var(--danger);
-    }
-
-    .pill-button.active.system-value {
-      border-color: var(--ok);
-      background: var(--ok);
-      color: #09090b;
     }
 
     .pill-button.disabled,
