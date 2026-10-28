@@ -1282,6 +1282,11 @@ std::string_view webControlPageHtml()
       background: #202024;
     }
 
+    .ladder-pool-item.inactive .crop-frame,
+    .ladder-pool-item.inactive .ladder-pool-text {
+      opacity: 0.45;
+    }
+
     .ladder-pool-text {
       flex: 1 1 auto;
       min-width: 0;
@@ -6677,7 +6682,7 @@ std::string_view webControlPageHtml()
           : (draft.length >= ladderMaxResolutions ? "At most " + ladderMaxResolutions + " resolutions."
             : ladderDraftProblem(normalizeLadderDraft(draft.concat([candidate])))
               .replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ")));
-      const item = createDomElement("div", "ladder-pool-item");
+      const item = createDomElement("div", "ladder-pool-item" + (index >= 0 ? "" : " inactive"));
       const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
       frame.setAttribute("aria-hidden", "true");
       item.appendChild(frame);
