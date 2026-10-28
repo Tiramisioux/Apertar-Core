@@ -2616,15 +2616,13 @@ uint32_t isoForMeasuredGain(float gain)
     return static_cast<uint32_t>(std::clamp(static_cast<long>(std::ceil(gain * 100.0f)), 50l, 51200l));
 }
 
-// [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap,
-// and max_fps, the highest rate any control may select on this build (0 = the sensor's own limit).
+// [camera] in apertar-hardware.conf: the highest ISO each Clear HDR mode may use, 0 = no cap.
 // 12-bit: the sensor merges HG and LG only while GAIN + EXP_GAIN <= 29.1 dB, so with the driver's
 // +12 dB EXP_GAIN up to gain code 57 (17.1 dB), ISO 720. 16-bit: the driver caps Clear HDR gain at
 // code 80 (24 dB), ISO 1585; above it only the preview brightens (ISP digital gain), not the file.
 struct CameraSection {
     uint32_t max12 = 720;
     uint32_t max16 = 1585;
-    double maxFps = 0.0;
 };
 
 CameraSection loadCameraSection()
@@ -2658,12 +2656,6 @@ CameraSection loadCameraSection()
                 continue;
             char *end = nullptr;
             const std::string key = line.substr(0, eq);
-            if (key == "max_fps") {
-                const double fps = std::strtod(line.c_str() + eq + 1, &end);
-                if (end && *end == '\0' && std::isfinite(fps) && fps >= 0.0 && fps <= 280.0)
-                    limits.maxFps = fps;
-                continue;
-            }
             const long value = std::strtol(line.c_str() + eq + 1, &end, 10);
             if (!end || *end != '\0' || value < 0 || value > 51200)
                 continue;
@@ -2991,9 +2983,7 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    const double sensor = probed ? std::min(table, *probed) : table;
-    // The build's ceiling ([camera] max_fps) over every mode.
-    return cameraSection().maxFps > 0.0 ? std::min(sensor, cameraSection().maxFps) : sensor;
+    return probed ? std::min(table, *probed) : table;
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -3023,8 +3013,8 @@ uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t reque
     return 12u;
 }
 
-// The current mode's FPS ceiling before the lossless limit: the sensor table or probe (with
-// the build's max_fps), and the IMX477 uncompressed cDNG limit.
+// The current mode's FPS ceiling before the lossless limit: the sensor table or probe, and the
+// IMX477 uncompressed cDNG limit.
 double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
     double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,

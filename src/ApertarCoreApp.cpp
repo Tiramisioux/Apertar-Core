@@ -4357,8 +4357,6 @@ pcie_controller=1000110000.pcie
 # 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
 clear_hdr_iso_max_12bit=720
 clear_hdr_iso_max_16bit=1585
-# Highest FPS any control may select on this build; 0 = each mode's own limit.
-max_fps=50
 
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
