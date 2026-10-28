@@ -140,8 +140,6 @@ private:
     bool ladderActiveForLocked(const CaptureSettings &base) const;
     bool ladderRewriteLocked(CaptureSettings &next) const;
     void fillLadderFieldsLocked(CaptureSettings &out) const;
-    bool ladderYieldLocked();       // a manual mode change switches the ladder off; true if it did
-    void ladderResumeLocked();      // ... and back on when that change failed
     void saveModeLadderLocked() const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;

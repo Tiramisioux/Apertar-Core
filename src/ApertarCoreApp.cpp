@@ -8917,6 +8917,8 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
     }
 
     if (target == "resolution") {
+        if (cameraSettings.ladderActive)    // T34: the ladder picks the resolution; no refusal spam
+            return;
         const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName());
         const size_t index = analogPresetIndex(event.normalized, options.size());
         const Resolution resolution = options[index];
@@ -9186,6 +9188,8 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "resolution")) {
+        if (cameraSettings.ladderActive)    // T34: the ladder picks the resolution
+            return;
         const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName());
         const size_t currentIndex = nearestPcfResolutionIndex(options, cameraSettings.resolution);
         const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);

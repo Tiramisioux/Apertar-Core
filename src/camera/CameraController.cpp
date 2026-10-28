@@ -2729,6 +2729,10 @@ void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
     }
 }
 
+constexpr const char *kLadderOwnsMode =
+    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Record > Mode Ladder) "
+    "to choose it by hand.";
+
 constexpr const char *kLadderOwnsCompression =
     "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
     "(Settings > Record > Mode Ladder) to choose it by hand.";
@@ -9425,6 +9429,10 @@ bool CameraController::setResolution(Resolution resolution)
         setErrorLocked("Resolution changes are blocked while recording.");
         return false;
     }
+    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
+        setErrorLocked(kLadderOwnsMode);
+        return false;
+    }
 
     if (!validateResolution(resolution))
         return false;
@@ -9445,11 +9453,7 @@ bool CameraController::setResolution(Resolution resolution)
 
     CaptureSettings next = settings_;
     next.resolution = resolution;
-    const bool yielded = ladderYieldLocked();      // T34, Q2: a manual mode change switches the ladder off
-    const bool applied = applySettingsLocked(next, true);
-    if (!applied && yielded)
-        ladderResumeLocked();
-    return applied;
+    return applySettingsLocked(next, true);
 }
 
 bool CameraController::setFps(double fps)
@@ -9665,23 +9669,6 @@ void CameraController::saveModeLadderLocked() const
     std::filesystem::create_directories(modeLadderPath().parent_path(), ec);
     if (!settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
         std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
-}
-
-// Q2 (Patrik): choosing a mode by hand switches the ladder off rather than being refused.
-bool CameraController::ladderYieldLocked()
-{
-    if (!ladderActiveForLocked(settings_))
-        return false;
-    modeLadder_.enabled = false;
-    saveModeLadderLocked();
-    std::cerr << "ApertarCore mode ladder: switched off by a manual mode change\n";
-    return true;
-}
-
-void CameraController::ladderResumeLocked()
-{
-    modeLadder_.enabled = true;
-    saveModeLadderLocked();
 }
 
 std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
@@ -10214,6 +10201,10 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
         setErrorLocked("Raw bit depth changes are blocked while recording.");
         return false;
     }
+    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
+        setErrorLocked(kLadderOwnsMode);
+        return false;
+    }
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
         ? session_->sensorFamily()
@@ -10240,11 +10231,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
-    const bool yielded = ladderYieldLocked();      // T34, Q2
-    const bool applied = applySettingsLocked(next, true);
-    if (!applied && yielded)
-        ladderResumeLocked();
-    return applied;
+    return applySettingsLocked(next, true);
 }
 
 bool CameraController::setClearHdr(bool enabled)
@@ -10252,6 +10239,10 @@ bool CameraController::setClearHdr(bool enabled)
     std::lock_guard<std::mutex> lock(mutex_);
     if (recording_) {
         setErrorLocked("Clear HDR changes are blocked while recording.");
+        return false;
+    }
+    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
+        setErrorLocked(kLadderOwnsMode);
         return false;
     }
 
@@ -10285,11 +10276,7 @@ bool CameraController::setClearHdr(bool enabled)
         return true;
     }
 
-    const bool yielded = ladderYieldLocked();      // T34, Q2: a manual mode change switches the ladder off
-    const bool applied = applySettingsLocked(next, true);
-    if (!applied && yielded)
-        ladderResumeLocked();
-    return applied;
+    return applySettingsLocked(next, true);
 }
 
 namespace {
