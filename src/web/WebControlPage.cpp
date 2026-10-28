@@ -5960,10 +5960,11 @@ std::string_view webControlPageHtml()
         thr: Number(rung.threshold) > 0 ? String(Number(rung.threshold)) : "",
       }));
       const result = server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
-      // A max that is the default of its place follows the place; any other one was set by hand.
-      result.forEach((rung, index) => {
-        const ceiling = ladderCeiling(rung);
-        rung.auto = rung.thr !== "" ? Number(rung.thr) === ladderDefaultMax(index) : ladderDefaultMax(index) >= ceiling;
+      // A max that is what the arrangement gives that place follows the place; any other was set by hand.
+      const reference = ladderArranged(result.map((rung) => Object.assign({}, rung, { auto: true })));
+      result.forEach((rung) => {
+        const same = reference.find((other) => ladderKey(other) === ladderKey(rung) && other.comp === rung.comp);
+        rung.auto = !!same && same.thr === rung.thr;
       });
       return result;
     }
@@ -5973,26 +5974,36 @@ std::string_view webControlPageHtml()
       return index < 3 ? [25, 33, 50][index] : 50 + 25 * (index - 2);
     }
 
-    // Resolution 1 is the best picture (it serves the lowest FPS): Clear HDR first (16-bit, then
-    // 12-bit), then the larger picture, then the deeper one.
+    // Resolution 1 is the best picture (it serves the lowest FPS). The order of the array: the
+    // picture size first, then Clear HDR before SDR, then the deeper bit depth.
     function ladderQualityCompare(a, b) {
-      if (a.clear_hdr !== b.clear_hdr)
-        return a.clear_hdr ? -1 : 1;
-      if (a.clear_hdr && a.bits !== b.bits)
-        return b.bits - a.bits;
       const areaA = a.width * a.height;
       const areaB = b.width * b.height;
-      return areaA !== areaB ? areaB - areaA : b.bits - a.bits;
+      if (areaA !== areaB)
+        return areaB - areaA;
+      if (a.clear_hdr !== b.clear_hdr)
+        return a.clear_hdr ? -1 : 1;
+      return b.bits - a.bits;
     }
 
-    // In quality order, with the default max on every row that was not set by hand.
+    // In quality order. A row whose max was not set by hand gets the default of its place (25, 33,
+    // 50, +25 ...), cut to the mode's ceiling and to one under the max of the row below, so that
+    // every row keeps FPS of its own.
     function ladderArranged(list) {
-      return list.slice().sort(ladderQualityCompare).map((rung, index) => {
-        if (rung.auto === false)
-          return rung;
-        const fallback = ladderDefaultMax(index);
-        return Object.assign({}, rung, { auto: true, thr: fallback < ladderCeiling(rung) ? String(fallback) : "" });
-      });
+      const sorted = list.slice().sort(ladderQualityCompare);
+      const out = new Array(sorted.length);
+      let nextTop = Infinity;
+      for (let index = sorted.length - 1; index >= 0; index--) {
+        let rung = sorted[index];
+        if (rung.auto !== false) {
+          const ceiling = ladderCeiling(rung);
+          const top = Math.min(ladderDefaultMax(index), ceiling, nextTop - 1);
+          rung = Object.assign({}, rung, { auto: true, thr: top >= ceiling ? "" : String(top) });
+        }
+        nextTop = rung.thr !== "" ? Number(rung.thr) : ladderCeiling(rung);
+        out[index] = rung;
+      }
+      return out;
     }
 
     // Core's text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
