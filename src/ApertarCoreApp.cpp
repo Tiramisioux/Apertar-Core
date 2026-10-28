@@ -330,6 +330,19 @@ std::string jsonStringArray(const std::vector<std::string> &values)
     return out.str();
 }
 
+std::string jsonNumberArray(const std::vector<double> &values)
+{
+    std::ostringstream out;
+    out << '[' << std::setprecision(10);
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0)
+            out << ',';
+        out << values[i];
+    }
+    out << ']';
+    return out.str();
+}
+
 std::optional<long long> readLongLongFile(const std::filesystem::path &path)
 {
     std::ifstream input(path);
@@ -1104,6 +1117,57 @@ size_t nextPcfPresetIndex(size_t currentIndex, size_t count, PcfSettingStepMode 
     return currentIndex;
 }
 
+// T33 (request 24): a list works on any sensor. The values up to the mode's ceiling are
+// selectable, and the ceiling itself is added when a value lies above it (cap 0 = none).
+std::vector<double> selectableValueSteps(const std::vector<double> &steps, double cap)
+{
+    if (!(cap > 0.0))
+        return steps;
+    std::vector<double> selectable;
+    bool above = false;
+    for (double value : steps) {
+        if (value <= cap + 0.0005)
+            selectable.push_back(value);
+        else
+            above = true;
+    }
+    if ((above || selectable.empty()) && (selectable.empty() || std::abs(selectable.back() - cap) > 0.0005))
+        selectable.push_back(cap);
+    return selectable;
+}
+
+// Lamps on AC flicker at twice the mains frequency, so an exposure of k / (2 x mains) sees whole
+// flicker cycles: angle = 360 x fps x k / (2 x mains), k = 1, 2, ... up to 360 degrees. 25 fps on
+// 50 Hz: 90, 180, 270, 360. (Cinemate's two versions use 1 / mains or hz / (fps x k); both are off.)
+std::vector<double> flickerFreeShutterAngles(double fps, int mainsHz)
+{
+    std::vector<double> angles;
+    if (!(fps > 0.0) || mainsHz <= 0)
+        return angles;
+    for (int k = 1; k <= 400; ++k) {
+        const double angle = 360.0 * fps * k / (2.0 * mainsHz);
+        if (angle > 360.0005)
+            break;
+        angles.push_back(std::round(angle * 10.0) / 10.0);
+    }
+    return angles;
+}
+
+// Free stepping (T33): move by the increment between the list's ends instead of through it.
+double freeStepValue(double current, double increment, const std::vector<double> &steps, PcfSettingStepMode mode)
+{
+    const double low = steps.empty() ? current : steps.front();
+    const double high = steps.empty() ? current : steps.back();
+    double next = current;
+    if (mode == PcfSettingStepMode::Down)
+        next = current - increment;
+    else if (mode == PcfSettingStepMode::Up)
+        next = current + increment;
+    else
+        next = current + increment > high + 0.0005 ? low : current + increment;
+    return std::clamp(next, low, high);
+}
+
 double maximumPcfFpsForSettings(const CaptureSettings &settings, const std::string &sensorName)
 {
     const std::string sensor = lowerAscii(sensorName);
@@ -1179,24 +1243,22 @@ double maximumPcfFpsForSettings(const CaptureSettings &settings, const std::stri
     return 60.0;
 }
 
-std::vector<double> availablePcfFpsOptions(const CaptureSettings &settings,
-                                           const std::string &sensorName)
+std::vector<double> builtInFpsSteps(const std::string &sensorName)
 {
     const std::string sensor = lowerAscii(sensorName);
-    const std::vector<double> presets =
-        sensor.find("imx477") != std::string::npos || sensor.find("imx577") != std::string::npos
-            ? std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0}
-            : std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0};
+    return sensor.find("imx477") != std::string::npos || sensor.find("imx577") != std::string::npos
+        ? std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0}
+        : std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0};
+}
 
-    const double maxFps = maximumPcfFpsForSettings(settings, sensorName);
-    std::vector<double> filtered;
-    for (double fps : presets) {
-        if (fps <= maxFps + 0.0005)
-            filtered.push_back(fps);
-    }
-    if (filtered.empty())
-        filtered.push_back(maxFps);
-    return filtered;
+// The operator's FPS list (or the built-in one) cut at the mode's ceiling: Core's fps_max, or the
+// older per-sensor table when Core has none yet.
+std::vector<double> availablePcfFpsOptions(const CaptureSettings &settings,
+                                           const std::string &sensorName,
+                                           const std::vector<double> &steps)
+{
+    const double maxFps = settings.fpsMax > 0.0 ? settings.fpsMax : maximumPcfFpsForSettings(settings, sensorName);
+    return selectableValueSteps(steps.empty() ? builtInFpsSteps(sensorName) : steps, maxFps);
 }
 
 bool sameResolution(const Resolution &left, const Resolution &right)
@@ -1308,17 +1370,47 @@ size_t nearestPcfResolutionIndex(const std::vector<Resolution> &values,
     return bestIndex;
 }
 
-std::vector<double> pcfIsoOptions()
+std::vector<double> builtInIsoSteps()
 {
     return {100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0, 25600.0, 51200.0};
 }
 
-std::vector<double> pcfShutterAngleOptions()
+std::vector<double> builtInShutterAngleSteps()
 {
     return {
         11.25, 15.0, 22.5, 30.0, 37.5, 45.0, 60.0, 72.0, 75.0, 90.0,
         108.0, 120.0, 144.0, 150.0, 172.8, 180.0, 216.0, 270.0, 324.0, 360.0
     };
+}
+
+std::vector<double> builtInWhiteBalanceSteps()
+{
+    return {
+        2500.0, 2800.0, 3000.0, 3200.0, 3400.0, 3600.0, 4000.0, 4500.0,
+        4800.0, 5000.0, 5200.0, 5400.0, 5600.0, 5800.0, 6000.0, 6500.0,
+        7000.0, 7500.0, 8000.0
+    };
+}
+
+// The operator's ISO list (or the built-in one) cut at Core's iso_max.
+std::vector<double> pcfIsoOptions(const std::vector<double> &steps, uint32_t isoMax)
+{
+    return selectableValueSteps(steps.empty() ? builtInIsoSteps() : steps, static_cast<double>(isoMax));
+}
+
+// The operator's angles (or the built-in ones), with the flicker-free angles for this FPS merged
+// in when flickerMainsHz is not 0.
+std::vector<double> pcfShutterAngleOptions(const std::vector<double> &steps, double fps, int flickerMainsHz)
+{
+    std::vector<double> angles = steps.empty() ? builtInShutterAngleSteps() : steps;
+    if (flickerMainsHz > 0) {
+        const std::vector<double> added = flickerFreeShutterAngles(fps, flickerMainsHz);
+        angles.insert(angles.end(), added.begin(), added.end());
+        std::sort(angles.begin(), angles.end());
+        angles.erase(std::unique(angles.begin(), angles.end(),
+                                 [](double a, double b) { return std::abs(a - b) < 0.05; }), angles.end());
+    }
+    return angles;
 }
 
 std::vector<double> pcfShutterSpeedDenominatorOptions(bool longExposure = false, uint32_t maximumUs = 0)
@@ -1343,13 +1435,9 @@ std::vector<double> pcfShutterSpeedDenominatorOptions(bool longExposure = false,
     return options;
 }
 
-std::vector<double> pcfWhiteBalanceOptions()
+std::vector<double> pcfWhiteBalanceOptions(const std::vector<double> &steps)
 {
-    return {
-        2500.0, 2800.0, 3000.0, 3200.0, 3400.0, 3600.0, 4000.0, 4500.0,
-        4800.0, 5000.0, 5200.0, 5400.0, 5600.0, 5800.0, 6000.0, 6500.0,
-        7000.0, 7500.0, 8000.0
-    };
+    return steps.empty() ? builtInWhiteBalanceSteps() : steps;
 }
 
 bool parseResolutionText(const std::string &value, uint32_t *width, uint32_t *height)
@@ -1668,7 +1756,59 @@ struct SharedUiSettingsSnapshot
     int standbyTimeoutSeconds = 0;
     bool standbyUsbPowerOff = false;
     std::vector<std::string> favoritesOrder;
+    // T33: the operator's value lists (empty = the built-in list), free stepping on the
+    // hardware controls, and flicker-free shutter angles for the local mains frequency.
+    std::vector<double> isoSteps;
+    std::vector<double> shutterAngleSteps;
+    std::vector<double> fpsSteps;
+    std::vector<double> wbSteps;
+    bool isoFree = false;
+    double isoFreeIncrement = 100.0;
+    bool shutterAngleFree = false;
+    double shutterAngleFreeIncrement = 1.0;
+    bool fpsFree = false;
+    double fpsFreeIncrement = 1.0;
+    bool wbFree = false;
+    double wbFreeIncrement = 100.0;
+    bool flickerFreeShutterAngles = false;
+    int mainsHz = 50;
 };
+
+// A value list from UI.conf ("100, 200, 400"): numbers in [low, high], sorted, without duplicates.
+std::vector<double> parseValueStepsList(const std::string &value, double low, double high)
+{
+    std::vector<double> steps;
+    for (const std::string &entry : splitSimpleListValue(value)) {
+        if (const auto parsed = parseDoubleValue(entry); parsed && std::isfinite(*parsed) && *parsed >= low && *parsed <= high)
+            steps.push_back(*parsed);
+    }
+    std::sort(steps.begin(), steps.end());
+    steps.erase(std::unique(steps.begin(), steps.end(),
+                            [](double a, double b) { return std::abs(a - b) < 0.0005; }), steps.end());
+    return steps;
+}
+
+// The T33 fields of the state's ui object (also the set_value_steps reply): each list as the
+// operator set it, or the built-in list, with its free stepping and the flicker-free settings.
+std::string valueStepsJson(const SharedUiSettingsSnapshot &ui, const std::string &sensorName)
+{
+    std::ostringstream out;
+    out << "\"iso_steps\":" << jsonNumberArray(ui.isoSteps.empty() ? builtInIsoSteps() : ui.isoSteps)
+        << ",\"shutter_angle_steps\":" << jsonNumberArray(ui.shutterAngleSteps.empty() ? builtInShutterAngleSteps() : ui.shutterAngleSteps)
+        << ",\"fps_steps\":" << jsonNumberArray(ui.fpsSteps.empty() ? builtInFpsSteps(sensorName) : ui.fpsSteps)
+        << ",\"wb_steps\":" << jsonNumberArray(ui.wbSteps.empty() ? builtInWhiteBalanceSteps() : ui.wbSteps)
+        << ",\"iso_free\":" << (ui.isoFree ? "true" : "false")
+        << ",\"iso_free_increment\":" << compactNumber(ui.isoFreeIncrement)
+        << ",\"shutter_angle_free\":" << (ui.shutterAngleFree ? "true" : "false")
+        << ",\"shutter_angle_free_increment\":" << compactNumber(ui.shutterAngleFreeIncrement)
+        << ",\"fps_free\":" << (ui.fpsFree ? "true" : "false")
+        << ",\"fps_free_increment\":" << compactNumber(ui.fpsFreeIncrement)
+        << ",\"wb_free\":" << (ui.wbFree ? "true" : "false")
+        << ",\"wb_free_increment\":" << compactNumber(ui.wbFreeIncrement)
+        << ",\"flicker_free_shutter_angles\":" << (ui.flickerFreeShutterAngles ? "true" : "false")
+        << ",\"mains_hz\":" << ui.mainsHz;
+    return out.str();
+}
 
 SharedUiSettingsSnapshot readSharedUiSettings()
 {
@@ -1838,6 +1978,39 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.standbyUsbPowerOff = parseUiSettingsBool(value, false);
         } else if (key == "favoritesOrder") {
             snapshot.favoritesOrder = parseFavoritesOrderValue(value);
+        } else if (key == "isoSteps") {
+            snapshot.isoSteps = parseValueStepsList(value, 50.0, 51200.0);
+        } else if (key == "shutterAngleSteps") {
+            snapshot.shutterAngleSteps = parseValueStepsList(value, 1.0, 360.0);
+        } else if (key == "fpsSteps") {
+            snapshot.fpsSteps = parseValueStepsList(value, 1.0, 280.0);
+        } else if (key == "wbSteps") {
+            snapshot.wbSteps = parseValueStepsList(value, 1500.0, 12000.0);
+        } else if (key == "isoFree") {
+            snapshot.isoFree = parseUiSettingsBool(value, false);
+        } else if (key == "shutterAngleFree") {
+            snapshot.shutterAngleFree = parseUiSettingsBool(value, false);
+        } else if (key == "fpsFree") {
+            snapshot.fpsFree = parseUiSettingsBool(value, false);
+        } else if (key == "wbFree") {
+            snapshot.wbFree = parseUiSettingsBool(value, false);
+        } else if (key == "isoFreeIncrement" || key == "shutterAngleFreeIncrement" ||
+                   key == "fpsFreeIncrement" || key == "wbFreeIncrement") {
+            if (const auto parsed = parseDoubleValue(value); parsed && std::isfinite(*parsed) && *parsed > 0.0) {
+                if (key == "isoFreeIncrement")
+                    snapshot.isoFreeIncrement = std::clamp(*parsed, 1.0, 10000.0);
+                else if (key == "shutterAngleFreeIncrement")
+                    snapshot.shutterAngleFreeIncrement = std::clamp(*parsed, 0.1, 180.0);
+                else if (key == "fpsFreeIncrement")
+                    snapshot.fpsFreeIncrement = std::clamp(*parsed, 0.001, 100.0);
+                else
+                    snapshot.wbFreeIncrement = std::clamp(*parsed, 10.0, 5000.0);
+            }
+        } else if (key == "flickerFreeShutterAngles") {
+            snapshot.flickerFreeShutterAngles = parseUiSettingsBool(value, false);
+        } else if (key == "mainsHz") {
+            if (const auto parsed = parseDoubleValue(value))
+                snapshot.mainsHz = std::llround(*parsed) == 60 ? 60 : 50;
         }
     }
 
@@ -8223,6 +8396,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"custom_battery_empty_voltage\":" << jsonNumber(uiSettings.customBatteryEmptyVoltage, 2)
         << ",\"sleep_mode\":\"" << escapeJson(uiSettings.sleepMode) << "\""
         << ",\"favorites_order\":" << jsonStringArray(uiSettings.favoritesOrder)
+        << "," << valueStepsJson(uiSettings, camera_.sensorName())
         << "}"
         << ",\"audio\":{"
         << "\"input_devices\":" << jsonAudioDeviceOptions(audioDevices.inputOptions)
@@ -8702,9 +8876,10 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
     const CaptureSettings cameraSettings = camera_.settings();
 
     if (target == "iso") {
-        const std::vector<double> options = pcfIsoOptions();
-        const size_t index = analogPresetIndex(event.normalized, options.size());
-        const uint32_t iso = static_cast<uint32_t>(options[index]);
+        const std::vector<double> options = pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax);
+        const uint32_t iso = static_cast<uint32_t>(uiSettings.isoFree
+            ? std::llround(analogMappedValue(event, options.front(), options.back(), uiSettings.isoFreeIncrement))
+            : options[analogPresetIndex(event.normalized, options.size())]);
         if (!cameraSettings.isoAuto && cameraSettings.iso == iso)
             return;
         dispatch("set_iso", { { "value", std::to_string(iso) } });
@@ -8712,9 +8887,10 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
     }
 
     if (target == "fps") {
-        const std::vector<double> options = availablePcfFpsOptions(cameraSettings, camera_.sensorName());
-        const size_t index = analogPresetIndex(event.normalized, options.size());
-        const double fps = options[index];
+        const std::vector<double> options = availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps);
+        const double fps = uiSettings.fpsFree
+            ? analogMappedValue(event, options.front(), options.back(), uiSettings.fpsFreeIncrement)
+            : options[analogPresetIndex(event.normalized, options.size())];
         if (std::abs(cameraSettings.fps - fps) < 0.001)
             return;
         dispatch("set_fps", { { "value", compactNumber(fps) } });
@@ -8736,8 +8912,11 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
 
     if (target == "wb") {
         uint32_t kelvin = 0;
-        if (event.usePresets) {
-            const std::vector<double> options = pcfWhiteBalanceOptions();
+        const std::vector<double> options = pcfWhiteBalanceOptions(uiSettings.wbSteps);
+        if (event.usePresets && uiSettings.wbFree) {
+            kelvin = static_cast<uint32_t>(std::llround(
+                analogMappedValue(event, options.front(), options.back(), uiSettings.wbFreeIncrement)));
+        } else if (event.usePresets) {
             kelvin = static_cast<uint32_t>(options[analogPresetIndex(event.normalized, options.size())]);
         } else {
             kelvin = static_cast<uint32_t>(std::llround(analogMappedValue(event, 2500.0, 8000.0, 50.0)));
@@ -8754,8 +8933,11 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
         const std::vector<double> options = useShutterSpeed
             ? pcfShutterSpeedDenominatorOptions(cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled,
                                                 cameraSettings.timelapseExposureLimitUs)
-            : pcfShutterAngleOptions();
-        const double selected = options[analogPresetIndex(event.normalized, options.size())];
+            : pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
+                                     uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0);
+        const double selected = !useShutterSpeed && uiSettings.shutterAngleFree
+            ? analogMappedValue(event, options.front(), options.back(), uiSettings.shutterAngleFreeIncrement)
+            : options[analogPresetIndex(event.normalized, options.size())];
         const uint32_t shutterUs = useShutterSpeed
             ? static_cast<uint32_t>(std::max(1.0, std::round(1000000.0 / selected)))
             : static_cast<uint32_t>(std::max(
@@ -8973,7 +9155,11 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "fps")) {
-        const std::vector<double> options = availablePcfFpsOptions(cameraSettings, camera_.sensorName());
+        const std::vector<double> options = availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps);
+        if (uiSettings.fpsFree) {
+            dispatch("set_fps", { { "value", compactNumber(freeStepValue(cameraSettings.fps, uiSettings.fpsFreeIncrement, options, *mode)) } });
+            return;
+        }
         const size_t currentIndex = nearestPcfPresetIndex(options, cameraSettings.fps);
         const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);
         dispatch("set_fps", { { "value", compactNumber(options[nextIndex]) } });
@@ -8992,15 +9178,28 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "iso")) {
-        const std::vector<double> options = pcfIsoOptions();
-        const size_t currentIndex = cameraSettings.isoAuto
+        // Auto sits below the lowest value (request 13), where the mode allows it: not under an ISO
+        // ceiling (lossless cDNG, Clear HDR) and not in Clear HDR.
+        const std::vector<double> options = pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax);
+        const bool autoAllowed = cameraSettings.isoMax == 0 && !cameraSettings.clearHdr;
+        if (uiSettings.isoFree && !cameraSettings.isoAuto) {
+            const double iso = static_cast<double>(cameraSettings.iso);
+            if (autoAllowed && *mode == PcfSettingStepMode::Down && iso <= options.front() + 0.5)
+                dispatch("set_iso_auto");
+            else
+                dispatch("set_iso", { { "value", std::to_string(static_cast<uint32_t>(std::llround(
+                    freeStepValue(iso, uiSettings.isoFreeIncrement, options, *mode)))) } });
+            return;
+        }
+        const size_t offset = autoAllowed ? 1 : 0;
+        const size_t currentIndex = cameraSettings.isoAuto && autoAllowed
             ? 0
-            : nearestPcfPresetIndex(options, static_cast<double>(cameraSettings.iso)) + 1;
-        const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size() + 1, *mode);
-        if (nextIndex == 0)
+            : nearestPcfPresetIndex(options, static_cast<double>(cameraSettings.iso)) + offset;
+        const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size() + offset, *mode);
+        if (offset == 1 && nextIndex == 0)
             dispatch("set_iso_auto");
         else
-            dispatch("set_iso", { { "value", std::to_string(static_cast<uint32_t>(options[nextIndex - 1])) } });
+            dispatch("set_iso", { { "value", std::to_string(static_cast<uint32_t>(options[nextIndex - offset])) } });
         return;
     }
 
@@ -9009,7 +9208,15 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
         const std::vector<double> options = useShutterSpeed
             ? pcfShutterSpeedDenominatorOptions(cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled,
                                                 cameraSettings.timelapseExposureLimitUs)
-            : pcfShutterAngleOptions();
+            : pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
+                                     uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0);
+        if (!useShutterSpeed && uiSettings.shutterAngleFree && !cameraSettings.shutterAuto) {
+            const double angle = (static_cast<double>(cameraSettings.shutterUs) * cameraSettings.fps * 360.0) / 1000000.0;
+            const double selected = freeStepValue(angle, uiSettings.shutterAngleFreeIncrement, options, *mode);
+            dispatch("set_shutter_us", { { "value", std::to_string(static_cast<uint32_t>(std::max(
+                1.0, std::round((selected / 360.0) * (1000000.0 / std::max(0.001, cameraSettings.fps)))))) } });
+            return;
+        }
         size_t currentIndex = 0;
         if (!cameraSettings.shutterAuto) {
             const double currentValue = useShutterSpeed
@@ -9034,7 +9241,12 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "wb")) {
-        const std::vector<double> options = pcfWhiteBalanceOptions();
+        const std::vector<double> options = pcfWhiteBalanceOptions(uiSettings.wbSteps);
+        if (uiSettings.wbFree) {
+            dispatch("set_wb", { { "kelvin", std::to_string(static_cast<uint32_t>(std::llround(freeStepValue(
+                static_cast<double>(cameraSettings.whiteBalanceKelvin), uiSettings.wbFreeIncrement, options, *mode)))) } });
+            return;
+        }
         const size_t currentIndex =
             nearestPcfPresetIndex(options, static_cast<double>(cameraSettings.whiteBalanceKelvin));
         const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);
@@ -9643,7 +9855,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -10718,6 +10930,61 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (!updateSharedUiGeneralSettings({ { "sleepMode", normalized } }))
             return errorReply(command.id, "Could not update shared UI settings.");
         return okReply(command.id, "\"sleep_mode\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_value_steps") {
+        // T33: name=iso|shutter_angle|fps|wb, then any of values=v1,v2,... (empty = the built-in
+        // list), free=true|false, increment=N; for shutter_angle also flicker_free=true|false and
+        // mains_hz=50|60. Stored in UI.conf, which the touch UI watches.
+        struct ListKeys {
+            const char *name, *steps, *free, *increment;
+            double low, high, incrementLow, incrementHigh;
+        };
+        static constexpr ListKeys lists[] = {
+            {"iso", "isoSteps", "isoFree", "isoFreeIncrement", 50.0, 51200.0, 1.0, 10000.0},
+            {"shutter_angle", "shutterAngleSteps", "shutterAngleFree", "shutterAngleFreeIncrement", 1.0, 360.0, 0.1, 180.0},
+            {"fps", "fpsSteps", "fpsFree", "fpsFreeIncrement", 1.0, 280.0, 0.001, 100.0},
+            {"wb", "wbSteps", "wbFree", "wbFreeIncrement", 1500.0, 12000.0, 10.0, 5000.0},
+        };
+        const auto name = command.string("name");
+        const ListKeys *list = nullptr;
+        for (const ListKeys &entry : lists) {
+            if (name && *name == entry.name)
+                list = &entry;
+        }
+        if (!list)
+            return errorReply(command.id, "set_value_steps requires name=iso, shutter_angle, fps or wb.");
+        std::vector<std::pair<std::string, std::string>> updates;
+        if (const auto values = command.string("values")) {
+            const std::vector<double> steps = parseValueStepsList(*values, list->low, list->high);
+            if (!trimAscii(*values).empty() && steps.empty())
+                return errorReply(command.id, "No usable values in that list.");
+            std::vector<std::string> text;
+            for (double value : steps)
+                text.push_back(compactNumber(value));
+            updates.emplace_back(list->steps, encodeSimpleListValue(text));
+        }
+        if (const auto free = command.string("free"))
+            updates.emplace_back(list->free, parseUiSettingsBool(*free, false) ? "true" : "false");
+        if (const auto increment = command.number("increment")) {
+            if (!std::isfinite(*increment) || *increment < list->incrementLow || *increment > list->incrementHigh)
+                return errorReply(command.id, "Increment out of range for that list.");
+            updates.emplace_back(list->increment, compactNumber(*increment));
+        }
+        if (std::string(list->name) == "shutter_angle") {
+            if (const auto flickerFree = command.string("flicker_free"))
+                updates.emplace_back("flickerFreeShutterAngles", parseUiSettingsBool(*flickerFree, false) ? "true" : "false");
+            if (const auto mains = command.number("mains_hz")) {
+                if (*mains != 50.0 && *mains != 60.0)
+                    return errorReply(command.id, "mains_hz must be 50 or 60.");
+                updates.emplace_back("mainsHz", compactNumber(*mains));
+            }
+        }
+        if (updates.empty())
+            return errorReply(command.id, "set_value_steps needs values, free, increment, flicker_free or mains_hz.");
+        if (!updateSharedUiGeneralSettings(updates))
+            return errorReply(command.id, "Could not save the value list.");
+        return okReply(command.id, "\"ui\":{" + valueStepsJson(readSharedUiSettings(), camera_.sensorName()) + "}");
     }
 
     if (command.name == "set_favorites_order") {
