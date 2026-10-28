@@ -2703,6 +2703,15 @@ uint32_t clearHdrIsoCap(const CaptureSettings &settings)
     return normalizeRawBitDepth(settings.rawBitDepth) == 16 ? limits.max16 : limits.max12;
 }
 
+// Patrik's rule (2026-10-28, after the temp build): Clear HDR records uncompressed cDNG and SDR
+// lossless, however the mode is switched. Lossless overflows the write queue in Clear HDR 16-bit
+// (19 drops in 6.5 s at 24 fps). Called wherever clearHdr changes, with the previous value.
+void applyClearHdrCompression(CaptureSettings &next, bool wasClearHdr)
+{
+    if (next.recordingFormat == RecordingFormat::Cdng && next.clearHdr != wasClearHdr)
+        next.cdngCompression = next.clearHdr ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
+}
+
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
 // the values in use and remembers to give auto back in SDR, so every path (setters, presets, a
@@ -9503,6 +9512,7 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
         next.resolution = rung->resolution;
         next.rawBitDepth = rung->rawBitDepth;
         next.clearHdr = rung->clearHdr;
+        next.cdngCompression = rung->cdngCompression;   // Clear HDR is uncompressed, SDR lossless
     }
     if (rampingTake) {
         rampTakeChanged_ = true;
@@ -9593,9 +9603,11 @@ bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
     const ladder::Rung &rung = modeLadder_.rungs[static_cast<size_t>(index)];
     const bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
         next.rawBitDepth != rung.bits || next.clearHdr != rung.clearHdr;
+    const bool wasClearHdr = next.clearHdr;
     next.resolution = Resolution{ rung.width, rung.height };
     next.rawBitDepth = rung.bits;
     next.clearHdr = rung.clearHdr;
+    applyClearHdrCompression(next, wasClearHdr);
     next.fps = std::min(next.fps, ladder::rungCeiling(rung, states[static_cast<size_t>(index)]));
     return changed;
 }
@@ -10204,6 +10216,7 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    applyClearHdrCompression(next, settings_.clearHdr);   // before the sanitiser: lossless limits only apply to lossless
     if (enabled && !settings_.clearHdr && !simulateCamera_ && session_) {
         // Auto ISO and WB stop in Clear HDR (the sanitiser turns them off); hold the values
         // they are using now rather than the last manual ones.
