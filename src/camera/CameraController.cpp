@@ -10389,6 +10389,19 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         return false;
     }
     if (applied) {
+#if APERTARCORE_HAS_LIBCAMERA
+        // Without a reconfigure the Clear HDR knobs reach the sensor only through this
+        // push, as commitHdrKnobsLocked() does; a failed write keeps the stored values,
+        // which the next camera start applies.
+        if (!reconfigure && !simulateCamera_ && session_ && settings_.clearHdr &&
+            (settings_.hdrThresholdHigh != previous.hdrThresholdHigh ||
+             settings_.hdrThresholdLow != previous.hdrThresholdLow ||
+             settings_.hdrBlend != previous.hdrBlend || settings_.hdrGainAdder != previous.hdrGainAdder)) {
+            std::string hdrError;
+            if (!applyImx585HdrControls(settings_, &hdrError))
+                std::cerr << "ApertarCore preset: Clear HDR knobs not written to the sensor: " << hdrError << "\n";
+        }
+#endif
         if (!commitUi || commitUi()) {
             persistSettingsLocked();
             emitSettingsEventLocked();

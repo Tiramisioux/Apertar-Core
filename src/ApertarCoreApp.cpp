@@ -6805,6 +6805,15 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
         uiValues.count("photoModeEnabled") ? parseUiSettingsBool(uiValues.at("photoModeEnabled"), false) : false;
     addString("cameraFps", formatPresetFps(settings.fps));
     addString("cameraIso", settings.isoAuto ? "Auto" : formatPresetIso(settings.iso));
+    addBool("cameraFpsSpeedRamp", settings.fpsSpeedRamp);
+    addString("cameraFpsSpeedRampShutter", settings.fpsSpeedRampKeepExposure ? "exposure" : "angle");
+    addBool("cameraFpsPhaseLock", settings.fpsPhaseLock);
+    addString("cameraTimecodeMode", toString(settings.timecodeMode));
+    addBool("cameraClearHdr", settings.clearHdr);
+    addNumberString("cameraHdrThresholdHigh", std::to_string(settings.hdrThresholdHigh));
+    addNumberString("cameraHdrThresholdLow", std::to_string(settings.hdrThresholdLow));
+    addNumberString("cameraHdrBlend", std::to_string(settings.hdrBlend));
+    addNumberString("cameraHdrGainAdder", std::to_string(settings.hdrGainAdder));
     addNumberString("cameraExposureCompensation", compactNumber(settings.exposureCompensation));
     addString("cameraExposureMetering", settings.exposureMetering);
     addString("cameraShutterMode", photoModeEnabled ? "speed" : "angle");
@@ -10843,6 +10852,40 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 presetSettings.iso = uint32_t(std::llround(*iso));
             }
         }
+        if (const auto value = command.string("cameraFpsSpeedRamp"))
+            presetSettings.fpsSpeedRamp = parseUiSettingsBool(*value, presetSettings.fpsSpeedRamp);
+        if (const auto value = command.string("cameraFpsSpeedRampShutter")) {
+            if (*value != "angle" && *value != "exposure")
+                return errorReply(command.id, "Invalid preset speed-ramp shutter.");
+            presetSettings.fpsSpeedRampKeepExposure = *value == "exposure";
+        }
+        if (const auto value = command.string("cameraFpsPhaseLock"))
+            presetSettings.fpsPhaseLock = parseUiSettingsBool(*value, presetSettings.fpsPhaseLock);
+        if (const auto value = command.string("cameraTimecodeMode")) {
+            if (*value != "free_run" && *value != "rec_run")
+                return errorReply(command.id, "Invalid preset timecode mode.");
+            presetSettings.timecodeMode = *value == "rec_run" ? TimecodeMode::RecRun : TimecodeMode::FreeRun;
+            // The touch UI keeps its own copy, as set_timecode_mode writes it.
+            uiUpdates.emplace_back("timecodeMode", *value == "rec_run" ? "Rec Run" : "Free Run");
+        }
+        if (const auto value = command.string("cameraClearHdr"))
+            presetSettings.clearHdr = parseUiSettingsBool(*value, presetSettings.clearHdr);
+        auto readHdrKnob = [&](const char *key, uint32_t &field, double maximum) -> bool {
+            const auto value = command.number(key);
+            if (!value)
+                return true;
+            if (!std::isfinite(*value) || *value < 0 || *value > maximum)
+                return false;
+            field = static_cast<uint32_t>(std::llround(*value));
+            return true;
+        };
+        if (!readHdrKnob("cameraHdrThresholdHigh", presetSettings.hdrThresholdHigh, 4095) ||
+            !readHdrKnob("cameraHdrThresholdLow", presetSettings.hdrThresholdLow, 4095) ||
+            !readHdrKnob("cameraHdrBlend", presetSettings.hdrBlend, 7) ||
+            !readHdrKnob("cameraHdrGainAdder", presetSettings.hdrGainAdder, 5))
+            return errorReply(command.id, "Invalid preset Clear HDR setting.");
+        if (presetSettings.hdrThresholdLow > presetSettings.hdrThresholdHigh)
+            return errorReply(command.id, "Invalid preset Clear HDR thresholds: low is above high.");
         bool useSpeed = command.string("cameraShutterMode").value_or("") == "speed";
         auto shutter = useSpeed ? command.string("cameraShutterSpeed") : command.string("cameraShutterAngle");
         if (!shutter) {
