@@ -5849,7 +5849,7 @@ std::string_view webControlPageHtml()
     const ladderMaxResolutions = 8;
     const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
-    const ladderGroups = [["chdr", "Clear HDR"], ["4k", "4K SDR"], ["crop", "3840 wide crops"], ["2k", "2K binned"]];
+    const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K SDR"], ["crop", "4K SDR crops"], ["2k", "2K SDR binned"]];
     const ladderIcons = {
       handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
       up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
@@ -5898,8 +5898,8 @@ std::string_view webControlPageHtml()
       return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR 2×2 binned" : "SDR");
     }
 
-    // "4K Clear HDR 16-bit", "4K SDR 12-bit", "2.39:1, 12-bit" (3840 wide), "2K binned 12-bit",
-    // "2K 2.39:1, 12-bit" (1920 wide).
+    // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
+    // "4K SDR 12-bit", "4K SDR 2.39:1 12-bit", "2K SDR binned 12-bit", "2K SDR binned 2.39:1 12-bit".
     function ladderModeName(mode) {
       const info = ladderModeInfo(mode);
       const bits = mode.bits + "-bit";
@@ -5908,10 +5908,10 @@ std::string_view webControlPageHtml()
       if (mode.clear_hdr)
         return (mode.width === 3840 && aspect === "16:9" ? "4K" : ladderSizeText(mode)) + " Clear HDR " + bits;
       if (!cropIn && mode.width === 3840)
-        return aspect === "16:9" ? "4K SDR " + bits : aspect + ", " + bits;
+        return "4K SDR " + (aspect === "16:9" ? "" : aspect + " ") + bits;
       if (!cropIn && mode.width === 1920)
-        return aspect === "16:9" ? "2K binned " + bits : "2K " + aspect + ", " + bits;
-      return ladderSizeText(mode) + (cropIn ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + ", " + bits;
+        return "2K SDR binned " + (aspect === "16:9" ? "" : aspect + " ") + bits;
+      return ladderSizeText(mode) + (cropIn ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + bits;
     }
 
     function ladderModeGroup(mode) {
@@ -6381,7 +6381,7 @@ std::string_view webControlPageHtml()
       controls.appendChild(compField);
 
       const buttons = createDomElement("div", "ladder-row-buttons");
-      buttons.appendChild(createLadderIconButton("remove", "Remove " + name + " from the ladder", "remove", locked,
+      buttons.appendChild(createLadderIconButton("remove", "Deactivate " + name, "remove", locked,
         () => commitLadderDraft(draft.filter((other, i) => i !== index), "")));
       controls.appendChild(buttons);
       row.appendChild(controls);
@@ -6444,7 +6444,7 @@ std::string_view webControlPageHtml()
         return;
       }
       if (state.ladderDraft.length === 0) {
-        list.appendChild(createDomElement("div", "preset-empty", "No resolutions yet. Add a mode from Activated sensor modes below."));
+        list.appendChild(createDomElement("div", "preset-empty", "No resolutions yet. Activate a mode in Activated sensor modes below."));
         return;
       }
       const rowStates = ladderRowStates(state.ladderDraft);
@@ -6461,7 +6461,7 @@ std::string_view webControlPageHtml()
       setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
         : (pool.length === 0 ? "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…)."
           : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
-            + ". Add the ones you want on the ladder. Ceilings are Core's."));
+            + ". Activate the ones you want on the ladder. Ceilings are Core's."));
       // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
       const aspects = [];
       pool.forEach((entry) => {
@@ -6549,20 +6549,20 @@ std::string_view webControlPageHtml()
       if (index >= 0) {
         // On the ladder: its number, and Remove (same list, same rules as the × on its row).
         const actions = createDomElement("div", "ladder-pool-actions");
-        const remove = createDomElement("button", "ladder-add remove", "Remove");
+        const remove = createDomElement("button", "ladder-add remove", "Deactivate");
         remove.type = "button";
         remove.disabled = locked;
-        remove.setAttribute("aria-label", "Remove " + name + " from the ladder");
+        remove.setAttribute("aria-label", "Deactivate " + name);
         remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), ""));
         actions.appendChild(remove);
         item.appendChild(actions);
         return item;
       }
-      const add = createDomElement("button", "ladder-add", "Add");
+      const add = createDomElement("button", "ladder-add", "Activate");
       add.type = "button";
       add.disabled = why !== "";
       add.title = why;
-      add.setAttribute("aria-label", "Add " + name + " to the ladder" + (why ? ": " + why : ""));
+      add.setAttribute("aria-label", "Activate " + name + (why ? ": " + why : ""));
       add.addEventListener("click", () => commitLadderDraft(placed.list, ""));
       item.appendChild(add);
       return item;
