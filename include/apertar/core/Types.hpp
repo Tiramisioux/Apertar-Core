@@ -125,6 +125,12 @@ struct CaptureSettings {
     Resolution resolution{};
     double fps = 24.0;
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
+    // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
+    // numbered by count and the clip keeps the FPS it started with as its timeline rate.
+    bool fpsSpeedRamp = false;
+    // true: an FPS change keeps the exposure time (brightness); false: keeps the
+    // shutter angle (motion blur) through Core's existing rescale.
+    bool fpsSpeedRampKeepExposure = false;
     uint32_t iso = 800;
     bool isoAuto = false;
     uint32_t shutterUs = 20833;
@@ -202,6 +208,7 @@ struct AudioRecordingOptions {
     uint8_t outputVolume = 55;
     double fps = 24.0;
     TimecodeMode timecodeMode = TimecodeMode::FreeRun;
+    bool fpsRamp = false; // The take may change FPS: the WAV ends at the last frame's own duration.
 };
 
 struct GyroRecordingOptions {

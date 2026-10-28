@@ -186,6 +186,8 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"h264_height\":" << settings.h264Resolution.height
         << ",\"timecode_mode\":\"" << toString(settings.timecodeMode) << "\""
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
+        << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
+        << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -730,6 +732,10 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.timecodeMode = timecodeModeFromString(value);
             else if (key == "fps_phase_lock")
                 settings.fpsPhaseLock = (value == "true" || value == "1");
+            else if (key == "fps_speed_ramp")
+                settings.fpsSpeedRamp = (value == "true" || value == "1");
+            else if (key == "fps_speed_ramp_keep_exposure")
+                settings.fpsSpeedRampKeepExposure = (value == "true" || value == "1");
             else if (key == "af_mode")
                 settings.autofocusMode = autofocusModeFromString(value);
             else if (key == "af_range")
@@ -800,6 +806,8 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
     output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
+    output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
+    output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
     output << prefix << "af_range=" << toString(s.autofocusRange) << '\n';
     output << prefix << "af_speed=" << toString(s.autofocusSpeed) << '\n';
@@ -3769,11 +3777,15 @@ public:
     // and direct I/O follow it. Logged in the clip line.
     void setMediaProfile(const MediaProfile &profile) { mediaProfile_ = profile; }
     const MediaProfile &mediaProfile() const { return mediaProfile_; }
+    // Clip folder of the take; read after stop() for the ramp log (T31).
+    const std::string &folderPathString() const { return folderPathString_; }
 
-    uint64_t nextFrameIndex(int64_t timestampUs)
+    // countOnly: number frames 0, 1, 2, ... regardless of elapsed time. A ramping
+    // take (T31) has no single rate to turn elapsed time into an index with.
+    uint64_t nextFrameIndex(int64_t timestampUs, bool countOnly = false)
     {
         if (firstFrameTimestampUs_ == 0) firstFrameTimestampUs_ = timestampUs;
-        const uint64_t timeIndex = timestampUs > firstFrameTimestampUs_
+        const uint64_t timeIndex = (!countOnly && timestampUs > firstFrameTimestampUs_)
             ? uint64_t(std::llround((timestampUs - firstFrameTimestampUs_) * settings_.fps / 1000000)) : 0;
         const auto index = std::max(frameIndex_.load(std::memory_order_relaxed), timeIndex);
         frameIndex_.store(index + 1, std::memory_order_relaxed);
@@ -6378,6 +6390,8 @@ public:
                 phaseLock_.release();
                 phaseLockDurationUs_.reset();
             }
+            if (std::fabs(settings_.fps - sanitized.fps) > 1e-9)
+                noteFpsChange(settings_.fps, sanitized.fps, sanitized.shutterUs);
             settings_ = sanitized;
         }
         return true;
@@ -6403,6 +6417,16 @@ public:
         }
         recordingClock_ = RecordingClock();
         recordingGapEstimate_ = 0;
+        {
+            std::lock_guard<std::mutex> lock(rampMutex_);
+            rampEvents_.clear();
+            rampEventsStamped_ = 0;
+            recordingBaseFps_ = settings.fps;
+            rampMinFps_ = settings.fps;
+            rampMaxFps_ = settings.fps;
+        }
+        rampFirstWallClockUs_ = 0;
+        rampLastTimestampUs_ = 0;
         haveLastRecordingSensorTimestamp_ = false;
         lastRecordingSensorTimestampUs_ = 0;
         h264FrameCounter_.store(0, std::memory_order_relaxed);
@@ -6443,6 +6467,7 @@ public:
             AudioRecordingOptions resolvedAudioOptions = audioOptions;
             resolvedAudioOptions.fps = settings.fps;
             resolvedAudioOptions.timecodeMode = settings.timecodeMode;
+            resolvedAudioOptions.fpsRamp = settings.fpsSpeedRamp && !isProcessedVideoFormat(settings.recordingFormat);
             std::string audioError;
             if (!audioRecorder_.start(clipFolder, resolvedAudioOptions, audioLevelCallback_, &audioError, &recordingClock_)) {
                 gyroRecorder_.stop();
@@ -6563,6 +6588,7 @@ public:
         timed("h264_ms", [&] { h264Recorder_.stop(); });
         h264Recorder_.setMediumDead(false);
         timed("raw_ms", [&] { recorder_.stop(mediumGone); });
+        writeFpsRampLog(mediumGone);
         timed("prores_ms", [&] { proresRecorder_.stop(); });
         timed("audio_ms", [&] { audioRecorder_.stop(/*finalize=*/!mediumGone); });
         if (mediumGone)
@@ -7451,7 +7477,11 @@ private:
         // settings_ is read here under the shared session-settings lock the
         // completion callback holds; controlsMutex_ guards the lock state itself.
         std::lock_guard<std::mutex> lock(controlsMutex_);
-        const bool enabled = settings_.fpsPhaseLock && !settings_.photoModeEnabled && settings_.fps > 1.0;
+        // After an FPS change the sensor runs the old period for a few frames; a servo
+        // armed on the new nominal would bank that as phase error and sit on its clamp
+        // for hundreds of frames. Stay released until the ramp grace has passed (T31).
+        const bool enabled = settings_.fpsPhaseLock && !settings_.photoModeEnabled && settings_.fps > 1.0 &&
+            !inFpsRampGrace(static_cast<int64_t>(*timestamp / 1000));
         const bool wasActive = phaseLock_.active;
         if (!wasActive) {
             // Gains tune on the Pi without a rebuild (Cinemate kept them as live keys
@@ -7965,7 +7995,11 @@ private:
 
         trackRecordingCadence(timestampUs, frameDurationUs);
 
-        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs);
+        // Speed ramping (T31): with the take's FPS free to move, the elapsed-time index
+        // at the start rate would run ahead (ramp down) or fall behind (ramp up), so
+        // frames are numbered by count and the clip keeps its start rate as the
+        // timeline rate; fps-ramp.txt in the clip folder carries the capture rates.
+        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs, /*countOnly=*/settings_.fpsSpeedRamp);
         const uint64_t wallClockTimestampUs = wallClockForSensorTimestamp(timestampUs);
         CdngEncoder::Metadata metadata = metadataFromRequest(
             settings_,
@@ -7975,6 +8009,21 @@ private:
             wallClockTimestampUs,
             sensorFamily_,
             dngModel_, whiteBalance, rawInfo.pattern == BayerPattern::Monochrome);
+        if (settings_.fpsSpeedRamp) {
+            metadata.fps = stampFpsRampEvents(frameIndex);
+            // FreeRun timecode counts frames at the clip rate from the first frame's
+            // wall time, as a high-speed camera does; the frame's own wall time would
+            // repeat or skip frame numbers through a ramped segment.
+            if (frameIndex == 0 || rampFirstWallClockUs_ == 0)
+                rampFirstWallClockUs_ = wallClockTimestampUs;
+            metadata.timecodeWallClockUs = rampFirstWallClockUs_ + static_cast<uint64_t>(
+                std::llround(static_cast<double>(frameIndex) * 1000000.0 / std::max(1.0, metadata.fps)));
+            // The sensor switches period a few frames after the request: the first
+            // frame whose own FrameDuration reaches the requested period is the real
+            // transition for post.
+            if (frameDurationUs > 0)
+                pairFpsRampEvents(frameIndex, frameDurationUs, timestampUs);
+        }
 
         // The completion callback is the only producer. If workers are already
         // behind, reject before handing over a frame that cannot be queued.
@@ -8230,10 +8279,186 @@ private:
         }
     }
 
+    // ---- Speed ramping (T31) -------------------------------------------------
+    // applyControls() reports every FPS change here. The grace window covers the
+    // frames in which the sensor still runs the old period: the capture-gap
+    // estimate and the phase lock sit out those frames instead of reading the
+    // period change as drops or as phase error. During a take the change is also
+    // queued for the ramp log; the next recorded frame stamps it with its index.
+    //
+    // A pending control rides the next requeued request, behind the N-1 already
+    // queued (N = requests_.size(): 4 on ext4, 6 on exFAT/NTFS, 8-10 with Clear
+    // HDR, T23/T29), then the sensor's two-frame VBLANK delay; so the new period
+    // is programmed on frame ~N+2 after the request and first shows in a timestamp
+    // delta on ~N+3 (DelayedControls writes at SOF, two frames ahead; a delta spans
+    // the previous frame). Grace = N + 6 frames of the slower rate, at least 10;
+    // APERTAR_FPS_RAMP_GRACE_FRAMES overrides it. The lag_frames= figure on the
+    // frame= line is the measurement that sizes it on the Pi.
+    double fpsRampGraceFrames() const
+    {
+        if (const char *value = std::getenv("APERTAR_FPS_RAMP_GRACE_FRAMES"); value && *value) {
+            char *end = nullptr;
+            const double parsed = std::strtod(value, &end);
+            if (end && end != value && parsed >= 1.0 && parsed <= 200.0)
+                return parsed;
+        }
+        return std::max(10.0, static_cast<double>(requests_.size()) + 6.0);
+    }
+
+    void noteFpsChange(double fromFps, double toFps, uint32_t shutterUs)
+    {
+        const double slowestFps = std::max(1.0, std::min(fromFps, toFps));
+        const double graceFrames = fpsRampGraceFrames();
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        // Never shorten a window a bigger, earlier jump still needs.
+        rampGraceUntilUs_ = std::max(rampGraceUntilUs_, clockMicroseconds(CLOCK_BOOTTIME) +
+            static_cast<int64_t>(graceFrames * 1000000.0 / slowestFps));
+        FpsRampEvent event;
+        event.bootUs = clockMicroseconds(CLOCK_BOOTTIME);
+        event.fromFps = fromFps;
+        event.toFps = toFps;
+        event.shutterUs = shutterUs;
+        rampEvents_.push_back(event);
+        // Outside a take nothing stamps these, so keep only the newest few: a
+        // dial swept in preview must not grow the list for the whole session.
+        if (rampEventsStamped_ == 0 && rampEvents_.size() > 64)
+            rampEvents_.erase(rampEvents_.begin(), rampEvents_.end() - 64);
+    }
+
+    bool inFpsRampGrace(int64_t sensorTimestampUs)
+    {
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        return sensorTimestampUs < rampGraceUntilUs_;
+    }
+
+    // Stamps queued changes with the index of this frame and returns the FPS the
+    // take started with, which every frame's FrameRate tag and RecRun timecode use.
+    double stampFpsRampEvents(uint64_t frameIndex)
+    {
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        for (; rampEventsStamped_ < rampEvents_.size(); ++rampEventsStamped_) {
+            FpsRampEvent &event = rampEvents_[rampEventsStamped_];
+            event.frameIndex = frameIndex;
+            rampMinFps_ = std::min(rampMinFps_, event.toFps);
+            rampMaxFps_ = std::max(rampMaxFps_, event.toFps);
+        }
+        return recordingBaseFps_ > 0.0 ? recordingBaseFps_ : settings_.fps;
+    }
+
+    // A change is applied when a frame's own FrameDuration has come within half
+    // the step of the requested period: a 1 fps step at 100 fps (99 us) still
+    // pairs, the phase lock's +/-1 us dither never does. Older changes whose
+    // period the sensor skipped (stepper steps collapsed into one request) are
+    // closed on the same frame and marked as not seen. One journal line per
+    // transition, with the delta since the previous recorded frame and the lag in
+    // frames since the request was stamped: that lag is what the grace must cover.
+    void pairFpsRampEvents(uint64_t frameIndex, int64_t frameUs, int64_t timestampUs)
+    {
+        const int64_t deltaUs = rampLastTimestampUs_ > 0 ? timestampUs - rampLastTimestampUs_ : 0;
+        rampLastTimestampUs_ = timestampUs;
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        const size_t stamped = std::min(rampEventsStamped_, rampEvents_.size());
+        for (size_t i = 0; i < stamped; ++i) {
+            FpsRampEvent &event = rampEvents_[i];
+            // DelayedControls needs at least two frames, so a frame closer to the
+            // stamp than that still runs an older period.
+            if (event.applied || frameIndex < event.frameIndex + 2)
+                continue;
+            const double targetUs = 1000000.0 / std::max(1.0, event.toFps);
+            const double fromUs = 1000000.0 / std::max(1.0, event.fromFps);
+            const double tolerance = std::max(8.0, std::fabs(targetUs - fromUs) * 0.5);
+            if (std::fabs(static_cast<double>(frameUs) - targetUs) > tolerance)
+                continue;
+            unsigned superseded = 0;
+            for (size_t j = 0; j <= i; ++j) {
+                FpsRampEvent &older = rampEvents_[j];
+                if (older.applied)
+                    continue;
+                older.applied = true;
+                older.seen = (j == i);
+                older.appliedFrameIndex = frameIndex;
+                older.frameUs = frameUs;
+                if (j != i) ++superseded;
+            }
+            std::cerr << "ApertarCore fps ramp: frame=" << frameIndex << " frame_us=" << frameUs
+                      << " delta_us=" << deltaUs << " from=" << event.fromFps << " to=" << event.toFps
+                      << " lag_frames=" << (frameIndex >= event.frameIndex ? frameIndex - event.frameIndex : 0)
+                      << " superseded=" << superseded << "\n";
+            break;
+        }
+    }
+
+    // One line per FPS change in the clip folder, plus a stats line in the journal.
+    // Nothing is written when the medium is gone (T28) or no change happened.
+    void writeFpsRampLog(bool mediumGone)
+    {
+        std::vector<FpsRampEvent> events;
+        double baseFps = 0.0, minFps = 0.0, maxFps = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(rampMutex_);
+            const size_t stamped = std::min(rampEventsStamped_, rampEvents_.size());
+            events.assign(rampEvents_.begin(), rampEvents_.begin() + static_cast<std::ptrdiff_t>(stamped));
+            baseFps = recordingBaseFps_;
+            minFps = rampMinFps_;
+            maxFps = rampMaxFps_;
+            rampEvents_.clear();
+            rampEventsStamped_ = 0;
+            recordingBaseFps_ = 0.0;
+        }
+        if (events.empty())
+            return;
+        std::cerr << "ApertarCore fps ramp stats: changes=" << events.size() << " base_fps=" << baseFps
+                  << " min_fps=" << minFps << " max_fps=" << maxFps << "\n";
+        if (mediumGone)
+            return;
+        const std::string folder = recorder_.folderPathString();
+        if (folder.empty())
+            return;
+        const std::string path = folder + "/fps-ramp.txt";
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) {
+            std::cerr << "ApertarCore fps ramp: could not write " << path << "\n";
+            return;
+        }
+        // tc_at_base: the applied frame's RecRun timecode at the clip rate, the
+        // number an editor can scrub to on the conformed timeline.
+        const int nominal = std::max(1, static_cast<int>(std::llround(baseFps)));
+        auto timecodeAtBase = [nominal](uint64_t frame) {
+            const uint64_t seconds = frame / static_cast<uint64_t>(nominal);
+            char text[16];
+            std::snprintf(text, sizeof(text), "%02u:%02u:%02u:%02u",
+                          static_cast<unsigned>((seconds / 3600) % 24), static_cast<unsigned>((seconds / 60) % 60),
+                          static_cast<unsigned>(seconds % 60), static_cast<unsigned>(frame % static_cast<uint64_t>(nominal)));
+            return std::string(text);
+        };
+        out << "# Apertar speed ramp log. Frames are numbered by count; the clip's timeline rate is base_fps.\n"
+            << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n"
+            << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
+            << "# requested_frame applied_frame frame_us seen tc_at_base boot_us from_fps to_fps shutter_us\n";
+        for (const FpsRampEvent &event : events) {
+            out << event.frameIndex << ' ';
+            if (event.applied)
+                out << event.appliedFrameIndex << ' ' << event.frameUs << ' ' << (event.seen ? 1 : 0) << ' '
+                    << timecodeAtBase(event.appliedFrameIndex);
+            else
+                out << "- - - -";
+            out << ' ' << event.bootUs << ' ' << event.fromFps << ' ' << event.toFps << ' '
+                << event.shutterUs << '\n';
+        }
+    }
+
     void trackRecordingCadence(int64_t timestampUs, int64_t frameDurationUs)
     {
         if (timestampUs <= 0)
             return;
+
+        if (inFpsRampGrace(timestampUs)) {
+            // The period is changing under us: a long or short delta here is the
+            // ramp, not a drop. Keep the chain of timestamps intact and move on.
+            haveLastRecordingSensorTimestamp_ = true;
+            lastRecordingSensorTimestampUs_ = timestampUs;
+            return;
+        }
 
         if (!haveLastRecordingSensorTimestamp_) {
             haveLastRecordingSensorTimestamp_ = true;
@@ -8596,6 +8821,27 @@ private:
     uint64_t recordingGapEstimate_ = 0;
     bool haveLastRecordingSensorTimestamp_ = false;
     int64_t lastRecordingSensorTimestampUs_ = 0;
+    // Speed ramping (T31); see noteFpsChange().
+    struct FpsRampEvent {
+        int64_t bootUs = 0;
+        uint64_t frameIndex = 0;
+        double fromFps = 0.0;
+        double toFps = 0.0;
+        uint32_t shutterUs = 0;
+        bool applied = false;          // closed: a frame reached this period, or a later request superseded it
+        bool seen = false;             // this period itself was seen on a frame
+        uint64_t appliedFrameIndex = 0;
+        int64_t frameUs = 0;           // that frame's FrameDuration
+    };
+    std::mutex rampMutex_;
+    std::vector<FpsRampEvent> rampEvents_;
+    size_t rampEventsStamped_ = 0;
+    int64_t rampGraceUntilUs_ = 0;
+    double recordingBaseFps_ = 0.0;
+    double rampMinFps_ = 0.0;
+    double rampMaxFps_ = 0.0;
+    uint64_t rampFirstWallClockUs_ = 0;   // completion thread only
+    int64_t rampLastTimestampUs_ = 0;     // completion thread only
     std::atomic<uint64_t> h264FrameCounter_{0};
     uint64_t requeueFailures_ = 0;
     const size_t maxPendingPhotoCaptures_ = 12;
@@ -8720,6 +8966,13 @@ void CameraController::stop()
     if (state_ == CameraState::Offline)
         return;
 
+    if (recording_ && rampTakeChanged_ && session_ && !simulateCamera_) {
+        // A ramp take ended by shutdown: close it like record_stop so fps-ramp.txt
+        // is written and the start rate, not a mid-ramp one, is persisted.
+        session_->stopRecording();
+        recording_ = false;
+        restoreFpsAfterRampLocked();
+    }
     recording_ = false;
     state_ = CameraState::Stopping;
 
@@ -8805,9 +9058,19 @@ bool CameraController::setResolution(Resolution resolution)
 bool CameraController::setFps(double fps)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (recording_ && std::abs(fps - settings_.fps) > 0.0001) {
-        setErrorLocked("Stop recording before changing FPS so video and audio keep the same timeline.");
-        return false;
+    const bool rampingTake = recording_ && std::abs(fps - settings_.fps) > 0.0001;
+    if (rampingTake) {
+        // Speed ramping (T31): a raw take may change rate when the operator turned
+        // it on. H.264/ProRes carry one rate in their container and model the WAV
+        // end from it, so those takes keep the old rule.
+        if (!settings_.fpsSpeedRamp) {
+            setErrorLocked("Stop recording before changing FPS, or enable FPS ramping (set_fps_speed_ramp) for cDNG/MLV takes.");
+            return false;
+        }
+        if (isProcessedVideoFormat(settings_.recordingFormat) || settings_.photoModeEnabled) {
+            setErrorLocked("FPS ramping works in cDNG and MLV takes only.");
+            return false;
+        }
     }
     if (fps <= 0.0 || fps > 280.0) {
         setErrorLocked("FPS must be between 0 and 280.");
@@ -8828,11 +9091,69 @@ bool CameraController::setFps(double fps)
         return true;
     }
 
+    // A ramp step is take-scoped: the UI hears it, the settings file does not
+    // (Cinemate ff59dd8: a take's value must not become the operator's target).
+    return applyFpsStepLocked(effectiveFps, rampingTake, /*commit=*/!rampingTake);
+}
+
+bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake, bool commit)
+{
     CaptureSettings next = settings_;
-    if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled))
-        next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, effectiveFps);
+    // Cinemate's shutter_a_sync_mode: 0 keeps the angle (the rescale below), 1 keeps
+    // the exposure time. Only the ramp setting selects the second; auto shutter and
+    // long-exposure stills are left to their own controllers either way.
+    const bool keepExposure = next.fpsSpeedRamp && next.fpsSpeedRampKeepExposure;
+    bool shutterClamped = false;
+    if (!next.shutterAuto && !(next.photoModeEnabled && next.longExposureEnabled)) {
+        if (!keepExposure) {
+            next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, effectiveFps);
+        } else {
+            // The IPA would shorten an exposure longer than the new frame on its own
+            // (libcamera agc_channel limitExposureTime); clamp it here so the setting,
+            // the UI and the DNG agree with the sensor, and remember what the operator
+            // asked for so a ramp back down returns to it (Cinemate's
+            // exposure_time_nominal). The sensor's own ceiling is a few lines less
+            // than the frame; the DNG carries the real ExposureTime either way.
+            if (rampNominalShutterUs_ == 0)
+                rampNominalShutterUs_ = next.shutterUs;
+            const uint32_t frameUs = static_cast<uint32_t>(std::max(1.0, std::floor(1000000.0 / effectiveFps)));
+            next.shutterUs = std::min(rampNominalShutterUs_, frameUs);
+            shutterClamped = next.shutterUs < rampNominalShutterUs_;
+        }
+    }
     next.fps = effectiveFps;
-    return applySettingsLocked(next, false);
+    if (rampingTake) {
+        rampTakeChanged_ = true;
+        std::cerr << "ApertarCore fps ramp: " << settings_.fps << " -> " << effectiveFps
+                  << " fps shutter_us=" << next.shutterUs
+                  << " policy=" << (keepExposure ? "exposure" : "angle")
+                  << (shutterClamped ? " (shutter clamped to the frame)" : "") << "\n";
+    }
+    const bool applied = applySettingsLocked(next, false, commit);
+    if (applied && !commit)
+        emitSettingsEventLocked();
+    return applied;
+}
+
+// After a take that ramped, go back to the rate it started with (and persist
+// that), so the next take does not inherit a mid-ramp value.
+void CameraController::restoreFpsAfterRampLocked()
+{
+    if (!rampTakeChanged_)
+        return;
+    rampTakeChanged_ = false;
+    if (rampTakeBaseFps_ <= 0.0)
+        return;
+    if (std::abs(settings_.fps - rampTakeBaseFps_) < 0.0001) {
+        // Back at the start rate; another setting may have persisted a mid-ramp
+        // value meanwhile, so write the file once more.
+        persistSettingsLocked();
+        return;
+    }
+    std::cerr << "ApertarCore fps ramp: take ended at " << settings_.fps << " fps, restoring "
+              << rampTakeBaseFps_ << "\n";
+    if (!applyFpsStepLocked(rampTakeBaseFps_, false, true))
+        std::cerr << "ApertarCore fps ramp: restore failed: " << lastError_ << "\n";
 }
 
 bool CameraController::setIso(uint32_t iso)
@@ -8882,6 +9203,7 @@ bool CameraController::setShutterUs(uint32_t shutterUs)
         return false;
     }
 
+    rampNominalShutterUs_ = 0; // an explicit shutter is the new nominal
     CaptureSettings next = settings_;
     next.shutterUs = shutterUs;
     next.shutterAuto = false;
@@ -8891,6 +9213,7 @@ bool CameraController::setShutterUs(uint32_t shutterUs)
 bool CameraController::setShutterAuto()
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    rampNominalShutterUs_ = 0;
     CaptureSettings next = settings_;
     next.shutterAuto = true;
     return applySettingsLocked(next, false);
@@ -9385,6 +9708,22 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     return applySettingsLocked(next, false);
 }
 
+bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_ && enabled != settings_.fpsSpeedRamp) {
+        // Frame numbering and the WAV endpoint follow this flag for the whole take.
+        setErrorLocked("Stop recording before turning FPS ramping on or off.");
+        return false;
+    }
+    if (enabled != settings_.fpsSpeedRamp || keepExposure != settings_.fpsSpeedRampKeepExposure)
+        rampNominalShutterUs_ = 0;
+    CaptureSettings next = settings_;
+    next.fpsSpeedRamp = enabled;
+    next.fpsSpeedRampKeepExposure = keepExposure;
+    return applySettingsLocked(next, false);
+}
+
 bool CameraController::setAutofocusMode(AutofocusMode mode)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -9459,6 +9798,8 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
 
     if (simulateCamera_) recordingDropWarning_.reset();
     recording_ = true;
+    rampTakeBaseFps_ = settings_.fps;
+    rampTakeChanged_ = false;
     recordingFailureReported_ = false;
     recordingFailureMessage_.clear();
     externalFailureMessage_.clear();
@@ -9716,6 +10057,7 @@ bool CameraController::stopRecording()
     state_ = CameraState::Ready;
     if (!simulateCamera_ && session_)
         session_->stopRecording();
+    restoreFpsAfterRampLocked();
     lastError_ = !simulateCamera_ && session_ ? session_->recordingError() : std::string();
     recordingFaultName_ = !simulateCamera_ && session_ ? mediaFaultName(session_->recordingFault()) : "";
     recordingFailureReported_ = !lastError_.empty();
@@ -9740,6 +10082,7 @@ bool CameraController::checkRecordingFailure()
     session_->stopRecording(mediumGone);
     recording_ = false;
     state_ = CameraState::Ready;
+    restoreFpsAfterRampLocked();
     lastError_ = error;
     recordingFailureMessage_ = error;
     emitRecordingEventLocked();
@@ -9867,6 +10210,7 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         return false;
     }
     if (!validateResolution(requested.resolution)) return false;
+    rampNominalShutterUs_ = 0; // a preset brings its own shutter
     CaptureSettings next = supportedRecordingSettings(requested);
     next.tuningFile = normalizeTuningFilePath(next.tuningFile);
     if (!validateTuningFilePath(next.tuningFile, &lastError_)) return false;

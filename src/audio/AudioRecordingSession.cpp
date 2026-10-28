@@ -379,7 +379,11 @@ void AudioRecordingSession::observeVideoFrame(uint64_t sensorBootUs, int64_t fra
         videoLastDurationUs_ = std::max<int64_t>(0, frameDurationUs);
     }
 
-    videoEndBootUs_ = options_.fps > 0
+    // A ramping take (T31) has no single nominal period: end the WAV at the last
+    // frame's own FrameDuration (the fallback branch) instead of the next grid
+    // point at the start rate.
+    const bool byDuration = options_.fpsRamp && videoLastDurationUs_ > 0;
+    videoEndBootUs_ = (options_.fps > 0 && !byDuration)
         ? videoFirstBootUs_ + uint64_t(std::llround((std::llround(
             double(int64_t(videoLastBootUs_) - int64_t(videoFirstBootUs_)) * options_.fps / 1000000) + 1) * 1000000 / options_.fps))
         : videoLastBootUs_ + uint64_t(videoLastDurationUs_);

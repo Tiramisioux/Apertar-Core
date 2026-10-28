@@ -84,6 +84,7 @@ public:
     bool setH264Resolution(Resolution resolution);
     bool setTimecodeMode(TimecodeMode mode);
     bool setFpsPhaseLock(bool enabled);
+    bool setFpsSpeedRamp(bool enabled, bool keepExposure);
     bool setAutofocusMode(AutofocusMode mode);
     bool setAutofocusRange(AutofocusRange range);
     bool setAutofocusSpeed(AutofocusSpeed speed);
@@ -122,6 +123,8 @@ private:
     class CameraSession;
 
     bool applySettingsLocked(CaptureSettings nextSettings, bool requiresReconfigure, bool commit = true);
+    bool applyFpsStepLocked(double effectiveFps, bool rampingTake, bool commit);
+    void restoreFpsAfterRampLocked();
     bool commitHdrKnobsLocked(const CaptureSettings &next);
     void persistSettingsLocked();
     void restoreModeGeometryLocked(CaptureSettings &next) const;
@@ -165,6 +168,11 @@ private:
     uint64_t timelapseSequence_ = 0;
     PhotoCaptureFormat timelapseFormat_ = PhotoCaptureFormat::Dng;
     std::string timelapseFolderPath_;
+    // Speed ramping (T31): the exposure the operator set, kept across clamps while
+    // keep-exposure ramps shorten it; the take's start rate, restored at stop.
+    uint32_t rampNominalShutterUs_ = 0;
+    double rampTakeBaseFps_ = 0.0;
+    bool rampTakeChanged_ = false;
     std::unique_ptr<CameraSession> session_;
 };
 

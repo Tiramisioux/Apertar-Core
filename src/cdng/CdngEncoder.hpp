@@ -34,6 +34,9 @@ public:
         uint64_t wallClockTimestampUs = 0;
         TimecodeMode timecodeMode = TimecodeMode::FreeRun;
         double fps = 24.0;
+        // Speed ramping (T31): wall clock the FreeRun timecode counts from (first
+        // frame's wall time + frameIndex at the clip rate); 0 = the frame's own.
+        uint64_t timecodeWallClockUs = 0;
         uint32_t iso = 800;
         uint32_t shutterUs = 20833;
         uint32_t whiteBalanceKelvin = 5600;

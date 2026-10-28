@@ -1397,7 +1397,8 @@ void CdngEncoder::writeDngFile(const std::string &path,
               std::chrono::system_clock::now().time_since_epoch()).count());
     const std::string originalDate = dateTimeString(wallClock);
 
-    const std::array<uint8_t, 8> tc = timeCode(metadata, wallClock);
+    const std::array<uint8_t, 8> tc = timeCode(metadata, metadata.timecodeWallClockUs
+                                                   ? metadata.timecodeWallClockUs : wallClock);
     const DngColorProfile colorProfile = monochrome ? DngColorProfile{} : colorProfileForMetadata(metadata);
     const uint16_t exifSensitivityType = 3; // ISO speed
 
