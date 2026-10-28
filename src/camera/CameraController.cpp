@@ -8670,7 +8670,8 @@ private:
                 std::cerr << "ApertarCore audio stretch (experimental): could not write " << map << "\n";
                 return;
             }
-            out << "0 0\n";
+            // No "0 0" line: Rubber Band anchors the start itself and reads a zero-length
+            // first segment as a NaN ratio (it warns and ignores it).
             int64_t lastSource = 0, lastTarget = 0;
             for (const auto &[frame, offsetUs] : job.points) {
                 const int64_t source = std::llround(static_cast<double>(offsetUs) * sampleRate / 1000000.0);
