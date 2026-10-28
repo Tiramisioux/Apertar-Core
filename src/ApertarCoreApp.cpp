@@ -9252,16 +9252,28 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (const auto mode = pcfSettingStepMode(action, "wb")) {
+        // Auto sits below the lowest Kelvin, as for ISO, where auto WB is allowed: a tuning with a
+        // calibrated WB curve, and not in Clear HDR.
         const std::vector<double> options = pcfWhiteBalanceOptions(uiSettings.wbSteps);
-        if (uiSettings.wbFree) {
-            dispatch("set_wb", { { "kelvin", std::to_string(static_cast<uint32_t>(std::llround(freeStepValue(
-                static_cast<double>(cameraSettings.whiteBalanceKelvin), uiSettings.wbFreeIncrement, options, *mode)))) } });
+        const bool autoAllowed = cameraSettings.whiteBalanceAvailable && !cameraSettings.clearHdr;
+        if (uiSettings.wbFree && !cameraSettings.whiteBalanceAuto) {
+            const double kelvin = static_cast<double>(cameraSettings.whiteBalanceKelvin);
+            if (autoAllowed && *mode == PcfSettingStepMode::Down && kelvin <= options.front() + 0.5)
+                dispatch("set_wb_auto");
+            else
+                dispatch("set_wb", { { "kelvin", std::to_string(static_cast<uint32_t>(std::llround(
+                    freeStepValue(kelvin, uiSettings.wbFreeIncrement, options, *mode)))) } });
             return;
         }
-        const size_t currentIndex =
-            nearestPcfPresetIndex(options, static_cast<double>(cameraSettings.whiteBalanceKelvin));
-        const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);
-        dispatch("set_wb", { { "kelvin", std::to_string(static_cast<uint32_t>(options[nextIndex])) } });
+        const size_t offset = autoAllowed ? 1 : 0;
+        const size_t currentIndex = cameraSettings.whiteBalanceAuto && autoAllowed
+            ? 0
+            : nearestPcfPresetIndex(options, static_cast<double>(cameraSettings.whiteBalanceKelvin)) + offset;
+        const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size() + offset, *mode);
+        if (offset == 1 && nextIndex == 0)
+            dispatch("set_wb_auto");
+        else
+            dispatch("set_wb", { { "kelvin", std::to_string(static_cast<uint32_t>(options[nextIndex - offset])) } });
         return;
     }
 
