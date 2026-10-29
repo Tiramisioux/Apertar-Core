@@ -5401,6 +5401,7 @@ std::string_view webControlPageHtml()
           <div class="pbv-main">
             <div class="pbv-stage" id="pbvStage">
               <canvas id="pbvCanvas"></canvas>
+              <audio id="pbvAudio" preload="none"></audio>
               <span class="pbv-badge tr" id="pbvFps">-- FPS</span>
               <span class="pbv-badge tl hidden" id="pbvDrop">DROP</span>
               <span class="pbv-badge bl" id="pbvState">PAUSED</span>
@@ -10776,6 +10777,7 @@ std::string_view webControlPageHtml()
         lanes: [{ busy: false, until: 0, errors: 0 }, { busy: false, until: 0, errors: 0 }], ready: [], lastRequested: -1,
         rtt: 60, drawn: [], shownIndex: 0, shownNumber: -1, shownKind: "none", bitmap: null, scrubbing: false, wasPlaying: false,
         scrubBusy: false, scrubNext: -1, seq: 0, pausedTimer: 0, uiAt: 0, hold: "", awakeTimer: 0, keyTimer: 0,
+        audioUrl: "", audioOn: false, audioLive: false, audioFailed: false, audioWaitSince: 0, lastAudio: -1, lastAudioAt: 0,
       };
     }
 
@@ -10962,6 +10964,45 @@ std::string_view webControlPageHtml()
       pbvUpdateUi(true);
     }
 
+    // The sound is the clock when there is one (design §2.6). currentTime moves in coarse steps in some browsers, so
+    // between two changes the page advances by performance.now() and resyncs on every change.
+    function pbvAudioTime(v, now) {
+      const audio = document.getElementById("pbvAudio");
+      if (audio.currentTime !== v.lastAudio) {
+        v.lastAudio = audio.currentTime;
+        v.lastAudioAt = now;
+        return audio.currentTime;
+      }
+      return audio.currentTime + Math.min(0.25, (now - v.lastAudioAt) / 1000);
+    }
+
+    function pbvAudioStop(drop) {
+      const audio = document.getElementById("pbvAudio");
+      audio.pause();
+      if (drop) {                                   // let go of the connection at once
+        audio.removeAttribute("src");
+        audio.load();
+      }
+    }
+
+    function pbvAudioFailed(why) {
+      const v = state.pb.viewer;
+      if (!v || v.audioFailed)
+        return;
+      v.audioFailed = true;
+      v.audioOn = false;
+      v.audioLive = false;
+      pbvAudioStop(true);
+      v.clockBase = v.t;                            // the wall clock goes on from here
+      v.clockStart = performance.now();
+      showToast(why || "This browser cannot play the take's WAV. Playing without sound.", true);
+      const rows = document.querySelectorAll(".pbv-meta-row");
+      rows.forEach((row) => {
+        if (row.querySelector(".pbv-meta-label").textContent === "SOUND")
+          row.querySelector(".pbv-meta-value").textContent = "This browser cannot play it";
+      });
+    }
+
     function pbvPlay() {
       const v = state.pb.viewer;
       if (!v || !v.tl || v.playing || v.hold)
@@ -10973,6 +11014,19 @@ std::string_view webControlPageHtml()
       v.ready = [];
       v.lastRequested = v.number - 1;
       v.lanes.forEach((lane) => { lane.until = 0; lane.errors = 0; });
+      v.audioOn = !!v.audioUrl && !v.audioFailed;
+      v.audioLive = false;
+      v.audioWaitSince = v.clockStart;
+      if (v.audioOn) {
+        const audio = document.getElementById("pbvAudio");
+        if (!audio.getAttribute("src"))
+          audio.src = v.audioUrl;
+        try { audio.currentTime = v.t; } catch (error) { /* before metadata: set again below */ }
+        v.lastAudio = -1;
+        const started = audio.play();
+        if (started && started.catch)
+          started.catch(() => pbvAudioFailed());
+      }
       document.getElementById("pbvHole").classList.add("hidden");
       const interval = Math.min(20000, Math.floor(Number(state.snapshot && state.snapshot.standby_timeout_seconds || 0) * 1000 / 3));
       if (interval > 0) {
@@ -10989,9 +11043,11 @@ std::string_view webControlPageHtml()
       const v = state.pb.viewer;
       if (!v)
         return;
-      if (v.playing)
+      if (v.playing && !v.audioLive && !v.audioOn)
         v.t = Math.min(pbvDuration(v.tl), v.clockBase + (performance.now() - v.clockStart) / 1000);
       v.playing = false;
+      if (v.audioUrl)
+        pbvAudioStop(false);
       window.cancelAnimationFrame(v.raf);
       window.clearInterval(v.awakeTimer);
       v.ready.forEach((frame) => frame.bitmap.close && frame.bitmap.close());
@@ -11018,7 +11074,20 @@ std::string_view webControlPageHtml()
       if (!v || !v.playing)
         return;
       const tl = v.tl;
-      let t = v.clockBase + (now - v.clockStart) / 1000;
+      let t;
+      if (v.audioOn) {
+        const audio = document.getElementById("pbvAudio");
+        if (!audio.paused && !audio.ended && audio.readyState >= 3) {
+          t = pbvAudioTime(v, now);                    // the sound is the clock
+          v.audioLive = true;
+        } else {
+          t = v.t;                                     // waiting for the sound to start or to catch up
+          if (!v.audioLive && now - v.audioWaitSince > 5000)
+            pbvAudioFailed("The sound did not start. Playing without sound.");
+        }
+      } else {
+        t = v.clockBase + (now - v.clockStart) / 1000;
+      }
       if (t >= pbvDuration(tl)) {                      // loop to the first frame and go on, like the touch UI
         v.ready.forEach((frame) => frame.bitmap.close && frame.bitmap.close());
         v.ready = [];
@@ -11026,6 +11095,10 @@ std::string_view webControlPageHtml()
         v.clockStart = now;
         v.lastRequested = tl.first - 1;
         t = 0;
+        if (v.audioOn) {
+          try { document.getElementById("pbvAudio").currentTime = 0; } catch (error) { /* ignored */ }
+          v.lastAudio = -1;
+        }
       }
       v.t = t;
       const target = pbvNumberAtTime(tl, t);
@@ -11086,6 +11159,9 @@ std::string_view webControlPageHtml()
     function pbvSeekTo(fraction, width) {
       const v = state.pb.viewer;
       v.t = Math.min(1, Math.max(0, fraction)) * pbvDuration(v.tl);
+      if (v.audioUrl && !v.audioFailed && document.getElementById("pbvAudio").getAttribute("src")) {
+        try { document.getElementById("pbvAudio").currentTime = v.t; } catch (error) { /* ignored */ }
+      }
       v.number = pbvNumberAtTime(v.tl, v.t);
       pbvUpdateUi(true);
       if (v.scrubBusy) {
@@ -11265,9 +11341,11 @@ std::string_view webControlPageHtml()
         return;
       v.clip = clip;
       v.tl = pbvTimeline(clip);
+      v.audioUrl = clip.audio_url && !clip.ramp ? clip.audio_url : "";   // a ramp take plays as its timeline, sound off (P2)
+      pbvAudioStop(true);
       v.t = 0;
       v.number = v.tl.first;
-      setText("pbvInfo", clip.info_line || "");
+      setText("pbvInfo", clip.ramp ? "Speed ramp take: plays on its timeline. The sound is real time, so it is off." : (clip.info_line || ""));
       setText("pbvFps", clip.fps_badge || "");
       const drop = pbvDropCount(clip);
       const dropBadge = document.getElementById("pbvDrop");
@@ -11301,6 +11379,7 @@ std::string_view webControlPageHtml()
 
     function pbvClose(fromHistory) {
       const v = state.pb.viewer;
+      pbvAudioStop(true);
       if (v) {
         pbvPause(true);
         window.clearTimeout(v.pausedTimer);
@@ -11335,6 +11414,7 @@ std::string_view webControlPageHtml()
         return;
       }
       pbvPause(true);
+      pbvAudioStop(true);
       v.hold = hold;
       const text = pbvHoldText[hold] || ["Playback held", "Playback is not available right now."];
       setText("pbvHoldTitle", text[0]);
@@ -11387,6 +11467,11 @@ std::string_view webControlPageHtml()
       document.getElementById("pbvLiveButton").addEventListener("click", () => setMediaBrowserOpen(false));
       document.getElementById("pbvWakeButton").addEventListener("click", async () => {
         try { await sendCommand({ cmd: "wake" }); } catch (error) { showToast(error.message, true); }
+      });
+      document.getElementById("pbvAudio").addEventListener("error", () => {
+        const audio = document.getElementById("pbvAudio");
+        if (state.pb.viewer && audio.getAttribute("src"))
+          pbvAudioFailed();
       });
       document.addEventListener("visibilitychange", () => {
         const v = state.pb.viewer;

@@ -6176,11 +6176,25 @@ std::string durationTextForSeconds(double seconds)
     return out.str();
 }
 
-std::string wavDurationTextForFile(const std::filesystem::path &path)
+// T51: the format of a WAV (one RIFF parser for the length and for the SOUND row).
+struct WavFormat
+{
+    uint16_t channels = 0;
+    uint32_t sampleRate = 0;
+    uint16_t bitsPerSample = 0;
+    uint64_t dataBytes = 0;
+    double seconds() const
+    {
+        const uint64_t bytesPerSecond = uint64_t(sampleRate) * channels * (bitsPerSample / 8);
+        return bytesPerSecond ? double(dataBytes) / double(bytesPerSecond) : 0.0;
+    }
+};
+
+std::optional<WavFormat> wavFormatForFile(const std::filesystem::path &path)
 {
     std::ifstream input(path, std::ios::binary);
     if (!input)
-        return "--";
+        return std::nullopt;
 
     auto readU16 = [](const char *bytes) -> uint16_t {
         return static_cast<uint16_t>(static_cast<unsigned char>(bytes[0])) |
@@ -6198,7 +6212,7 @@ std::string wavDurationTextForFile(const std::filesystem::path &path)
     if (input.gcount() != static_cast<std::streamsize>(sizeof(riff)) ||
         (std::memcmp(riff, "RIFF", 4) != 0 && std::memcmp(riff, "RF64", 4) != 0) ||
         std::memcmp(riff + 8, "WAVE", 4) != 0) {
-        return "--";
+        return std::nullopt;
     }
 
     uint16_t channels = 0;
@@ -6241,8 +6255,23 @@ std::string wavDurationTextForFile(const std::filesystem::path &path)
 
     const uint32_t bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
     if (bytesPerSecond == 0 || dataBytes == 0)
-        return "--";
-    return durationTextForSeconds(static_cast<double>(dataBytes) / static_cast<double>(bytesPerSecond));
+        return std::nullopt;
+    return WavFormat{channels, sampleRate, bitsPerSample, dataBytes};
+}
+
+std::string wavDurationTextForFile(const std::filesystem::path &path)
+{
+    const auto format = wavFormatForFile(path);
+    return format ? durationTextForSeconds(format->seconds()) : "--";
+}
+
+// "24-bit 48 kHz stereo", the SOUND row.
+std::string wavSoundText(const WavFormat &format)
+{
+    std::ostringstream out;
+    out << format.bitsPerSample << "-bit " << (format.sampleRate / 1000.0) << " kHz "
+        << (format.channels == 1 ? "mono" : (format.channels == 2 ? "stereo" : std::to_string(format.channels) + " channels"));
+    return out.str();
 }
 
 std::string wavDurationTextForFolder(const std::filesystem::path &folder)
@@ -6602,6 +6631,61 @@ void streamFileToClient(int clientFd, const std::filesystem::path &path, const s
     }
 }
 
+// T51: bytes [first, last] of a file, from a descriptor of our own (O_CLOEXEC, so a forked zip or sudo helper never
+// holds it), 64 KiB at a time. The stop callback is asked between chunks (a take is starting), and what was sent is
+// dropped from the page cache behind it, as the DNG writer does.
+void streamFileRangeToClient(int clientFd, const std::filesystem::path &path, uint64_t first, uint64_t last,
+                             const std::function<bool()> &stop = {})
+{
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return;
+    std::array<char, 64 * 1024> buffer{};
+    uint64_t position = first;
+    while (position <= last) {
+        if (stop && stop())
+            break;
+        const size_t want = static_cast<size_t>(std::min<uint64_t>(buffer.size(), last - position + 1));
+        const ssize_t got = ::pread(fd, buffer.data(), want, static_cast<off_t>(position));
+        if (got <= 0)
+            break;
+        if (!sendFileChunk(clientFd, buffer.data(), static_cast<size_t>(got)))
+            break;
+        ::posix_fadvise(fd, static_cast<off_t>(position), got, POSIX_FADV_DONTNEED);
+        position += static_cast<uint64_t>(got);
+    }
+    ::close(fd);
+}
+
+// One range of "bytes=a-b", "a-" or "-n" over a file of `size` bytes. False: several ranges or a form we do not read
+// (the caller sends the whole file); `satisfiable` false: 416.
+bool parseSingleByteRange(const std::string &header, uint64_t size, uint64_t *first, uint64_t *last, bool *satisfiable)
+{
+    *satisfiable = true;
+    if (header.rfind("bytes=", 0) != 0 || header.find(',') != std::string::npos)
+        return false;
+    const std::string spec = header.substr(6);
+    const size_t dash = spec.find('-');
+    if (dash == std::string::npos)
+        return false;
+    const std::string a = spec.substr(0, dash), b = spec.substr(dash + 1);
+    const auto digits = [](const std::string &s) { return !s.empty() && s.size() < 19 && s.find_first_not_of("0123456789") == std::string::npos; };
+    if (a.empty() && digits(b)) {                       // the last n bytes
+        const uint64_t n = std::stoull(b);
+        if (n == 0 || size == 0) { *satisfiable = false; return true; }
+        *first = n >= size ? 0 : size - n;
+        *last = size - 1;
+        return true;
+    }
+    if (!digits(a) || (!b.empty() && !digits(b)))
+        return false;
+    *first = std::stoull(a);
+    *last = b.empty() ? size - 1 : std::min<uint64_t>(std::stoull(b), size ? size - 1 : 0);
+    if (size == 0 || *first >= size || *first > *last)
+        *satisfiable = false;
+    return true;
+}
+
 std::string zipProgramPath()
 {
     return existingExecutablePath({"/usr/bin/zip", "/bin/zip"});
@@ -6702,9 +6786,20 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
         << ",\"companded\":" << (f.companded ? "true" : "false")
         << ",\"timecode_start\":\"" << f.timecodeStart << "\"";
     const bool hasAudio = f.hasAudio;
+    std::string soundText = "None";
+    if (hasAudio) {
+        const auto format = wavFormatForFile(dir / (f.name + ".wav"));
+        soundText = format ? wavSoundText(*format) : "WAV (unreadable)";
+    } else {
+        std::error_code rawEc;
+        if (std::filesystem::exists(dir / "audio_capture.raw", rawEc))
+            soundText = "Not finalised: audio_capture.raw is on the media (raw2wav.py makes a WAV)";
+    }
     char fpsBuf[32];
     std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
     out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
+        << ",\"sound_text\":\"" << escapeJson(soundText) << "\""
+        << ",\"audio_url\":\"" << (hasAudio ? "/api/media/file?kind=folder&id=" + escapeJson(id) + "&name=" + escapeJson(f.name) + ".wav" : std::string()) << "\""
         << ",\"fps_badge\":\"" << fpsBuf << " FPS\""
         << ",\"info_line\":\"cDNG sequence \u2022 " << f.frames.count() << " frames\""
         << ",\"meta\":{\"captured\":\"" << escapeJson(f.shotDateText) << "\",\"type\":\"cDNG sequence\""
@@ -6715,7 +6810,7 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
         << ",\"frames\":\"" << f.frames.count() << "\""
         << ",\"clip_size\":\"" << escapeJson(f.sizeText_) << "\""
         << ",\"path\":\"" << escapeJson(dir.string()) << "\"}"
-        << ",\"extra\":{\"sound\":\"" << (hasAudio ? "WAV" : "None") << "\""
+        << ",\"extra\":{\"sound\":\"" << escapeJson(soundText) << "\""
         << ",\"format\":\"" << escapeJson(f.formatText) << "\""
         << ",\"dropped\":\"" << escapeJson(f.droppedText) << "\"}";
     if (!held.empty())
@@ -7784,6 +7879,69 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         char decodeBuf[32];
         std::snprintf(decodeBuf, sizeof decodeBuf, "%.1f", frame.decodeMs);
         response.headers.push_back({"X-Decode-Ms", decodeBuf});
+        return response;
+    }
+
+    if (request.method == "GET" && request.path == "/api/media/file") {
+        // T51: a take's WAV, with HTTP Range so the browser can seek. Only <name>.wav inside the clip folder; the
+        // hold first; the stream stops within one chunk when a take starts.
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        const auto requestedKind = queryParameterValue(request.query, "kind");
+        const auto requestedId = queryParameterValue(request.query, "id");
+        const auto requestedName = queryParameterValue(request.query, "name");
+        const auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return s; };
+        if (!requestedKind || *requestedKind != "folder" || !requestedId || !requestedName || requestedName->size() < 5 ||
+            lower(*requestedName).compare(requestedName->size() - 4, 4, ".wav") != 0 ||
+            requestedName->find_first_of("/\\") != std::string::npos || requestedName->find("..") != std::string::npos ||
+            requestedName->find('\0') != std::string::npos) {
+            response.status = 400;
+            response.body = errorReply(-1, "A sound request needs kind=folder, id and the name of a .wav file in the clip.");
+            return response;
+        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
+            response.status = 409;
+            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
+            return response;
+        }
+        const auto itemPath = resolveMediaLibraryPath(std::filesystem::path(options_.mediaRoot), *requestedId);
+        std::error_code ec;
+        const std::filesystem::path file = itemPath ? *itemPath / *requestedName : std::filesystem::path();
+        const auto status = itemPath ? std::filesystem::symlink_status(file, ec) : std::filesystem::file_status();
+        if (!itemPath || ec || !std::filesystem::is_regular_file(status)) {
+            response.status = 404;
+            response.body = errorReply(-1, "Sound not found.");
+            return response;
+        }
+        const uint64_t size = std::filesystem::file_size(file, ec);
+        if (ec) {
+            response.status = 404;
+            response.body = errorReply(-1, "Sound not found.");
+            return response;
+        }
+        uint64_t first = 0, last = size ? size - 1 : 0;
+        bool satisfiable = true, ranged = false;
+        if (const auto range = request.headers.find("range"); range != request.headers.end())
+            ranged = parseSingleByteRange(range->second, size, &first, &last, &satisfiable);
+        response.contentType = "audio/wav";
+        response.headers.push_back({"Accept-Ranges", "bytes"});
+        if (ranged && !satisfiable) {
+            response.status = 416;
+            response.contentType = "application/json; charset=utf-8";
+            response.headers.push_back({"Content-Range", "bytes */" + std::to_string(size)});
+            response.body = errorReply(-1, "Range not satisfiable.");
+            return response;
+        }
+        if (ranged) {
+            response.status = 206;
+            response.headers.push_back({"Content-Range", "bytes " + std::to_string(first) + "-" + std::to_string(last) + "/" + std::to_string(size)});
+        }
+        response.headers.push_back({"Content-Length", std::to_string(size ? last - first + 1 : 0)});
+        response.streaming = true;
+        response.streamWriter = [file, first, last, size](int clientFd) {
+            if (size > 0)
+                streamFileRangeToClient(clientFd, file, first, last, playbackYieldActive);
+        };
         return response;
     }
 
