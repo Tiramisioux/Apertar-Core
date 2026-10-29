@@ -5,6 +5,7 @@
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
 #include "hardware/ActionCatalog.hpp"
+#include "hardware/HardwareConfigStore.hpp"
 #include "hardware/ButtonActionList.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
 #include "web/WebControlPage.hpp"
@@ -134,6 +135,19 @@ std::string errorReply(int id, const std::string &message)
     if (id >= 0)
         out << ",\"id\":" << id;
     out << ",\"error\":\"" << escapeJson(message) << "\"}";
+    return out.str();
+}
+
+std::string errorReplyBody(int id, const std::string &message, const std::string &body)
+{
+    std::ostringstream out;
+    out << "{\"ok\":false";
+    if (id >= 0)
+        out << ",\"id\":" << id;
+    out << ",\"error\":\"" << escapeJson(message) << "\"";
+    if (!body.empty())
+        out << "," << body;
+    out << "}";
     return out.str();
 }
 
@@ -4513,6 +4527,59 @@ std::string hardwareConfigDisplayPath(const std::filesystem::path &path)
             return "~/" + value.substr(homeText.size() + 1);
     }
     return value;
+}
+
+// What the validator needs to know about this Pi: the I2C buses that exist and the DPI overlays in config.txt.
+hwconf::Facts hardwareConfigFacts()
+{
+    hwconf::Facts facts;
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator("/dev", error)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("i2c-", 0) == 0 && hwconf::allDigits(name.substr(4)))
+            facts.buses.push_back(std::stoi(name.substr(4)));
+    }
+    std::sort(facts.buses.begin(), facts.buses.end());
+    facts.known = !facts.buses.empty();
+    facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(kBootConfigPath)).dpiLines;
+    return facts;
+}
+
+std::string controlsIssuesJson(const std::vector<hwconf::Issue> &issues)
+{
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < issues.size(); ++i) {
+        const hwconf::Issue &issue = issues[i];
+        out << (i > 0 ? "," : "") << "{\"line\":" << issue.line
+            << ",\"error\":" << (issue.error ? "true" : "false")
+            << ",\"rule\":\"" << escapeJson(issue.rule) << "\""
+            << ",\"section\":\"" << escapeJson(issue.section) << "\""
+            << ",\"key\":\"" << escapeJson(issue.key) << "\""
+            << ",\"message\":\"" << escapeJson(issue.message) << "\"}";
+    }
+    out << ']';
+    return out.str();
+}
+
+std::string controlsConflictsJson(const std::vector<hwconf::Conflict> &conflicts)
+{
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < conflicts.size(); ++i) {
+        const hwconf::Conflict &conflict = conflicts[i];
+        out << (i > 0 ? "," : "") << "{\"section\":\"" << escapeJson(conflict.section) << "\""
+            << ",\"key\":\"" << escapeJson(conflict.key) << "\""
+            << ",\"base\":\"" << escapeJson(conflict.base) << "\""
+            << ",\"current\":\"" << escapeJson(conflict.current) << "\"}";
+    }
+    out << ']';
+    return out.str();
+}
+
+size_t controlsErrorCount(const std::vector<hwconf::Issue> &issues)
+{
+    return static_cast<size_t>(std::count_if(issues.begin(), issues.end(), [](const hwconf::Issue &issue) { return issue.error; }));
 }
 
 std::string defaultHardwareConfigTemplate()
@@ -10240,8 +10307,57 @@ void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
                   << profile.rootDisk << " (" << mediaClassName(profile.mediaClass) << ")\n";
 }
 
+// The hardware commands that only read: they run without the command lock.
+std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
+{
+    if (command.name == "get_controls") {
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const hardware::StoreInfo info = store.info();
+        const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, hardwareConfigFacts());
+        const size_t errors = controlsErrorCount(issues);
+        std::ostringstream body;
+        body << "\"controls\":{\"revision\":\"" << escapeJson(info.revision) << "\""
+             << ",\"path\":\"" << escapeJson(store.path().string()) << "\""
+             << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(store.path())) << "\""
+             << ",\"exists\":" << (info.exists ? "true" : "false")
+             << ",\"written_by\":\"" << escapeJson(info.writtenBy) << "\""
+             << ",\"written_at\":\"" << escapeJson(info.writtenAt) << "\""
+             << ",\"errors\":" << errors
+             << ",\"warnings\":" << issues.size() - errors
+             << ",\"issues\":" << controlsIssuesJson(issues)
+             << ",\"text\":\"" << escapeJson(info.text) << "\"}";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "list_actions") {
+        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
+        const CaptureSettings cameraSettings = camera_.settings();
+        std::vector<std::string> resolutions;
+        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName()))
+            resolutions.push_back(resolution.toString());
+        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
+        body = body.substr(1, body.size() - 2);
+        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
+            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
+                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
+            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
+                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
+            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
+            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
+            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
+        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
+            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
+        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
+        return okReply(command.id, body);
+    }
+
+    return std::nullopt;
+}
+
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
+    // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
+    if (const auto reply = handleReadOnlyHardwareCommand(command))
+        return *reply;
     std::lock_guard<std::mutex> commandLock(commandMutex_);
     // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
     // first, so a playback decode in flight stops before the take's first frame is written (design §2.7).
@@ -10405,30 +10521,45 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
-    if (command.name == "list_actions") {
-        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
-        const CaptureSettings cameraSettings = camera_.settings();
-        std::vector<std::string> resolutions;
-        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName()))
-            resolutions.push_back(resolution.toString());
-        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
-        body = body.substr(1, body.size() - 2);
-        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
-            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
-                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
-            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
-                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
-            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
-            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
-            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
-        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
-            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
-        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
-        return okReply(command.id, body);
+    if (command.name == "set_controls") {
+        const auto base = command.string("base");
+        const auto text = command.string("text");
+        if (!base || base->empty())
+            return errorReply(command.id, "set_controls needs base= (the revision you loaded).");
+        if (!text)
+            return errorReply(command.id, "set_controls needs text= (the whole file).");
+        hardware::StoreFlags flags;
+        flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
+        const std::pair<const char *, bool *> flagFields[] = {
+            { "dry_run", &flags.dryRun }, { "force", &flags.force }, { "confirm_merge", &flags.confirmMerge } };
+        for (const auto &[name, flag] : flagFields) {
+            if (const auto value = command.string(name); value && !parseBooleanToken(*value, flag))
+                return errorReply(command.id, std::string(name) + " must be true or false.");
+        }
+        const hardware::StoreResult result = hardware::configStore().replace(
+            *base, *text, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        if (!result.ok) {
+            return errorReplyBody(command.id, result.error,
+                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
+                ",\"issues\":" + controlsIssuesJson(result.issues) +
+                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
+                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
+        }
+        std::ostringstream body;
+        body << "\"revision\":\"" << escapeJson(result.revision) << "\""
+             << ",\"written\":" << (result.written ? "true" : "false")
+             << ",\"merged\":" << (result.merged ? "true" : "false")
+             << ",\"needs_review\":" << (result.needsReview ? "true" : "false")
+             << ",\"diff\":\"" << escapeJson(result.diff) << "\""
+             << ",\"errors\":" << controlsErrorCount(result.issues)
+             << ",\"issues\":" << controlsIssuesJson(result.issues);
+        if (flags.dryRun || result.needsReview)
+            body << ",\"text\":\"" << escapeJson(result.text) << "\"";
+        return okReply(command.id, body.str());
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();

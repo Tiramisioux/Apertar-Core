@@ -40,6 +40,7 @@ struct StoreResult {
 struct StoreInfo {
     bool exists = false;
     std::string revision;
+    std::string text;              // the file's text at that revision
     std::string writtenRevision;   // the last revision Core wrote, from hardware-state.conf
     std::string writtenAt;
     std::string writtenBy;

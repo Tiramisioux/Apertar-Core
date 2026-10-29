@@ -221,6 +221,7 @@ StoreInfo HardwareConfigStore::info() const
     StoreInfo out = state_;
     out.exists = stamp_.exists;
     out.revision = revision_;
+    out.text = text_;
     return out;
 }
 

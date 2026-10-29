@@ -75,6 +75,7 @@ private:
     std::string handleRequest(const std::string &line);
     std::string handleWebCommand(const std::string &payload);
     std::string handleCommand(const ControlCommand &command);
+    std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
     WebServer::Response handleWebRequest(const WebServer::Request &request);
     std::string buildWebStateJson() const;
     std::string buildPresetLibraryJson() const;
