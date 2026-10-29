@@ -51,6 +51,7 @@ inline constexpr SectionInfo kSections[] = {
     {"neorotary4", "neorotary4,neo_rotary4,neo_rotary_4", true, ValueRule::FirstMark, 1, true, false, true},
     {"gpio_buttons", "gpio_buttons,gpio,grove_digital,grove_buttons", false, ValueRule::FirstMark, -1, false, false, true},
     {"gpio_encoders", "gpio_encoders,grove_encoders", false, ValueRule::FirstMark, -1, false, false, true},
+    {"gpio_switches", "gpio_switches", false, ValueRule::FirstMark, -1, false, false, true},
     {"grove_analog", "grove_analog,grove_adc,analog_controls", true, ValueRule::FirstMark, 1, true, false, true},
     {"camera", "camera", false, ValueRule::Other, -1, false, false, false},
     {"imu", "imu", false, ValueRule::FirstMark, -1, true, false, true},
@@ -455,6 +456,8 @@ inline bool knownKey(std::string_view section, std::string_view key)
     if (section == "gpio_encoders")
         return key == "enabled" || indexedKey(key, "encoder", 7, {"_a", "_b", "_press_gpio", "_cw", "_ccw", "_press",
             "_invert", "_steps_per_event", "_hold", "_double"});
+    if (section == "gpio_switches")
+        return key == "enabled" || indexedKey(key, "switch", 15, {"_pins", "_on", "_off", "_position0", "_position1", "_position2"});
     if (section == "pcf8574")
         return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "hold_ms", "double_ms"}) ||
             indexedKey(key, "pin", 7, {"", "_hold", "_double"});
@@ -683,6 +686,21 @@ inline std::optional<long> integer(const std::string &text)
     return value;
 }
 
+// A switch's pins, "17" or "22,23": the BCM numbers 0..27, or nothing when any of them is not one.
+inline std::vector<long> pinList(const std::string &text)
+{
+    std::vector<long> pins;
+    for (size_t start = 0; start <= text.size();) {
+        const auto end = text.find(',', start);
+        const auto pin = integer(trim(std::string_view(text).substr(start, end == std::string::npos ? std::string::npos : end - start)));
+        if (!pin || *pin < 0 || *pin > 27) return {};
+        pins.push_back(*pin);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return pins;
+}
+
 inline bool truthy(const std::string &value, bool fallback)
 {
     const std::string t = normalizeToken(value);
@@ -834,6 +852,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
     };
     const bool buttonsOn = truthy(valueOf(doc, "gpio_buttons", "enabled").value_or("false"), false);
     const bool encodersOn = truthy(valueOf(doc, "gpio_encoders", "enabled").value_or("false"), false);
+    const bool switchesOn = truthy(valueOf(doc, "gpio_switches", "enabled").value_or("false"), false);
     auto outputTarget = [&](const std::string &output) {
         return normalizeToken(valueOf(doc, output, "target").value_or("gpio"));
     };
@@ -877,6 +896,16 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
                 if (const auto gpio = integer(line.value))
                     claim(*gpio, "encoder " + line.key.substr(7, 1) + " " + field, line.section, line.key, line.number);
         }
+        if (line.section == "gpio_switches" && line.key.rfind("switch", 0) == 0 && line.key.size() > 11 &&
+            line.key.compare(line.key.size() - 5, 5, "_pins") == 0) {
+            const auto pins = pinList(line.value);
+            if (pins.empty() || pins.size() > 2)
+                add(line.number, true, "switch_pins", line.section, line.key, line.value, "Line " + N(line.number) + ": " + line.key +
+                    " takes one pin (a two-way switch) or two (a three-way switch), such as 17 or 22,23.");
+            else if (switchesOn)
+                for (const long pin : pins)
+                    claim(pin, "switch " + line.key.substr(6, line.key.size() - 11), line.section, line.key, line.number);
+        }
     }
 
     // Actions: names Core knows, at most six, standby never on a turn, nothing that starts a take on a turn,
@@ -886,6 +915,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
         const bool actionKey =
             (line.section == "gpio_buttons" && line.key.size() > 1 && line.key[0] == 'd' && std::isdigit(static_cast<unsigned char>(line.key[1]))) ||
             (line.section == "pcf8574" && line.key.rfind("pin", 0) == 0) ||
+            (line.section == "gpio_switches" && line.key.rfind("switch", 0) == 0 && line.key.find("_pins") == std::string::npos) ||
             ((line.section == "neorotary4" || line.section == "gpio_encoders") && line.key.rfind("encoder", 0) == 0 &&
              (line.key.find("_cw") != std::string::npos || line.key.find("_ccw") != std::string::npos ||
               line.key.find("_press") != std::string::npos || line.key.find("_hold") != std::string::npos ||

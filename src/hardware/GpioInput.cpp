@@ -213,9 +213,9 @@ bool GpioInput::start()
     if (!config_.configured || !config_.enabled)
         return false;
 
-    if (config_.buttons.empty() && config_.encoders.empty()) {
+    if (config_.buttons.empty() && config_.encoders.empty() && config_.switches.empty()) {
         std::cerr << "GPIO input config in " << config_.configPath
-                  << " has no buttons or encoders; input disabled.\n";
+                  << " has no buttons, encoders or switches; input disabled.\n";
         return false;
     }
 
@@ -265,11 +265,14 @@ GpioInput::Config GpioInput::loadConfig()
 
         bool inButtonsSection = false;
         bool inEncodersSection = false;
+        bool inSwitchesSection = false;
         bool buttonsEnabled = false;
         bool encodersEnabled = false;
+        bool switchesEnabled = false;
         std::array<EncoderMapping, 8> encoderDrafts{};
         std::array<bool, 8> encoderSeen{};
         std::map<int, ButtonMapping> buttonDrafts;   // by GPIO: press, clicks and hold gathered from dN, dN_single...
+        std::map<int, SwitchMapping> switchDrafts;   // by index: switchN_pins and its actions
 
         std::string line;
         while (std::getline(input, line)) {
@@ -288,14 +291,15 @@ GpioInput::Config GpioInput::loadConfig()
                 inButtonsSection = section == "gpio_buttons" || section == "gpio" ||
                                    section == "grove_digital" || section == "grove_buttons";
                 inEncodersSection = section == "gpio_encoders" || section == "grove_encoders";
-                if (inButtonsSection || inEncodersSection) {
+                inSwitchesSection = section == "gpio_switches";
+                if (inButtonsSection || inEncodersSection || inSwitchesSection) {
                     config.configured = true;
                     config.configPath = path.string();
                 }
                 continue;
             }
 
-            if (!inButtonsSection && !inEncodersSection)
+            if (!inButtonsSection && !inEncodersSection && !inSwitchesSection)
                 continue;
 
             const std::size_t eq = trimmed.find('=');
@@ -304,6 +308,32 @@ GpioInput::Config GpioInput::loadConfig()
 
             const std::string key = normalizeToken(trimmed.substr(0, eq));
             const std::string value = trimAscii(trimmed.substr(eq + 1));
+            if (inSwitchesSection) {
+                // Chip, pull, active_low and debounce come from [gpio_buttons]: the switches share its lines.
+                size_t digits = 0;
+                while (6 + digits < key.size() && std::isdigit(static_cast<unsigned char>(key[6 + digits])))
+                    ++digits;
+                if (key == "enabled") {
+                    switchesEnabled = parseConfigBool(value, switchesEnabled);
+                } else if (key.rfind("switch", 0) == 0 && digits > 0 && digits <= 2) {
+                    SwitchMapping &mapping = switchDrafts[std::stoi(key.substr(6, digits))];
+                    const std::string field = key.substr(6 + digits);
+                    if (field == "_pins") {
+                        mapping.pins.clear();
+                        std::stringstream list(value);
+                        for (std::string item; std::getline(list, item, ',');)
+                            if (const auto pin = parseConfigInteger(trimAscii(item)); pin && *pin >= 0 && *pin <= 63)
+                                mapping.pins.push_back(*pin);
+                    } else if (field == "_off" || field == "_position0") {
+                        mapping.positions[0] = normalizeAction(value);
+                    } else if (field == "_on" || field == "_position1") {
+                        mapping.positions[1] = normalizeAction(value);
+                    } else if (field == "_position2") {
+                        mapping.positions[2] = normalizeAction(value);
+                    }
+                }
+                continue;
+            }
             if (key == "enabled") {
                 if (inButtonsSection)
                     buttonsEnabled = parseConfigBool(value, buttonsEnabled);
@@ -399,7 +429,17 @@ GpioInput::Config GpioInput::loadConfig()
             }
         }
 
-        config.enabled = buttonsEnabled || encodersEnabled;
+        if (switchesEnabled) {
+            for (auto &[index, mapping] : switchDrafts) {
+                if (mapping.pins.empty() || mapping.pins.size() > 2)
+                    continue;
+                if (std::all_of(mapping.positions.begin(), mapping.positions.end(), [](const std::string &a) { return a.empty(); }))
+                    continue;
+                config.switches.push_back(std::move(mapping));
+            }
+        }
+
+        config.enabled = buttonsEnabled || encodersEnabled || switchesEnabled;
 
         if (config.configured)
             return config;
@@ -544,9 +584,13 @@ void GpioInput::run()
         addOffset(encoder.gpioB);
         addOffset(encoder.pressGpio);
     }
+    for (const SwitchMapping &mapping : config_.switches)
+        for (const int pin : mapping.pins)
+            addOffset(pin);
 
     std::vector<RuntimeButton> buttons;
     std::vector<RuntimeEncoder> encoders;
+    std::vector<RuntimeSwitch> switches;
     std::unordered_map<int, int> indexByOffset;
     for (size_t i = 0; i < offsets.size(); ++i)
         indexByOffset[offsets[i]] = static_cast<int>(i);
@@ -593,6 +637,28 @@ void GpioInput::run()
             }
         }
 
+        for (RuntimeSwitch &position : switches) {
+            const auto closed = [&](size_t pin) { return (levels & (1ULL << position.lineIndexes[pin])) != 0; };
+            const int reading = position.lineIndexes.size() == 1 ? (closed(0) ? 1 : 0)
+                                                               : closed(0) ? (closed(1) ? -1 : 0) : (closed(1) ? 2 : 1);
+            if (position.stable == -2) {
+                // Like Cinemate: the position a switch is in when Core starts is applied once.
+                position.observed = position.stable = reading;
+                position.observedChangedAt = now;
+                if (reading >= 0)
+                    emitAction(position.positions[static_cast<size_t>(reading)]);
+            } else if (reading != position.observed) {
+                position.observed = reading;
+                position.observedChangedAt = now;
+            } else if (position.observed != position.stable &&
+                       std::chrono::duration_cast<std::chrono::milliseconds>(now - position.observedChangedAt).count() >=
+                           config_.debounceMs) {
+                position.stable = position.observed;
+                if (position.stable >= 0)
+                    emitAction(position.positions[static_cast<size_t>(position.stable)]);
+            }
+        }
+
         for (RuntimeEncoder &encoder : encoders) {
             const int a = (levels & (1ULL << encoder.lineAIndex)) ? 1 : 0;
             const int b = (levels & (1ULL << encoder.lineBIndex)) ? 1 : 0;
@@ -633,6 +699,9 @@ void GpioInput::run()
             if (const int64_t gestureMs = button.gesture.nextWakeMs(); gestureMs >= 0)
                 wakeMs = std::min(wakeMs, gestureMs);
         }
+        for (const RuntimeSwitch &position : switches)
+            if (position.observed != position.stable)
+                wakeMs = std::min(wakeMs, toMs(position.observedChangedAt) + config_.debounceMs + 1);
         return static_cast<int>(std::max<int64_t>(0, wakeMs - nowMs));
     };
 
@@ -653,6 +722,16 @@ void GpioInput::run()
 
             buttons.clear();
             encoders.clear();
+            switches.clear();
+            for (const SwitchMapping &mapping : config_.switches) {
+                RuntimeSwitch runtime;
+                runtime.positions = mapping.positions;
+                for (const int pin : mapping.pins)
+                    if (const auto it = indexByOffset.find(pin); it != indexByOffset.end())
+                        runtime.lineIndexes.push_back(it->second);
+                if (runtime.lineIndexes.size() == mapping.pins.size())
+                    switches.push_back(std::move(runtime));
+            }
             for (const ButtonMapping &button : config_.buttons) {
                 if (const auto it = indexByOffset.find(button.gpio); it != indexByOffset.end()) {
                     RuntimeButton runtime;

@@ -4692,6 +4692,13 @@ enabled=false
 # Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].
 enabled=false
 
+[gpio_switches]
+# Optional two- and three-way switches on GPIO pins, read like [gpio] (chip, pull, active_low, debounce_ms).
+# Two-way: switch0_pins=17, switch0_on=..., switch0_off=...
+# Three-way: switch1_pins=22,23, switch1_position0=... (22 closed), switch1_position1=... (middle), switch1_position2=... (23 closed)
+# The position a switch is in is applied when Core starts.
+enabled=false
+
 [grove_analog]
 # Optional Grove Base HAT analog controls: potentiometers, sliders, rotary angle sensors.
 enabled=false
@@ -10414,7 +10421,7 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
         detail = "Core reads the buttons on " + (chip.ok ? chip.path + " (" + chip.label + ")" : chipSetting) + ".";
 
     std::ostringstream out;
-    out << "{\"id\":\"gpio_buttons\",\"section\":\"gpio_buttons\",\"title\":\"Raspberry Pi GPIO buttons\""
+    out << "{\"id\":\"gpio_buttons\",\"section\":\"gpio_buttons\",\"title\":\"Raspberry Pi GPIO\""
         << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, "gpio_buttons")
         << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\""
         << ",\"chip\":{\"ok\":" << (chip.ok ? "true" : "false") << ",\"path\":\"" << escapeJson(chip.path) << "\""
@@ -10478,6 +10485,72 @@ std::string ApertarCoreApp::i2cPeripheralJson(const hwconf::Document &doc, const
     return out.str();
 }
 
+// The NVMe drive on PCIe, as the CFexpress hat card shows it: "Corsair MP600 MINI, 1.0 TB, 8.0 GT/s PCIe x1", or "".
+static std::string nvmeDriveSummary()
+{
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/nvme", error)) {
+        const std::filesystem::path dir = entry.path();
+        if (trimAscii(readTextFileRaw(dir / "transport")) != "pcie")
+            continue;
+        std::string out = trimAscii(readTextFileRaw(dir / "model"));
+        const std::string sectors = trimAscii(readTextFileRaw("/sys/block/" + dir.filename().string() + "n1/size"));
+        if (!sectors.empty() && hwconf::allDigits(sectors)) {
+            const double gb = std::stod(sectors) * 512.0 / 1e9;
+            char size[32];
+            std::snprintf(size, sizeof(size), gb >= 1000.0 ? "%.1f TB" : "%.0f GB", gb >= 1000.0 ? gb / 1000.0 : gb);
+            out += std::string(out.empty() ? "" : ", ") + size;
+        }
+        const std::string speed = trimAscii(readTextFileRaw(dir / "device" / "current_link_speed"));
+        const std::string width = trimAscii(readTextFileRaw(dir / "device" / "current_link_width"));
+        if (!speed.empty())
+            out += ", " + speed + (width.empty() ? "" : " x" + width);
+        return out;
+    }
+    return {};
+}
+
+// The CFexpress hat as the Hardware card shows it: its settings, whether its status byte answers, and the card in the
+// slot. The automounter polls the same byte every 100 ms; single-byte reads do not disturb it (CfeHat.hpp).
+static std::string cfeHatPeripheralJson(const hwconf::Document &doc, const std::string &mediaRoot)
+{
+    CfeHatConfig config;
+    config.enabled = true;   // read even when switched off in the file, to say whether it is there
+    if (const auto bus = hwconf::integer(hwconf::effectiveValue(doc, "cfexpress_hat", "bus").value_or("10")))
+        config.bus = static_cast<int>(*bus);
+    if (const auto address = hwconf::integer(hwconf::effectiveValue(doc, "cfexpress_hat", "address").value_or("0x34")))
+        config.address = static_cast<int>(*address);
+    const bool fileOn = hwconf::sectionOn(doc, "cfexpress_hat");
+    const std::string where = "bus " + std::to_string(config.bus) + " at " + hwconf::hex(config.address);
+    std::string state;
+    std::string detail;
+    const hardware::I2cProbe probe = hardware::probeI2cAddress(config.bus, config.address);
+    if (!probe.found) {
+        state = "missing";
+        detail = probe.busExists ? "Not found on " + where + "." : probe.error;
+    } else if (!fileOn) {
+        state = "found";
+        detail = "Found on " + where + ", switched off: eject and the automounter do not watch its slot.";
+    } else {
+        state = "running";
+        CfeHatReader hat(config);
+        const CardPresence card = hat.cardPresence();
+        const std::string drive = nvmeDriveSummary();
+        if (card == CardPresence::Absent)
+            detail = "No card in the slot.";
+        else
+            detail = (card == CardPresence::Present ? "Card in the slot" : "Answers on " + where) +
+                (drive.empty() ? std::string(".") : ": " + drive + (isMountedPath(mediaRoot) ? ", mounted at " + mediaRoot : "") + ".");
+    }
+    std::ostringstream out;
+    out << "{\"id\":\"cfexpress_hat\",\"section\":\"cfexpress_hat\",\"title\":\"CFexpress hat\""
+        << ",\"in_file\":" << (hwconf::hasSection(doc, "cfexpress_hat") ? "true" : "false")
+        << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, "cfexpress_hat")
+        << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\""
+        << ",\"bus\":" << config.bus << ",\"address\":\"" << hwconf::hex(config.address) << "\"}}";
+    return out.str();
+}
+
 // The I2C buses this Pi has, with the adapter's name (/sys/bus/i2c/devices: /sys/class/i2c-adapter is missing on
 // this kernel). /dev links such as i2c-6 -> i2c-10 are not listed twice.
 static std::string i2cBusesJson()
@@ -10526,6 +10599,7 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << "," << i2cPeripheralJson(hwconf::parse(info.text), "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
              << "," << i2cPeripheralJson(hwconf::parse(info.text), "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
              << "," << i2cPeripheralJson(hwconf::parse(info.text), "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
+             << "," << cfeHatPeripheralJson(hwconf::parse(info.text), options_.mediaRoot)
              << "],\"i2c_buses\":" << i2cBusesJson() << "}";
         return okReply(command.id, body.str());
     }

@@ -2,6 +2,7 @@
 
 #include "hardware/ButtonGesture.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -37,6 +38,13 @@ private:
         std::string hold;
     };
 
+    // [gpio_switches]: one pin is a two-way switch (switchN_off, switchN_on), two pins a three-way switch
+    // (switchN_position0: first pin closed, position1: neither, position2: second pin closed).
+    struct SwitchMapping {
+        std::vector<int> pins;
+        std::array<std::string, 3> positions;   // two-way: off, on
+    };
+
     struct EncoderMapping {
         int gpioA = -1;
         int gpioB = -1;
@@ -58,6 +66,7 @@ private:
         int debounceMs = 60;
         std::vector<ButtonMapping> buttons;
         std::vector<EncoderMapping> encoders;
+        std::vector<SwitchMapping> switches;
         std::string configPath;
     };
 
@@ -75,6 +84,14 @@ private:
         bool inverted = false;    // read pressed at start: wired the other way round (a 1-0-1 button)
         std::chrono::steady_clock::time_point observedChangedAt{};
         hardware::ButtonGesture gesture;
+    };
+
+    struct RuntimeSwitch {
+        std::vector<int> lineIndexes;
+        std::array<std::string, 3> positions;
+        int observed = -2;        // -1: both pins of a three-way switch closed, no position
+        int stable = -2;          // the position last applied; -2 before the first sample
+        std::chrono::steady_clock::time_point observedChangedAt{};
     };
 
     struct RuntimeEncoder {
