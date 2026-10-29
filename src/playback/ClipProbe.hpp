@@ -100,6 +100,7 @@ struct ClipFacts {
     double fps = 24.0;                // the clip's own FrameRate tag; 24 as the touch UI when it has none
     bool fpsFallback = true;
     bool ramp = false;                // fps-ramp.txt is in the folder (T31)
+    bool hasAudio = false;            // <clip>.wav is beside the frames
     bool companded = false;
     uint64_t bytes = 0;               // every file in the folder
     int64_t shotMs = 0;
@@ -122,7 +123,7 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
     for (const FrameFile &file : f.frames.files) f.bytes += file.bytes;
     for (const char *extra : {".wav", "_stretched.wav"}) {
         const auto sz = fs::file_size(dir / (f.name + extra), ec);
-        if (!ec) f.bytes += sz;
+        if (!ec) { f.bytes += sz; if (extra[0] == '.') f.hasAudio = true; }
         ec.clear();
     }
     f.ramp = fs::exists(dir / "fps-ramp.txt", ec);

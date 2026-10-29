@@ -6671,8 +6671,7 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
         << ",\"compression\":\"" << (f.first.compression == 7 ? "lossless" : "uncompressed") << "\""
         << ",\"companded\":" << (f.companded ? "true" : "false")
         << ",\"timecode_start\":\"" << f.timecodeStart << "\"";
-    std::error_code ec;
-    const bool hasAudio = std::filesystem::exists(dir / (f.name + ".wav"), ec);
+    const bool hasAudio = f.hasAudio;
     char fpsBuf[32];
     std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
     out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
@@ -6730,22 +6729,38 @@ std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::p
             continue;
         }
 
-        bool containsMediaFrame = false;
+        // T47: a cDNG take answers from its own files first. The cache is keyed on the folder's time, so an
+        // unchanged take costs one stat and the scan below (which opens the folder) never runs for it. In a
+        // hold nothing may read the card: only what the cache already knows is listed.
+        playback::ClipFacts facts;
+        bool haveFacts = false;
+        if (folderName.rfind("Timelapse_", 0) != 0) {
+            haveFacts = held ? clipFactsCache().peek(entry.path(), facts) : ((facts = clipFactsCache().get(entry.path())).ok);
+            haveFacts = haveFacts && facts.ok;
+        }
+        if (held && !haveFacts) {
+            ec.clear();
+            continue;
+        }
+
+        bool containsMediaFrame = haveFacts;
         std::string containerType;
-        std::error_code scanEc;
-        for (const auto &child : std::filesystem::recursive_directory_iterator(
-                 entry.path(), std::filesystem::directory_options::skip_permission_denied, scanEc)) {
-            if (scanEc)
-                break;
-            if (child.is_regular_file(scanEc)) {
-                if (hasStillImageExtension(child.path()))
-                    containsMediaFrame = true;
-                if (hasClipContainerExtension(child.path()))
-                    containerType = clipContainerTypeLabel(child.path());
+        if (!haveFacts) {
+            std::error_code scanEc;
+            for (const auto &child : std::filesystem::recursive_directory_iterator(
+                     entry.path(), std::filesystem::directory_options::skip_permission_denied, scanEc)) {
+                if (scanEc)
+                    break;
+                if (child.is_regular_file(scanEc)) {
+                    if (hasStillImageExtension(child.path()))
+                        containsMediaFrame = true;
+                    if (hasClipContainerExtension(child.path()))
+                        containerType = clipContainerTypeLabel(child.path());
+                }
+                if (containsMediaFrame || !containerType.empty())
+                    break;
+                scanEc.clear();
             }
-            if (containsMediaFrame || !containerType.empty())
-                break;
-            scanEc.clear();
         }
         if (!containsMediaFrame && containerType.empty()) {
             ec.clear();
@@ -6763,12 +6778,6 @@ std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::p
         // A cDNG take answers from its own files (T47): its FPS, its span, its holes, its timecode. The
         // cache is keyed on the folder's time, so an unchanged take costs one stat. In a hold nothing may
         // read the card: the last cached answer, or the bare entry.
-        playback::ClipFacts facts;
-        bool haveFacts = false;
-        if (item.category == "clip" && containerType.empty()) {
-            haveFacts = held ? clipFactsCache().peek(entry.path(), facts) : ((facts = clipFactsCache().get(entry.path())).ok);
-            haveFacts = haveFacts && facts.ok;
-        }
         if (haveFacts) {
             item.sizeBytes = facts.bytes;
             item.sizeText = facts.sizeText_;
@@ -6797,8 +6806,7 @@ std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::p
             item.ramp = facts.ramp;
             item.token = facts.token;
             item.timecodeStart = facts.timecodeStart;
-            std::error_code wavEc;
-            item.hasAudio = std::filesystem::exists(entry.path() / (folderName + ".wav"), wavEc);
+            item.hasAudio = facts.hasAudio;
         } else if (!held) {
             const MediaPathStats stats = mediaStatsForPath(entry.path());
             addItemStats(&item, stats);
