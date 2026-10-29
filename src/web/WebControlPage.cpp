@@ -2858,6 +2858,10 @@ std::string_view webControlPageHtml()
       background: rgba(9, 9, 11, 0.45);
     }
 
+    .controls-peripheral.undetected {
+      opacity: 0.5;
+    }
+
     .controls-peripheral-head {
       display: flex;
       justify-content: space-between;
@@ -2903,8 +2907,13 @@ std::string_view webControlPageHtml()
     }
 
     .controls-row.off,
-    .controls-row.removed {
+    .controls-row.removed,
+    .controls-line.removed {
       opacity: 0.55;
+    }
+
+    .controls-add-gesture {
+      margin: 6px 0 0;
     }
 
     .controls-row.changed {
@@ -2918,6 +2927,7 @@ std::string_view webControlPageHtml()
     .controls-row-actions {
       display: flex;
       justify-content: flex-end;
+      align-self: start;
     }
 
     .controls-row-detail {
@@ -2927,7 +2937,7 @@ std::string_view webControlPageHtml()
 
     .controls-line {
       display: grid;
-      grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr);
+      grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr) auto;
       gap: 10px;
       align-items: center;
       margin: 3px 0;
@@ -4161,6 +4171,10 @@ std::string_view webControlPageHtml()
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/levels.png" alt=""></span>
             <span>Presets</span>
           </button>
+          <button class="settings-nav-item" data-panel="controls" type="button">
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
+            <span>Controls</span>
+          </button>
           <button class="settings-nav-item" data-panel="config" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/config.png" alt=""></span>
             <span>Config</span>
@@ -5323,12 +5337,12 @@ std::string_view webControlPageHtml()
             </div>
           </section>
 
-          <section class="settings-panel" data-panel="config">
+          <section class="settings-panel" data-panel="controls">
             <div class="settings-card">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Controls</h3>
-                  <p class="settings-card-copy">Choose what each button and knob does. This writes the same file as the text editor below; a saved change takes effect when Apertar Core restarts.</p>
+                  <p class="settings-card-copy">Choose what each button, knob and pin does, for the GPIO and the I2C devices Core finds. A saved change takes effect when Apertar Core restarts.</p>
                 </div>
                 <div class="online-pill" id="controlsStatePill">Not Loaded</div>
               </div>
@@ -5352,6 +5366,27 @@ std::string_view webControlPageHtml()
                 <button class="secondary-button" id="reloadControlsButton" type="button">Reload</button>
                 <button class="primary-button" id="saveControlsButton" type="button" disabled>Save Controls</button>
                 <span class="subtle-note">Saved changes are checked first and kept in the file's history. Restart Apertar Core to apply them.</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-panel="config">
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Hardware</h3>
+                  <p class="settings-card-copy">The devices Apertar can use: whether each one is detected, and its settings. Saved settings take effect when Apertar Core restarts.</p>
+                </div>
+                <div class="online-pill" id="hardwareStatePill">Not Loaded</div>
+              </div>
+
+              <div class="config-issues" id="hardwareMessage" hidden></div>
+              <div id="hardwareDevices"></div>
+
+              <div class="settings-action-row">
+                <button class="secondary-button" id="reloadHardwareButton" type="button">Reload</button>
+                <button class="primary-button" id="saveHardwareButton" type="button" disabled>Save Hardware</button>
+                <span class="subtle-note">The text editor below shows the same file.</span>
               </div>
             </div>
 
@@ -5802,9 +5837,13 @@ std::string_view webControlPageHtml()
         title: "Presets",
         copy: "Download the same preset files saved by the native camera UI.",
       },
+      controls: {
+        title: "Controls",
+        copy: "What each button, knob and pin does.",
+      },
       config: {
         title: "Config",
-        copy: "What each button and knob does, and the hardware and display config file as text.",
+        copy: "Edit the Apertar hardware and display config file.",
       },
       info: {
         title: "Info",
@@ -8991,10 +9030,12 @@ std::string_view webControlPageHtml()
 
       if (normalized === "presets")
         fetchPresetLibrary(true);
-      if (normalized === "config" && !controlsDirty())
+      if (normalized === "controls" && !controlsDirty())
         void loadControls(true);
       if (normalized === "config" && !state.configDirty)
         fetchConfigFile(true);
+      if (normalized === "config" && !controlsDirty() && !hardwareDirty())
+        void loadControls(true);
       if (normalized === "record" && state.snapshot)
         window.requestAnimationFrame(() => drawImuAxisVisual(state.snapshot.imu || {}));
       if (normalized === "record" && state.settingsOpen)
@@ -14346,11 +14387,17 @@ std::string_view webControlPageHtml()
       saving: false,
       revision: "",
       model: null,
+      addBox: null,          // the add pickers, kept while they are moved in and out of the list
       peripherals: [],
       catalog: null,
       edits: new Map(),      // "section|key" -> { section, key, value } for every line changed here
       added: [],             // GPIO buttons added on this page: { pin, key }
       removed: new Set(),    // keys of GPIO buttons marked for removal
+      addedLines: new Map(), // "section|key" -> { section, row, key, label }: clicks and hold added on this page
+      removedKeys: new Set(),// "section|key" of click and hold lines marked for removal
+      showAdd: false,        // the + Add GPIO button pickers are open
+      settingEdits: new Map(),  // "section|key" -> { section, key, value }: device settings changed on the Hardware card
+      buses: [],             // the Pi's I2C buses: { bus, name }
     };
     const controlsGroups = [
       { source: "gpio_buttons", title: "GPIO buttons" },
@@ -14360,7 +14407,7 @@ std::string_view webControlPageHtml()
     ];
 
     function controlsDirty() {
-      return controlsState.edits.size > 0 || controlsState.removed.size > 0;
+      return controlsState.edits.size > 0 || controlsState.removed.size > 0 || controlsState.removedKeys.size > 0;
     }
 
     async function controlsCall(payload) {
@@ -14476,11 +14523,42 @@ std::string_view webControlPageHtml()
       renderControls();
     }
 
+    // One line of a row: its label, its action dropdown, and for a click or hold line a Remove of its own.
+    function buildControlsLine(section, line, rowRemoved, onRemove) {
+      const wrap = document.createElement("div");
+      const lineRemoved = controlsState.removedKeys.has(section + "|" + line.key);
+      wrap.className = "controls-line" + (lineRemoved ? " removed" : "");
+      const label = document.createElement("div");
+      label.className = "controls-line-label";
+      label.textContent = line.label;
+      const select = buildControlsSelect(section, line, controlsLineValue(section, line));
+      select.disabled = rowRemoved || lineRemoved || controlsState.saving;
+      select.addEventListener("change", () => setControlsValue(section, line, select.value));
+      wrap.appendChild(label);
+      wrap.appendChild(select);
+      const cell = document.createElement("div");
+      if (onRemove) {
+        const remove = document.createElement("button");
+        remove.className = (lineRemoved ? "secondary-button" : "danger-button") + " preset-action";
+        remove.type = "button";
+        remove.textContent = lineRemoved ? "Undo" : "Remove";
+        remove.setAttribute("aria-label", (lineRemoved ? "Keep " : "Remove ") + line.label);
+        remove.disabled = rowRemoved || controlsState.saving;
+        remove.addEventListener("click", onRemove);
+        cell.appendChild(remove);
+      }
+      wrap.appendChild(cell);
+      return wrap;
+    }
+
     function buildControlsRow(row, isNew) {
       const section = row.source;
       const element = document.createElement("div");
-      const removed = row.source === "gpio_buttons" && controlsState.removed.has(row.lines[0].key);
-      const changed = row.lines.some((line) => controlsState.edits.has(section + "|" + line.key));
+      const pressKey = row.lines[0].key;
+      const removed = row.source === "gpio_buttons" && controlsState.removed.has(pressKey);
+      const pending = [...controlsState.addedLines.values()].filter((entry) => entry.section === section && entry.row === pressKey);
+      const changed = row.lines.some((line) => controlsState.edits.has(section + "|" + line.key) || controlsState.removedKeys.has(section + "|" + line.key))
+        || pending.length > 0;
       element.className = "controls-row" + (row.enabled ? "" : " off") + (removed ? " removed" : "") + (changed || isNew ? " changed" : "");
       const head = document.createElement("div");
       const title = document.createElement("div");
@@ -14494,10 +14572,58 @@ std::string_view webControlPageHtml()
         head.appendChild(detail);
       }
       element.appendChild(head);
+
+      const lines = document.createElement("div");
+      row.lines.forEach((line, index) => {
+        const id = section + "|" + line.key;
+        const onRemove = index === 0 ? null : () => {          // clicks and hold can go one by one; Press goes with the button
+          if (controlsState.removedKeys.has(id))
+            controlsState.removedKeys.delete(id);
+          else {
+            controlsState.removedKeys.add(id);
+            controlsState.edits.delete(id);
+          }
+          renderControls();
+        };
+        lines.appendChild(buildControlsLine(section, line, removed, onRemove));
+      });
+      pending.forEach((entry) => {
+        lines.appendChild(buildControlsLine(section, { label: entry.label, key: entry.key, raw: "", actions: [] }, removed, () => {
+          controlsState.addedLines.delete(section + "|" + entry.key);
+          controlsState.edits.delete(section + "|" + entry.key);
+          renderControls();
+        }));
+      });
+      // + adds a click or hold this button does not have yet (counted like Cinemate: Press stays immediate).
+      const canAdd = (row.can_add || []).filter((entry) => !controlsState.addedLines.has(section + "|" + entry.key));
+      if (canAdd.length > 0 && !removed) {
+        const add = document.createElement("select");
+        add.className = "settings-select controls-add-gesture";
+        add.setAttribute("aria-label", "Add a click or hold to " + row.title);
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "+ Add click or hold";
+        add.appendChild(placeholder);
+        canAdd.forEach((entry) => {
+          const option = document.createElement("option");
+          option.value = entry.key;
+          option.textContent = entry.label;
+          add.appendChild(option);
+        });
+        add.disabled = controlsState.saving;
+        add.addEventListener("change", () => {
+          const entry = canAdd.find((candidate) => candidate.key === add.value);
+          if (entry)
+            controlsState.addedLines.set(section + "|" + entry.key, { section: section, row: pressKey, key: entry.key, label: entry.label });
+          renderControls();
+        });
+        lines.appendChild(add);
+      }
+      element.appendChild(lines);
+
       const actions = document.createElement("div");
       actions.className = "controls-row-actions";
       if (row.source === "gpio_buttons") {
-        const key = row.lines[0].key;
         const remove = document.createElement("button");
         remove.className = (removed ? "secondary-button" : "danger-button") + " preset-action";
         remove.type = "button";
@@ -14505,45 +14631,41 @@ std::string_view webControlPageHtml()
         remove.setAttribute("aria-label", (removed ? "Keep " : "Remove ") + row.title);
         remove.addEventListener("click", () => {
           if (isNew) {
-            controlsState.added = controlsState.added.filter((entry) => entry.key !== key);
-            controlsState.edits.delete(section + "|" + key);
+            controlsState.added = controlsState.added.filter((entry) => entry.key !== pressKey);
+            controlsState.edits.delete(section + "|" + pressKey);
           } else if (removed) {
-            controlsState.removed.delete(key);
+            controlsState.removed.delete(pressKey);
           } else {
-            controlsState.removed.add(key);
-            controlsState.edits.delete(section + "|" + key);
+            controlsState.removed.add(pressKey);
+            row.lines.forEach((line) => controlsState.edits.delete(section + "|" + line.key));
           }
+          [...controlsState.addedLines.keys()].forEach((id) => {
+            if (controlsState.addedLines.get(id).row === pressKey && (isNew || !removed)) {
+              controlsState.addedLines.delete(id);
+              controlsState.edits.delete(id);
+            }
+          });
           renderControls();
         });
         actions.appendChild(remove);
       }
-      const lines = document.createElement("div");
-      row.lines.forEach((line) => {
-        const wrap = document.createElement("div");
-        wrap.className = "controls-line";
-        const label = document.createElement("div");
-        label.className = "controls-line-label";
-        label.textContent = line.label;
-        const select = buildControlsSelect(section, line, controlsLineValue(section, line));
-        select.disabled = removed || controlsState.saving;
-        select.addEventListener("change", () => setControlsValue(section, line, select.value));
-        wrap.appendChild(label);
-        wrap.appendChild(select);
-        lines.appendChild(wrap);
-      });
-      element.appendChild(lines);
       element.appendChild(actions);
       return element;
     }
 
-    const controlsStateNames = { running: "Detected", off: "Off", error: "Error", restart: "Restart Core" };
+    const controlsStateNames = {
+      running: "Detected", found: "Detected, off", missing: "Not found", off: "Off", error: "Error", restart: "Restart Core",
+    };
+    // Rows are shown for hardware that is there: the GPIO always, an I2C device when Core runs it or finds it.
+    const controlsDetectedStates = ["running", "found", "restart"];
 
-    // One peripheral: what Core finds (the chip, whether its input runs, who holds which pin) and its settings, which
-    // are saved with the same Save button as the rows.
-    function buildControlsPeripheral(peripheral) {
+    // One peripheral: whether it is there (a message only when something needs saying) and its settings, which are
+    // saved with the same Save button as the rows.
+    function buildControlsPeripheral(peripheral, withSettings) {
       const status = peripheral.status || {};
       const card = document.createElement("div");
-      card.className = "controls-peripheral";
+      const detected = peripheral.id === "gpio_buttons" || controlsDetectedStates.includes(status.state);
+      card.className = "controls-peripheral" + (detected ? "" : " undetected");   // supported but not found: greyed
       const head = document.createElement("div");
       head.className = "controls-peripheral-head";
       const text = document.createElement("div");
@@ -14551,24 +14673,11 @@ std::string_view webControlPageHtml()
       title.className = "controls-row-title";
       title.textContent = peripheral.title;
       text.appendChild(title);
-      const detail = document.createElement("div");
-      detail.className = "controls-row-detail";
-      detail.textContent = status.detail || "";
-      text.appendChild(detail);
-      const chip = status.chip || {};
-      const chipLine = document.createElement("div");
-      chipLine.className = "controls-row-detail";
-      chipLine.textContent = chip.ok
-        ? "Chip " + chip.path + " (" + chip.label + "), " + chip.lines + " lines"
-        : "Chip: " + (chip.error || "not found");
-      text.appendChild(chipLine);
-      const held = (status.pins || []).map((line) => "GPIO " + line.pin + " " + (line.core ? "Apertar" : "held by " + (line.consumer || "another program"))
-        + (line.output ? " (output)" : ""));
-      if (held.length > 0) {
-        const pins = document.createElement("div");
-        pins.className = "controls-row-detail";
-        pins.textContent = "In use: " + held.join(", ");
-        text.appendChild(pins);
+      if (status.detail && status.state !== "running") {
+        const detail = document.createElement("div");
+        detail.className = "controls-row-detail";
+        detail.textContent = status.detail;
+        text.appendChild(detail);
       }
       head.appendChild(text);
       const pill = document.createElement("div");
@@ -14576,12 +14685,13 @@ std::string_view webControlPageHtml()
       pill.textContent = controlsStateNames[status.state] || status.state || "";
       head.appendChild(pill);
       card.appendChild(head);
-
+      if (!withSettings)
+        return card;
       const settings = document.createElement("div");
       settings.className = "controls-settings";
       (peripheral.settings || []).forEach((setting) => {
         const id = peripheral.section + "|" + setting.key;
-        const edit = controlsState.edits.get(id);
+        const edit = controlsState.settingEdits.get(id);
         const value = edit ? edit.value : setting.value;
         const field = document.createElement("label");
         field.className = "field-stack" + (edit ? " changed" : "");
@@ -14616,14 +14726,14 @@ std::string_view webControlPageHtml()
         const stage = (redraw) => {
           const next = String(control.value).trim();
           if (next === setting.value)
-            controlsState.edits.delete(id);
+            controlsState.settingEdits.delete(id);
           else
-            controlsState.edits.set(id, { section: peripheral.section, key: setting.key, value: next });
-          field.classList.toggle("changed", controlsState.edits.has(id));
+            controlsState.settingEdits.set(id, { section: peripheral.section, key: setting.key, value: next });
+          field.classList.toggle("changed", controlsState.settingEdits.has(id));
           if (redraw)
-            renderControls();
+            renderHardware();
           else
-            updateControlsButtons();
+            updateHardwareButtons();
         };
         control.addEventListener("input", () => stage(false));
         control.addEventListener("change", () => stage(true));
@@ -14634,44 +14744,175 @@ std::string_view webControlPageHtml()
       return card;
     }
 
+    function buildControlsGroup(group, sections) {
+      const model = controlsState.model;
+      const rows = (model.rows || []).filter((row) => row.source === group.source);
+      const added = group.source === "gpio_buttons" ? controlsState.added : [];
+      if (rows.length === 0 && added.length === 0)
+        return null;
+      const on = !!(sections[group.source] && sections[group.source].enabled);
+      const wrap = document.createElement(on ? "div" : "details");
+      wrap.className = "controls-group";
+      const title = document.createElement(on ? "div" : "summary");
+      title.className = "controls-group-title";
+      title.textContent = group.title + (on ? "" : " (switched off in the file)");
+      wrap.appendChild(title);
+      rows.forEach((row) => wrap.appendChild(buildControlsRow(row, false)));
+      added.forEach((entry) => {
+        wrap.appendChild(buildControlsRow({
+          source: "gpio_buttons", title: "GPIO " + entry.pin, detail: "", pin: entry.pin, enabled: on,
+          lines: [{ label: "Press", key: entry.key, raw: "", actions: [] }], can_add: [],
+        }, true));
+      });
+      return wrap;
+    }
+
     function renderControls() {
       const host = document.getElementById("controlsRows");
       const model = controlsState.model;
       if (!host || !model)
         return;
+      // The add pickers move into the list; keep hold of them, since clearing the list detaches them from the page.
+      const addBox = controlsState.addBox || (controlsState.addBox = document.getElementById("controlsAdd"));
       host.textContent = "";
-      controlsState.peripherals.forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral)));
       const sections = {};
       (model.sections || []).forEach((entry) => { sections[entry.name] = entry; });
-      controlsGroups.forEach((group) => {
-        const rows = (model.rows || []).filter((row) => row.source === group.source);
-        const added = group.source === "gpio_buttons" ? controlsState.added : [];
-        if (rows.length === 0 && added.length === 0)
-          return;
-        const on = !!(sections[group.source] && sections[group.source].enabled);
-        const wrap = document.createElement(on ? "div" : "details");
-        wrap.className = "controls-group";
-        const title = document.createElement(on ? "div" : "summary");
-        title.className = "controls-group-title";
-        title.textContent = group.title + (on ? "" : " (switched off in the file)");
-        wrap.appendChild(title);
-        rows.forEach((row) => wrap.appendChild(buildControlsRow(row, false)));
-        added.forEach((entry) => {
-          wrap.appendChild(buildControlsRow({
-            source: "gpio_buttons", title: "GPIO " + entry.pin, detail: "", pin: entry.pin, enabled: on,
-            lines: [{ label: "Press", key: entry.key, raw: "", actions: [] }],
-          }, true));
+      controlsState.peripherals.forEach((peripheral) => {
+        const isGpio = peripheral.id === "gpio_buttons";
+        const detected = isGpio || controlsDetectedStates.includes((peripheral.status || {}).state);
+        if (!detected)
+          return;                                           // Controls is for hardware that is there; Config lists the rest
+        host.appendChild(buildControlsPeripheral(peripheral, false));
+        const sources = isGpio ? ["gpio_buttons", "gpio_encoders"] : [peripheral.id];
+        sources.forEach((source) => {
+          const group = controlsGroups.find((candidate) => candidate.source === source);
+          const element = group ? buildControlsGroup(group, sections) : null;
+          if (element)
+            host.appendChild(element);
         });
-        host.appendChild(wrap);
+        if (isGpio && sections.gpio_buttons && sections.gpio_buttons.enabled) {
+          const plus = document.createElement("button");
+          plus.className = "secondary-button";
+          plus.type = "button";
+          plus.textContent = controlsState.showAdd ? "Cancel" : "+ Add GPIO button";
+          plus.disabled = controlsState.saving;
+          plus.addEventListener("click", () => {
+            controlsState.showAdd = !controlsState.showAdd;
+            renderControls();
+          });
+          host.appendChild(plus);
+          if (addBox)
+            host.appendChild(addBox);                       // the pin and action pickers sit under the GPIO buttons
+        }
       });
       renderControlsAdd();
       updateControlsButtons();
     }
 
+    function hardwareDirty() {
+      return controlsState.settingEdits.size > 0;
+    }
+
+    function updateHardwareButtons() {
+      const saveButton = document.getElementById("saveHardwareButton");
+      const reloadButton = document.getElementById("reloadHardwareButton");
+      const busy = controlsState.loading || controlsState.saving;
+      if (saveButton)
+        saveButton.disabled = busy || !hardwareDirty();
+      if (reloadButton)
+        reloadButton.disabled = busy;
+      setText("hardwareStatePill", controlsState.loading ? "Loading" : controlsState.saving ? "Saving" : hardwareDirty() ? "Unsaved" : "Ready");
+    }
+
+    function showHardwareMessage(title, issues, isInfo) {
+      const box = document.getElementById("hardwareMessage");
+      if (!box)
+        return;
+      const list = Array.isArray(issues) ? issues : [];
+      box.textContent = "";
+      box.classList.toggle("info", !!isInfo);
+      if (!title && list.length === 0) {
+        box.hidden = true;
+        return;
+      }
+      const head = document.createElement("div");
+      head.textContent = title;
+      box.appendChild(head);
+      if (list.length > 0) {
+        const items = document.createElement("ul");
+        list.slice(0, 20).forEach((issue) => {
+          const item = document.createElement("li");
+          item.textContent = (issue.line ? "Line " + issue.line + ": " : "") + issue.message;
+          items.appendChild(item);
+        });
+        box.appendChild(items);
+      }
+      box.hidden = false;
+    }
+
+    // The Hardware card on Config: the I2C buses, then every device Apertar can use, detected or not, with its settings.
+    function renderHardware() {
+      const host = document.getElementById("hardwareDevices");
+      if (!host)
+        return;
+      host.textContent = "";
+      if (controlsState.buses.length > 0) {
+        const buses = document.createElement("div");
+        buses.className = "controls-peripheral";
+        const title = document.createElement("div");
+        title.className = "controls-row-title";
+        title.textContent = "I2C buses";
+        buses.appendChild(title);
+        controlsState.buses.forEach((entry) => {
+          const line = document.createElement("div");
+          line.className = "controls-row-detail";
+          const users = controlsState.peripherals.filter((peripheral) => peripheral.status && peripheral.status.bus === entry.bus
+            && controlsDetectedStates.includes(peripheral.status.state)).map((peripheral) => peripheral.title);
+          line.textContent = "Bus " + entry.bus + (entry.name ? " (" + entry.name + ")" : "") + (users.length > 0 ? ": " + users.join(", ") : "");
+          buses.appendChild(line);
+        });
+        host.appendChild(buses);
+      }
+      controlsState.peripherals.forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral, true)));
+      updateHardwareButtons();
+    }
+
+    async function saveHardware() {
+      if (!hardwareDirty() || controlsState.saving)
+        return;
+      const payload = { cmd: "set_controls", base: controlsState.revision, by: "webui" };
+      controlsState.settingEdits.forEach((edit) => { payload["set." + edit.section + "." + edit.key] = edit.value; });
+      controlsState.saving = true;
+      updateHardwareButtons();
+      try {
+        const result = await controlsCall(payload);
+        if (!result.ok) {
+          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
+          const kept = result.code === "stale" || result.code === "conflict"
+            ? " Your settings stay on the page. Press Reload to see the newer file." : "";
+          showHardwareMessage((result.error || "Could not save the settings.") + kept, found, false);
+          showToast(result.error || "Could not save the settings.", true);
+          return;
+        }
+        controlsState.saving = false;
+        await loadControls(true);
+        if (!state.configDirty)
+          await fetchConfigFile(true);     // the text editor below shows the same file
+        showHardwareMessage("Saved. Restart Apertar Core to apply the change.", result.issues, true);
+        showToast("Hardware settings saved.", false);
+      } catch (error) {
+        showHardwareMessage(error.message || "Could not save the settings.", [], false);
+        showToast(error.message || "Could not save the settings.", true);
+      } finally {
+        controlsState.saving = false;
+        updateHardwareButtons();
+      }
+    }
+
     function renderControlsAdd() {
-      const box = document.getElementById("controlsAdd");
-      const pinSelect = document.getElementById("controlsAddPin");
-      const actionSelect = document.getElementById("controlsAddAction");
+      const box = controlsState.addBox || document.getElementById("controlsAdd");
+      const pinSelect = box && box.querySelector("#controlsAddPin");
+      const actionSelect = box && box.querySelector("#controlsAddAction");
       const model = controlsState.model;
       if (!box || !model)
         return;
@@ -14681,7 +14922,7 @@ std::string_view webControlPageHtml()
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
       const free = ((model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
-      box.hidden = !(buttons && buttons.enabled);
+      box.hidden = !(buttons && buttons.enabled && controlsState.showAdd);
       pinSelect.textContent = "";
       free.forEach((pin) => {
         const option = document.createElement("option");
@@ -14711,13 +14952,14 @@ std::string_view webControlPageHtml()
       const key = "d" + pin;
       controlsState.added.push({ pin: pin, key: key });
       controlsState.edits.set("gpio_buttons|" + key, { section: "gpio_buttons", key: key, value: action });
+      controlsState.showAdd = false;
       renderControls();
     }
 
     async function loadControls(silent, discard) {
       if (controlsState.loading)
         return;
-      if (controlsDirty() && discard && !window.confirm("Reload and discard the changes you have not saved?"))
+      if ((controlsDirty() || hardwareDirty()) && discard && !window.confirm("Reload and discard the changes you have not saved?"))
         return;
       controlsState.loading = true;
       updateControlsButtons();
@@ -14736,9 +14978,14 @@ std::string_view webControlPageHtml()
         controlsState.revision = String(controls.controls.revision || "");
         controlsState.model = controls.controls.model || null;
         controlsState.peripherals = controls.controls.peripherals || [];
+        controlsState.buses = controls.controls.i2c_buses || [];
+        controlsState.settingEdits = new Map();
         controlsState.edits = new Map();
         controlsState.added = [];
         controlsState.removed = new Set();
+        controlsState.addedLines = new Map();
+        controlsState.removedKeys = new Set();
+        controlsState.showAdd = false;
         const found = controls.controls;
         if (found.errors > 0)
           showControlsMessage("The file has " + found.errors + (found.errors === 1 ? " error" : " errors") + ". Config shows where.", found.issues.filter((issue) => issue.error), false);
@@ -14749,6 +14996,7 @@ std::string_view webControlPageHtml()
         if (!controlsState.model)
           throw new Error("This Apertar Core does not describe its controls yet. Restart it after the update.");
         renderControls();
+        renderHardware();
         if (!silent)
           showToast("Controls loaded.", false);
       } catch (error) {
@@ -14758,6 +15006,7 @@ std::string_view webControlPageHtml()
       } finally {
         controlsState.loading = false;
         updateControlsButtons();
+        updateHardwareButtons();
       }
     }
 
@@ -14766,7 +15015,15 @@ std::string_view webControlPageHtml()
         return;
       const payload = { cmd: "set_controls", base: controlsState.revision, by: "webui" };
       controlsState.edits.forEach((edit) => { payload["set." + edit.section + "." + edit.key] = edit.value; });
-      controlsState.removed.forEach((key) => { payload["unset.gpio_buttons." + key] = "true"; });
+      controlsState.removed.forEach((key) => {
+        payload["unset.gpio_buttons." + key] = "true";
+        const row = ((controlsState.model && controlsState.model.rows) || []).find((candidate) => candidate.source === "gpio_buttons" && candidate.lines[0].key === key);
+        (row ? row.lines : []).forEach((line) => { if (line.raw !== "") payload["unset.gpio_buttons." + line.key] = "true"; });
+      });
+      controlsState.removedKeys.forEach((id) => {
+        const [section, key] = id.split("|");
+        payload["unset." + section + "." + key] = "true";
+      });
       controlsState.saving = true;
       renderControls();
       try {
@@ -14782,7 +15039,7 @@ std::string_view webControlPageHtml()
         controlsState.saving = false;
         await loadControls(true);
         if (!state.configDirty)
-          await fetchConfigFile(true);     // the text editor below shows the same file
+          await fetchConfigFile(true);     // Config shows the same file
         showControlsMessage("Saved. Restart Apertar Core to apply the change.", result.issues, true);
         showToast("Controls saved.", false);
       } catch (error) {
@@ -14896,8 +15153,8 @@ std::string_view webControlPageHtml()
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
         await fetchConfigFile(true);
-        if (!controlsDirty())
-          await loadControls(true);        // the Controls card above shows the same file
+        if (!controlsDirty() && !hardwareDirty())
+          await loadControls(true);        // Controls and the Hardware card show the same file
         const found = Array.isArray(payload.issues) ? payload.issues : [];
         if (found.length > 0)
           showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
@@ -16060,6 +16317,8 @@ std::string_view webControlPageHtml()
         event.target.value = "";
       });
       document.getElementById("reloadControlsButton").addEventListener("click", () => loadControls(false, true));
+      document.getElementById("reloadHardwareButton").addEventListener("click", () => loadControls(false, true));
+      document.getElementById("saveHardwareButton").addEventListener("click", saveHardware);
       document.getElementById("saveControlsButton").addEventListener("click", saveControls);
       document.getElementById("controlsAddButton").addEventListener("click", addControlsButton);
       document.getElementById("reloadConfigButton").addEventListener("click", () => fetchConfigFile(false, true));
