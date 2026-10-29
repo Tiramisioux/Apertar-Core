@@ -1968,6 +1968,7 @@ std::string_view webControlPageHtml()
       overflow-y: auto;
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-auto-rows: max-content;
       align-content: start;
       gap: 14px;
       padding-bottom: 20px;
@@ -1978,7 +1979,8 @@ std::string_view webControlPageHtml()
       flex-direction: column;
       gap: 10px;
       min-width: 0;
-      padding: 10px;
+      padding: 0 0 10px;
+      overflow: hidden;
       border-radius: var(--radius-lg);
       border: 1px solid var(--card-border);
       background: var(--surface);
@@ -2009,10 +2011,9 @@ std::string_view webControlPageHtml()
     .pb-thumb {
       position: relative;
       aspect-ratio: 16 / 9;
-      border-radius: var(--radius-md);
       overflow: hidden;
       background: var(--surface-3);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
 
     .pb-thumb img {
@@ -2100,7 +2101,7 @@ std::string_view webControlPageHtml()
       display: flex;
       flex-direction: column;
       gap: 3px;
-      padding: 0 4px 4px;
+      padding: 0 14px 4px;
       min-width: 0;
     }
 
