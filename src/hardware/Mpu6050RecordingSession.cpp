@@ -1,4 +1,5 @@
 #include "hardware/Mpu6050RecordingSession.hpp"
+#include "hardware/HardwareConfigStore.hpp"
 
 #include <algorithm>
 #include <array>
@@ -601,244 +602,46 @@ double mappedAccelForOrientation(const std::string &orientation,
     return token == axis ? value : -value;
 }
 
-bool writeHardwareConfigValue(const std::filesystem::path &configPath,
-                              const std::string &sectionName,
+// Every change to the hardware file goes through the store: one lock, one write and one history entry per call.
+// The store writes ~/apertar-hardware.conf, not whichever file the loader found.
+bool writeHardwareConfigValues(const std::string &sectionName,
+                               const std::vector<std::pair<std::string, std::string>> &values,
+                               std::string *error)
+{
+    const std::string section = hwconf::canonicalSection(sectionName);
+    std::vector<hwconf::Edit> edits;
+    for (const auto &[key, value] : values)
+        edits.push_back({ hwconf::Edit::Op::Set, section, hwconf::canonicalKey(section, key), value });
+
+    hardware::HardwareConfigStore &store = hardware::configStore();
+    hardware::StoreFlags flags;
+    flags.trusted = true;
+    const hardware::StoreResult result = store.edit(store.currentRevision(), edits, "imu", flags);
+    if (!result.ok && error)
+        *error = "Could not update hardware config " + store.path().string() + ": " + result.error;
+    return result.ok;
+}
+
+bool writeHardwareConfigValue(const std::string &sectionName,
                               const std::string &key,
                               const std::string &value,
                               std::string *error)
 {
-    const std::filesystem::path path = configPath.empty() ? defaultHardwareConfigPath() : configPath;
-    std::vector<std::string> lines;
-
-    {
-        std::ifstream input(path);
-        std::string line;
-        while (std::getline(input, line)) {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            lines.push_back(line);
-        }
-    }
-
-    if (lines.empty()) {
-        lines.emplace_back("# Apertar hardware configuration");
-        lines.emplace_back();
-    }
-
-    const std::string targetSection = normalizeToken(sectionName);
-    const std::string targetKey = normalizeToken(key);
-    bool foundSection = false;
-    bool inTargetSection = false;
-    bool wroteKey = false;
-
-    for (size_t i = 0; i < lines.size(); ++i) {
-        const std::string trimmed = trimAscii(lines[i]);
-        if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
-            if (inTargetSection && !wroteKey) {
-                lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(i), targetKey + "=" + value);
-                wroteKey = true;
-                ++i;
-            }
-
-            inTargetSection = normalizeToken(trimmed.substr(1, trimmed.size() - 2)) == targetSection;
-            foundSection = foundSection || inTargetSection;
-            continue;
-        }
-
-        if (!inTargetSection)
-            continue;
-
-        const size_t eq = lines[i].find('=');
-        if (eq == std::string::npos)
-            continue;
-
-        if (normalizeToken(lines[i].substr(0, eq)) == targetKey) {
-            const size_t indentEnd = lines[i].find_first_not_of(" \t");
-            const std::string indent = indentEnd == std::string::npos
-                ? std::string()
-                : lines[i].substr(0, indentEnd);
-            lines[i] = indent + targetKey + "=" + value;
-            wroteKey = true;
-        }
-    }
-
-    if (inTargetSection && !wroteKey) {
-        lines.push_back(targetKey + "=" + value);
-        wroteKey = true;
-    }
-
-    if (!foundSection) {
-        if (!lines.empty() && !trimAscii(lines.back()).empty())
-            lines.emplace_back();
-        lines.push_back("[" + targetSection + "]");
-        lines.push_back(targetKey + "=" + value);
-    }
-
-    std::error_code ec;
-    if (!path.parent_path().empty()) {
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) {
-            if (error)
-                *error = "Could not create hardware config directory: " + ec.message();
-            return false;
-        }
-    }
-
-    const std::filesystem::path tmpPath = path.string() + ".tmp";
-    {
-        std::ofstream output(tmpPath, std::ios::out | std::ios::trunc);
-        if (!output.is_open()) {
-            if (error)
-                *error = "Could not write hardware config " + path.string() + ".";
-            return false;
-        }
-
-        for (const std::string &line : lines)
-            output << line << '\n';
-    }
-
-    std::filesystem::rename(tmpPath, path, ec);
-    if (ec) {
-        std::filesystem::remove(path, ec);
-        ec.clear();
-        std::filesystem::rename(tmpPath, path, ec);
-        if (ec) {
-            if (error)
-                *error = "Could not update hardware config " + path.string() + ": " + ec.message();
-            return false;
-        }
-    }
-
-    return true;
+    return writeHardwareConfigValues(sectionName, { { key, value } }, error);
 }
 
-bool updateImuBiasConfig(const std::filesystem::path &configPath,
-                         const std::string &sectionName,
+bool updateImuBiasConfig(const std::string &sectionName,
                          double biasX,
                          double biasY,
                          double biasZ,
                          std::string *error)
 {
-    const std::filesystem::path path = configPath.empty() ? defaultHardwareConfigPath() : configPath;
-    std::vector<std::string> lines;
-
-    {
-        std::ifstream input(path);
-        std::string line;
-        while (std::getline(input, line)) {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            lines.push_back(line);
-        }
-    }
-
-    const std::array<std::pair<std::string, std::string>, 4> updates{{
+    return writeHardwareConfigValues(sectionName.empty() ? "mpu6050" : sectionName, {
         { "auto_calibrate_seconds", "0" },
         { "gyro_bias_x", formatRawBias(biasX) },
         { "gyro_bias_y", formatRawBias(biasY) },
         { "gyro_bias_z", formatRawBias(biasZ) },
-    }};
-    std::array<bool, updates.size()> written{ false, false, false, false };
-
-    const auto insertMissingIntoSection = [&](size_t insertIndex) {
-        std::vector<std::string> missing;
-        for (size_t i = 0; i < updates.size(); ++i) {
-            if (!written[i]) {
-                missing.push_back(updates[i].first + "=" + updates[i].second);
-                written[i] = true;
-            }
-        }
-        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insertIndex),
-                     missing.begin(),
-                     missing.end());
-        return missing.size();
-    };
-
-    const std::string targetSection = sectionName.empty() ? "mpu6050" : normalizeToken(sectionName);
-    bool foundTargetSection = false;
-    bool inTargetSection = false;
-    for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
-        const std::string trimmed = trimAscii(lines[lineIndex]);
-        if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
-            if (inTargetSection)
-                lineIndex += insertMissingIntoSection(lineIndex);
-
-            const std::string section = normalizeToken(trimmed.substr(1, trimmed.size() - 2));
-            inTargetSection = section == targetSection;
-            foundTargetSection = foundTargetSection || inTargetSection;
-            continue;
-        }
-
-        if (!inTargetSection)
-            continue;
-
-        const size_t eq = lines[lineIndex].find('=');
-        if (eq == std::string::npos)
-            continue;
-
-        const std::string key = normalizeToken(lines[lineIndex].substr(0, eq));
-        for (size_t i = 0; i < updates.size(); ++i) {
-            if (key == updates[i].first) {
-                const size_t indentEnd = lines[lineIndex].find_first_not_of(" \t");
-                const std::string indent = indentEnd == std::string::npos
-                    ? std::string()
-                    : lines[lineIndex].substr(0, indentEnd);
-                lines[lineIndex] = indent + updates[i].first + "=" + updates[i].second;
-                written[i] = true;
-                break;
-            }
-        }
-    }
-
-    if (inTargetSection)
-        insertMissingIntoSection(lines.size());
-
-    if (!foundTargetSection) {
-        if (!lines.empty() && !trimAscii(lines.back()).empty())
-            lines.emplace_back();
-        lines.push_back("[" + targetSection + "]");
-        for (size_t i = 0; i < updates.size(); ++i) {
-            lines.push_back(updates[i].first + "=" + updates[i].second);
-            written[i] = true;
-        }
-    }
-
-    std::error_code ec;
-    if (!path.parent_path().empty()) {
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) {
-            if (error)
-                *error = "Could not create hardware config directory: " + ec.message();
-            return false;
-        }
-    }
-
-    const std::filesystem::path tmpPath = path.string() + ".tmp";
-    {
-        std::ofstream output(tmpPath, std::ios::out | std::ios::trunc);
-        if (!output.is_open()) {
-            if (error)
-                *error = "Could not write hardware config " + path.string() + ".";
-            return false;
-        }
-
-        for (const std::string &line : lines)
-            output << line << '\n';
-    }
-
-    std::filesystem::rename(tmpPath, path, ec);
-    if (ec) {
-        std::filesystem::remove(path, ec);
-        ec.clear();
-        std::filesystem::rename(tmpPath, path, ec);
-        if (ec) {
-            if (error)
-                *error = "Could not update hardware config " + path.string() + ": " + ec.message();
-            return false;
-        }
-    }
-
-    return true;
+    }, error);
 }
 
 } // namespace
@@ -1145,8 +948,7 @@ bool Mpu6050RecordingSession::calibrateConfiguredSensor(double seconds,
     const double biasX = sumX / static_cast<double>(sampleCount);
     const double biasY = sumY / static_cast<double>(sampleCount);
     const double biasZ = sumZ / static_cast<double>(sampleCount);
-    if (!updateImuBiasConfig(session.config_.configPath,
-                             driverConfigSection(session.config_.driver),
+    if (!updateImuBiasConfig(driverConfigSection(session.config_.driver),
                              biasX,
                              biasY,
                              biasZ,
@@ -1158,7 +960,7 @@ bool Mpu6050RecordingSession::calibrateConfiguredSensor(double seconds,
         result->gyroBiasYRaw = biasY;
         result->gyroBiasZRaw = biasZ;
         result->sampleCount = sampleCount;
-        result->configPath = session.config_.configPath;
+        result->configPath = hardware::configStore().path().string();
     }
 
     std::cerr << "ApertarCore gyro calibration saved: "
@@ -1294,10 +1096,7 @@ Mpu6050RecordingSession::ConfigSnapshot Mpu6050RecordingSession::configuredSenso
 
 bool Mpu6050RecordingSession::setConfiguredDriver(const std::string &driver, std::string *error)
 {
-    Config config = loadConfig();
-    if (config.configPath.empty())
-        config.configPath = defaultHardwareConfigPath().string();
-    return writeHardwareConfigValue(config.configPath, "imu", "driver", canonicalDriverName(driver), error);
+    return writeHardwareConfigValue("imu", "driver", canonicalDriverName(driver), error);
 }
 
 bool Mpu6050RecordingSession::setConfiguredOrientation(const std::string &orientation, std::string *error)
@@ -1309,11 +1108,8 @@ bool Mpu6050RecordingSession::setConfiguredOrientation(const std::string &orient
         return false;
     }
 
-    Config config = loadConfig();
-    if (config.configPath.empty())
-        config.configPath = defaultHardwareConfigPath().string();
-    return writeHardwareConfigValue(config.configPath,
-                                    driverConfigSection(config.driver),
+    const Config config = loadConfig();
+    return writeHardwareConfigValue(driverConfigSection(config.driver),
                                     "orientation",
                                     *normalized,
                                     error);
@@ -1321,12 +1117,8 @@ bool Mpu6050RecordingSession::setConfiguredOrientation(const std::string &orient
 
 bool Mpu6050RecordingSession::setConfiguredSyncOffsetMs(double value, std::string *error)
 {
-    Config config = loadConfig();
-    if (config.configPath.empty())
-        config.configPath = defaultHardwareConfigPath().string();
     const double clamped = std::clamp(value, -2000.0, 2000.0);
-    return writeHardwareConfigValue(config.configPath,
-                                    "imu",
+    return writeHardwareConfigValue("imu",
                                     "sync_offset_ms",
                                     formatConfigDouble(clamped, 3),
                                     error);
@@ -1356,27 +1148,24 @@ bool Mpu6050RecordingSession::setConfiguredLevelReference(std::string *error)
                                                    snapshot.accelYG,
                                                    snapshot.accelZG,
                                                    2);
-    const std::string section = driverConfigSection(snapshot.driver);
-    const std::filesystem::path configPath = snapshot.configPath.empty()
-        ? defaultHardwareConfigPath()
-        : std::filesystem::path(snapshot.configPath);
-    return writeHardwareConfigValue(configPath, section, "level_reference_set", "true", error) &&
-           writeHardwareConfigValue(configPath, section, "level_reference_orientation", snapshot.orientation, error) &&
-           writeHardwareConfigValue(configPath, section, "level_accel_x", formatConfigDouble(levelX, 4), error) &&
-           writeHardwareConfigValue(configPath, section, "level_accel_y", formatConfigDouble(levelY, 4), error) &&
-           writeHardwareConfigValue(configPath, section, "level_accel_z", formatConfigDouble(levelZ, 4), error);
+    return writeHardwareConfigValues(driverConfigSection(snapshot.driver), {
+        { "level_reference_set", "true" },
+        { "level_reference_orientation", snapshot.orientation },
+        { "level_accel_x", formatConfigDouble(levelX, 4) },
+        { "level_accel_y", formatConfigDouble(levelY, 4) },
+        { "level_accel_z", formatConfigDouble(levelZ, 4) },
+    }, error);
 }
 
 bool Mpu6050RecordingSession::clearConfiguredLevelReference(std::string *error)
 {
-    Config config = loadConfig();
-    if (config.configPath.empty())
-        config.configPath = defaultHardwareConfigPath().string();
-    const std::string section = driverConfigSection(config.driver);
-    return writeHardwareConfigValue(config.configPath, section, "level_reference_set", "false", error) &&
-           writeHardwareConfigValue(config.configPath, section, "level_accel_x", "0", error) &&
-           writeHardwareConfigValue(config.configPath, section, "level_accel_y", "0", error) &&
-           writeHardwareConfigValue(config.configPath, section, "level_accel_z", "0", error);
+    const Config config = loadConfig();
+    return writeHardwareConfigValues(driverConfigSection(config.driver), {
+        { "level_reference_set", "false" },
+        { "level_accel_x", "0" },
+        { "level_accel_y", "0" },
+        { "level_accel_z", "0" },
+    }, error);
 }
 
 bool Mpu6050RecordingSession::start(const std::string &clipFolder,
