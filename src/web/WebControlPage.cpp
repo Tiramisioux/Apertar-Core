@@ -4483,7 +4483,7 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
-                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another.</p>
+                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
                 </div>
               </div>
               <div class="field-stack">
@@ -8626,6 +8626,16 @@ std::string_view webControlPageHtml()
       return String(modeValue || "").toLowerCase() === "rec_run" ? "Rec Run" : "Free Run";
     }
 
+    // What the two modes are called on screen. The stored values stay "Free Run" and "Rec Run" (saved settings and the
+    // touch UI compare them); the names say what the camera does: the clock's time of day, or each clip from 00:00:00:00.
+    function timecodeDisplayName(modeLabel) {
+      return modeLabel === "Rec Run" ? "Clip" : "Time of Day";
+    }
+
+    function timecodeChoices() {
+      return timecodeOptions.map((value) => ({ value, label: timecodeDisplayName(value), enabled: true }));
+    }
+
     // The UI timecode (what the screens show, UI.conf) and the file timecode (Core's timecode_mode:
     // DNG, MLV, ProRes, H.264 and the WAV) are set apart; set_timecode_mode takes target=ui|files.
     function uiTimecodeLabel(snapshot) {
@@ -8640,7 +8650,7 @@ std::string_view webControlPageHtml()
     function timecodeSummaryLabel(snapshot) {
       const ui = uiTimecodeLabel(snapshot);
       const file = fileTimecodeLabel(snapshot);
-      return ui === file ? ui : "UI " + ui + " · Files " + file;
+      return ui === file ? timecodeDisplayName(ui) : "UI " + timecodeDisplayName(ui) + " · Files " + timecodeDisplayName(file);
     }
 
     function timecodeCommand(value, target) {
@@ -9877,10 +9887,10 @@ std::string_view webControlPageHtml()
             break;
           }
           case "timecode": {
-            card.appendChild(createFavoriteSelectBlock("UI Timecode", uiTimecodeLabel(snapshot), timecodeOptions, uiTimecodeLabel(snapshot), async (value) => {
+            card.appendChild(createFavoriteSelectBlock("UI Timecode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
               await dispatchFavoriteCommand(timecodeCommand(value, "ui"));
             }));
-            card.appendChild(createFavoriteSelectBlock("File Timecode", fileTimecodeLabel(snapshot), timecodeOptions, fileTimecodeLabel(snapshot), async (value) => {
+            card.appendChild(createFavoriteSelectBlock("File Timecode", timecodeDisplayName(fileTimecodeLabel(snapshot)), timecodeChoices(), fileTimecodeLabel(snapshot), async (value) => {
               await dispatchFavoriteCommand(timecodeCommand(value, "files"));
             }));
             break;
@@ -14042,7 +14052,7 @@ std::string_view webControlPageHtml()
 
       for (const [id, target, current] of [["settingsTimecodeOptions", "ui", uiTimecodeLabel(snapshot)],
                                            ["settingsFileTimecodeOptions", "files", fileTimecodeLabel(snapshot)]]) {
-        buildOptionButtons(id, timecodeOptions.map((value) => ({ value, label: value, enabled: true })),
+        buildOptionButtons(id, timecodeChoices(),
           current, async (value) => {
             try {
               await sendCommand(timecodeCommand(value, target));
