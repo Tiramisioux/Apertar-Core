@@ -91,6 +91,7 @@ add_executable(apertar-core
     src/hardware/Pcf8574Input.cpp
     src/hardware/RecordingIndicatorOutput.cpp
     src/hardware/TriggerOutput.cpp
+    src/hardware/HardwareConfigStore.cpp
     src/ipc/ControlProtocol.cpp
     src/ipc/ControlServer.cpp
     src/web/WebControlPage.cpp
