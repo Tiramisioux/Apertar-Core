@@ -2850,6 +2850,33 @@ std::string_view webControlPageHtml()
       border-color: #3f3f46;
     }
 
+    .controls-peripheral {
+      padding: 14px 16px;
+      margin: 0 0 18px;
+      border: 1px solid #27272a;
+      border-radius: 18px;
+      background: rgba(9, 9, 11, 0.45);
+    }
+
+    .controls-peripheral-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin: 0 0 12px;
+    }
+
+    .controls-settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 12px;
+    }
+
+    .controls-settings .field-stack.changed .settings-select,
+    .controls-settings .field-stack.changed .settings-input {
+      border-color: #a1a1aa;
+    }
+
     .controls-group {
       margin: 0 0 18px;
     }
@@ -14309,6 +14336,7 @@ std::string_view webControlPageHtml()
       saving: false,
       revision: "",
       model: null,
+      peripherals: [],
       catalog: null,
       edits: new Map(),      // "section|key" -> { section, key, value } for every line changed here
       added: [],             // GPIO buttons added on this page: { pin, key }
@@ -14498,12 +14526,111 @@ std::string_view webControlPageHtml()
       return element;
     }
 
+    const controlsStateNames = { running: "Detected", off: "Off", error: "Error", restart: "Restart Core" };
+
+    // One peripheral: what Core finds (the chip, whether its input runs, who holds which pin) and its settings, which
+    // are saved with the same Save button as the rows.
+    function buildControlsPeripheral(peripheral) {
+      const status = peripheral.status || {};
+      const card = document.createElement("div");
+      card.className = "controls-peripheral";
+      const head = document.createElement("div");
+      head.className = "controls-peripheral-head";
+      const text = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "controls-row-title";
+      title.textContent = peripheral.title;
+      text.appendChild(title);
+      const detail = document.createElement("div");
+      detail.className = "controls-row-detail";
+      detail.textContent = status.detail || "";
+      text.appendChild(detail);
+      const chip = status.chip || {};
+      const chipLine = document.createElement("div");
+      chipLine.className = "controls-row-detail";
+      chipLine.textContent = chip.ok
+        ? "Chip " + chip.path + " (" + chip.label + "), " + chip.lines + " lines"
+        : "Chip: " + (chip.error || "not found");
+      text.appendChild(chipLine);
+      const held = (status.pins || []).map((line) => "GPIO " + line.pin + " " + (line.core ? "Apertar" : "held by " + (line.consumer || "another program"))
+        + (line.output ? " (output)" : ""));
+      if (held.length > 0) {
+        const pins = document.createElement("div");
+        pins.className = "controls-row-detail";
+        pins.textContent = "In use: " + held.join(", ");
+        text.appendChild(pins);
+      }
+      head.appendChild(text);
+      const pill = document.createElement("div");
+      pill.className = "online-pill";
+      pill.textContent = controlsStateNames[status.state] || status.state || "";
+      head.appendChild(pill);
+      card.appendChild(head);
+
+      const settings = document.createElement("div");
+      settings.className = "controls-settings";
+      (peripheral.settings || []).forEach((setting) => {
+        const id = peripheral.section + "|" + setting.key;
+        const edit = controlsState.edits.get(id);
+        const value = edit ? edit.value : setting.value;
+        const field = document.createElement("label");
+        field.className = "field-stack" + (edit ? " changed" : "");
+        const label = document.createElement("span");
+        label.className = "input-label";
+        label.textContent = setting.label;
+        field.appendChild(label);
+        let control;
+        if (setting.type === "bool" || setting.type === "choice") {
+          control = document.createElement("select");
+          control.className = "settings-select";
+          const options = setting.type === "bool" ? [["true", "Yes"], ["false", "No"]] : (setting.options || []).map((option) => [option, option]);
+          options.forEach(([optionValue, optionText]) => {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            control.appendChild(option);
+          });
+        } else {
+          control = document.createElement("input");
+          control.className = "settings-input";
+          control.type = setting.type === "number" ? "number" : "text";
+          if (setting.type === "number") {
+            control.min = String(setting.min);
+            control.max = String(setting.max);
+          }
+        }
+        control.value = value;
+        control.disabled = controlsState.saving;
+        // Typing counts at once (Save must be pressable without leaving the field first); only "change" redraws,
+        // so the cursor stays in the field while typing.
+        const stage = (redraw) => {
+          const next = String(control.value).trim();
+          if (next === setting.value)
+            controlsState.edits.delete(id);
+          else
+            controlsState.edits.set(id, { section: peripheral.section, key: setting.key, value: next });
+          field.classList.toggle("changed", controlsState.edits.has(id));
+          if (redraw)
+            renderControls();
+          else
+            updateControlsButtons();
+        };
+        control.addEventListener("input", () => stage(false));
+        control.addEventListener("change", () => stage(true));
+        field.appendChild(control);
+        settings.appendChild(field);
+      });
+      card.appendChild(settings);
+      return card;
+    }
+
     function renderControls() {
       const host = document.getElementById("controlsRows");
       const model = controlsState.model;
       if (!host || !model)
         return;
       host.textContent = "";
+      controlsState.peripherals.forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral)));
       const sections = {};
       (model.sections || []).forEach((entry) => { sections[entry.name] = entry; });
       controlsGroups.forEach((group) => {
@@ -14540,6 +14667,9 @@ std::string_view webControlPageHtml()
         return;
       const buttons = (model.sections || []).find((entry) => entry.name === "gpio_buttons");
       const taken = new Set(controlsState.added.map((entry) => entry.pin));
+      controlsState.peripherals.forEach((peripheral) => {
+        ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
+      });
       const free = ((model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
       box.hidden = !(buttons && buttons.enabled);
       pinSelect.textContent = "";
@@ -14595,6 +14725,7 @@ std::string_view webControlPageHtml()
         }
         controlsState.revision = String(controls.controls.revision || "");
         controlsState.model = controls.controls.model || null;
+        controlsState.peripherals = controls.controls.peripherals || [];
         controlsState.edits = new Map();
         controlsState.added = [];
         controlsState.removed = new Set();

@@ -151,6 +151,59 @@ inline std::vector<std::pair<int, std::string>> gpioPinsInUse(const Document &do
     return used;
 }
 
+// A peripheral's settings as the page edits them: the file's value, or the reader's default when the key is missing.
+struct SettingSpec {
+    const char *key;
+    const char *label;
+    const char *type;       // bool, choice, number, text
+    const char *fallback;   // what the reader uses with no key
+    const char *options;    // choice: comma list
+    int min;
+    int max;
+};
+
+inline std::vector<SettingSpec> peripheralSettings(const std::string &section)
+{
+    if (section == "gpio_buttons")
+        return {
+            {"enabled", "On", "bool", "false", "", 0, 0},
+            {"active_low", "Pressed reads low (button to GND)", "bool", "true", "", 0, 0},
+            {"pull", "Pull", "choice", "up", "up,down,none", 0, 0},
+            {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
+            {"poll_ms", "Poll every (ms)", "number", "12", "", 1, 1000},
+            {"chip", "GPIO chip", "text", "auto", "", 0, 0},
+        };
+    return {};
+}
+
+inline std::string peripheralSettingsJson(const Document &doc, const std::string &section)
+{
+    std::string out = "[";
+    bool first = true;
+    for (const auto &spec : peripheralSettings(section)) {
+        const auto value = effectiveValue(doc, section, spec.key);
+        out += std::string(first ? "" : ",") + "{\"key\":\"" + spec.key + "\",\"label\":\"" + jsonEscape(spec.label) +
+            "\",\"type\":\"" + spec.type + "\",\"value\":\"" + jsonEscape(value.value_or(spec.fallback)) +
+            "\",\"in_file\":" + (value ? "true" : "false") + ",\"default\":\"" + spec.fallback + "\"";
+        if (std::string(spec.type) == "choice") {
+            out += ",\"options\":[";
+            std::string options = spec.options;
+            for (size_t start = 0, n = 0; start <= options.size(); ++n) {
+                const auto end = options.find(',', start);
+                out += std::string(n ? "," : "") + "\"" + options.substr(start, end == std::string::npos ? std::string::npos : end - start) + "\"";
+                if (end == std::string::npos) break;
+                start = end + 1;
+            }
+            out += "]";
+        }
+        if (std::string(spec.type) == "number")
+            out += ",\"min\":" + std::to_string(spec.min) + ",\"max\":" + std::to_string(spec.max);
+        out += "}";
+        first = false;
+    }
+    return out + "]";
+}
+
 // {"sections":[...],"rows":[...],"gpio_pins":{"used":[...],"free":[...]}}: the part of get_controls the page draws.
 inline std::string modelJson(const Document &doc)
 {

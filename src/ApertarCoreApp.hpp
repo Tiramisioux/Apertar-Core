@@ -28,6 +28,8 @@
 
 namespace apertar {
 
+namespace hwconf { struct Document; }
+
 class ApertarCoreApp {
 public:
     struct Options {
@@ -76,6 +78,7 @@ private:
     std::string handleWebCommand(const std::string &payload);
     std::string handleCommand(const ControlCommand &command);
     std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
+    std::string gpioPeripheralJson(const hwconf::Document &doc);
     WebServer::Response handleWebRequest(const WebServer::Request &request);
     std::string buildWebStateJson() const;
     std::string buildPresetLibraryJson() const;

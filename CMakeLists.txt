@@ -92,6 +92,7 @@ add_executable(apertar-core
     src/hardware/RecordingIndicatorOutput.cpp
     src/hardware/TriggerOutput.cpp
     src/hardware/HardwareConfigStore.cpp
+    src/hardware/GpioChipInfo.cpp
     src/ipc/ControlProtocol.cpp
     src/ipc/ControlServer.cpp
     src/web/WebControlPage.cpp

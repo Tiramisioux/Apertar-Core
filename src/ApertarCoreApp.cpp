@@ -6,6 +6,7 @@
 #include "camera/ExposureMetering.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
+#include "hardware/GpioChipInfo.hpp"
 #include "hardware/HardwareConfigStore.hpp"
 #include "hardware/ButtonActionList.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
@@ -10384,6 +10385,54 @@ void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
                   << profile.rootDisk << " (" << mediaClassName(profile.mediaClass) << ")\n";
 }
 
+// The Raspberry Pi GPIO buttons as the Controls page shows them: the file's settings, and what is really there: the
+// chip, whether Core's GPIO input runs, and who holds each header line (read-only line info; nothing is requested).
+std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
+{
+    const bool fileOn = hwconf::sectionOn(doc, "gpio_buttons");
+    const bool coreOn = gpioInput_.enabled();
+    const std::string error = gpioInput_.lastError();
+    std::string state = "running";
+    std::string detail;
+    if (!fileOn && !coreOn) {
+        state = "off";
+        detail = "Switched off in the file.";
+    } else if (fileOn != coreOn) {
+        state = "restart";
+        detail = fileOn ? "Switched on in the file; Core starts the buttons when it restarts."
+                        : "Switched off in the file; Core stops the buttons when it restarts.";
+    } else if (!error.empty()) {
+        state = "error";
+        detail = error;
+    }
+
+    const std::string chipSetting = hwconf::effectiveValue(doc, "gpio_buttons", "chip").value_or("auto");
+    const std::string chipPath = chipSetting == "auto" ? hardware::headerGpioChipPath() : chipSetting;
+    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{} : hardware::readGpioChipInfo(chipPath, 28);
+    if (state == "running")
+        detail = "Core reads the buttons on " + (chip.ok ? chip.path + " (" + chip.label + ")" : chipSetting) + ".";
+
+    std::ostringstream out;
+    out << "{\"id\":\"gpio_buttons\",\"section\":\"gpio_buttons\",\"title\":\"Raspberry Pi GPIO buttons\""
+        << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, "gpio_buttons")
+        << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\""
+        << ",\"chip\":{\"ok\":" << (chip.ok ? "true" : "false") << ",\"path\":\"" << escapeJson(chip.path) << "\""
+        << ",\"label\":\"" << escapeJson(chip.label) << "\",\"lines\":" << chip.lines
+        << ",\"error\":\"" << escapeJson(chipPath.empty() ? std::string("No GPIO chip found.") : chip.error) << "\"}"
+        << ",\"pins\":[";
+    bool first = true;
+    for (const auto &line : chip.lineInfo) {
+        if (!line.used)
+            continue;
+        out << (first ? "" : ",") << "{\"pin\":" << line.offset << ",\"consumer\":\"" << escapeJson(line.consumer) << "\""
+            << ",\"core\":" << (line.consumer.rfind("apertar", 0) == 0 ? "true" : "false")
+            << ",\"output\":" << (line.output ? "true" : "false") << "}";
+        first = false;
+    }
+    out << "]}}";
+    return out.str();
+}
+
 // The hardware commands that only read: they run without the command lock.
 std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
 {
@@ -10406,7 +10455,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << ",\"issues\":" << controlsIssuesJson(issues)
              << ",\"text\":\"" << escapeJson(info.text) << "\""
              << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault())
-             << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text)) << "}";
+             << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text))
+             << ",\"peripherals\":[" << gpioPeripheralJson(hwconf::parse(info.text)) << "]}";
         return okReply(command.id, body.str());
     }
     if (command.name == "list_actions") {

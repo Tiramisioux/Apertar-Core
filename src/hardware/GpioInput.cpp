@@ -1,6 +1,7 @@
 #include "hardware/GpioInput.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ButtonActionList.hpp"
+#include "hardware/GpioChipInfo.hpp"
 
 #include <algorithm>
 #include <array>
@@ -138,34 +139,6 @@ std::optional<int> gpioFromDigitalKey(std::string key)
     if (gpio < 0 || gpio > 63)
         return std::nullopt;
     return gpio;
-}
-
-int gpioChipScore(const std::string &chipPath)
-{
-    const int fd = ::open(chipPath.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-        return -1;
-
-    gpiochip_info info{};
-    int score = 0;
-    if (::ioctl(fd, GPIO_GET_CHIPINFO_IOCTL, &info) == 0) {
-        const std::string name = normalizeToken(info.name);
-        const std::string label = normalizeToken(info.label);
-        const std::string combined = name + " " + label;
-        if (combined.find("rp1") != std::string::npos)
-            score += 100;
-        if (combined.find("pinctrl_bcm") != std::string::npos ||
-            combined.find("bcm2711") != std::string::npos ||
-            combined.find("bcm2835") != std::string::npos)
-            score += 90;
-        if (combined.find("raspberrypi_exp") != std::string::npos)
-            score -= 50;
-        if (info.lines >= 28)
-            score += 10;
-    }
-
-    ::close(fd);
-    return score;
 }
 
 std::optional<int> encoderIndexFromKeyPrefix(const std::string &key)
@@ -419,7 +392,7 @@ bool GpioInput::requestLines(const std::vector<int> &offsets, int *lineFd, std::
         std::error_code ec;
         if (!std::filesystem::exists(path, ec))
             continue;
-        const int score = gpioChipScore(path);
+        const int score = hardware::gpioChipScore(path);
         if (score >= 0)
             candidates.emplace_back(score, path);
     }
