@@ -56,6 +56,9 @@
 #include <jpeglib.h>
 #endif
 
+#include "playback/ClipProbe.hpp"
+#include "playback/PlaybackHold.hpp"
+
 namespace apertar {
 namespace {
 
@@ -5803,6 +5806,26 @@ std::vector<PresetFileEntry> discoverPresetFiles()
     return presets;
 }
 
+// T47: playback state shared by the routes, the media watcher and handleCommand. File scope, so the
+// header does not pull in the readers (a header change rebuilds every user of ApertarCoreApp.hpp).
+int64_t playbackNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+playback::PlaybackYield &playbackYield()
+{
+    static playback::PlaybackYield yield;
+    return yield;
+}
+
+playback::ClipFactsCache &clipFactsCache()
+{
+    static playback::ClipFactsCache cache(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    return cache;
+}
+
 struct MediaLibraryItem
 {
     std::string id;
@@ -5820,6 +5843,19 @@ struct MediaLibraryItem
     int64_t modifiedMs = 0;
     std::filesystem::file_time_type modifiedTime{};
     std::string downloadUrl;
+    // T47: what the clip's own files say (a cDNG folder with a readable first frame).
+    std::string format;             // "cdng", or empty
+    std::string formatLabel;
+    bool playable = false;
+    double fps = 0.0;
+    bool fpsFallback = false;
+    std::string shotDateText;
+    int64_t shotMs = 0;
+    uint64_t firstNumber = 0, lastNumber = 0, missingFrames = 0, emptyFrames = 0;
+    bool ramp = false;
+    bool hasAudio = false;
+    std::string token;
+    std::string timecodeStart;      // the recorded start timecode of the first frame (R1)
 };
 
 struct MediaSelection
@@ -6616,7 +6652,50 @@ void streamZipArchiveToClient(int clientFd,
     ::waitpid(child, &status, 0);
 }
 
-std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::path &mediaRoot, double fps)
+// GET /api/media/clip (T47): one clip's facts, in the touch UI's words (design §4.3).
+std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir, const playback::ClipFacts &f, const std::string &held)
+{
+    std::ostringstream out;
+    out << "{\"ok\":true,\"kind\":\"folder\",\"id\":\"" << escapeJson(id) << "\",\"name\":\"" << escapeJson(f.name) << "\""
+        << ",\"format\":\"cdng\",\"playable\":true,\"play_reason\":\"\""
+        << ",\"frame_count\":" << f.frames.count()
+        << ",\"first_number\":" << f.frames.first << ",\"last_number\":" << f.frames.last
+        << ",\"holes\":[";
+    for (size_t i = 0; i < f.holes.size(); ++i)
+        out << (i ? "," : "") << '[' << f.holes[i].first << ',' << f.holes[i].second << ']';
+    out << "],\"missing_frames\":" << f.frames.missing() << ",\"empty_frames\":" << f.frames.empty
+        << ",\"fps\":" << f.fps << ",\"fps_fallback\":" << (f.fpsFallback ? "true" : "false")
+        << ",\"ramp\":" << (f.ramp ? "{\"present\":true}" : "null")
+        << ",\"token\":\"" << f.token << "\""
+        << ",\"width\":" << f.first.width << ",\"height\":" << f.first.height << ",\"bits\":" << f.first.bits
+        << ",\"compression\":\"" << (f.first.compression == 7 ? "lossless" : "uncompressed") << "\""
+        << ",\"companded\":" << (f.companded ? "true" : "false")
+        << ",\"timecode_start\":\"" << f.timecodeStart << "\"";
+    std::error_code ec;
+    const bool hasAudio = std::filesystem::exists(dir / (f.name + ".wav"), ec);
+    char fpsBuf[32];
+    std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
+    out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
+        << ",\"fps_badge\":\"" << fpsBuf << " FPS\""
+        << ",\"info_line\":\"cDNG sequence \u2022 " << f.frames.count() << " frames\""
+        << ",\"meta\":{\"captured\":\"" << escapeJson(f.shotDateText) << "\",\"type\":\"cDNG sequence\""
+        << ",\"resolution\":\"" << f.first.width << " x " << f.first.height << "\""
+        << ",\"bit_depth\":\"" << f.first.bits << "-bit\""
+        << ",\"frame_rate\":\"" << fpsBuf << " fps\""
+        << ",\"duration\":\"" << f.durationText << "\""
+        << ",\"frames\":\"" << f.frames.count() << "\""
+        << ",\"clip_size\":\"" << escapeJson(f.sizeText_) << "\""
+        << ",\"path\":\"" << escapeJson(dir.string()) << "\"}"
+        << ",\"extra\":{\"sound\":\"" << (hasAudio ? "WAV" : "None") << "\""
+        << ",\"format\":\"" << escapeJson(f.formatText) << "\""
+        << ",\"dropped\":\"" << escapeJson(f.droppedText) << "\"}";
+    if (!held.empty())
+        out << ",\"held\":\"" << held << "\"";
+    out << '}';
+    return out.str();
+}
+
+std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::path &mediaRoot, double fps, bool held)
 {
     std::vector<MediaLibraryItem> items;
     std::error_code ec;
@@ -6681,13 +6760,54 @@ std::vector<MediaLibraryItem> discoverMediaLibraryItems(const std::filesystem::p
         item.type = item.category == "timelapse"
             ? "Timelapse"
             : (!containerType.empty() ? containerType : "cDNG Clip");
-        const MediaPathStats stats = mediaStatsForPath(entry.path());
-        addItemStats(&item, stats);
-        item.frameCount = stats.frameCount;
-        item.durationText = !containerType.empty()
-            ? "--"
-            : durationTextForFrameCount(stats.frameCount, fps);
-        item.fpsText = compactNumber(fps) + " FPS";
+        // A cDNG take answers from its own files (T47): its FPS, its span, its holes, its timecode. The
+        // cache is keyed on the folder's time, so an unchanged take costs one stat. In a hold nothing may
+        // read the card: the last cached answer, or the bare entry.
+        playback::ClipFacts facts;
+        bool haveFacts = false;
+        if (item.category == "clip" && containerType.empty()) {
+            haveFacts = held ? clipFactsCache().peek(entry.path(), facts) : ((facts = clipFactsCache().get(entry.path())).ok);
+            haveFacts = haveFacts && facts.ok;
+        }
+        if (haveFacts) {
+            item.sizeBytes = facts.bytes;
+            item.sizeText = facts.sizeText_;
+            item.fileCount = facts.frames.count();
+            item.frameCount = facts.frames.count();
+            item.durationText = facts.durationText;
+            item.fpsText = facts.fpsText;
+            std::error_code timeEc;
+            const auto folderTime = std::filesystem::last_write_time(entry.path(), timeEc);
+            if (!timeEc) {
+                item.modifiedTime = folderTime;
+                item.modifiedText = formatFileTimestampHuman(folderTime);
+                item.modifiedMs = fileTimeToUnixMilliseconds(folderTime);
+            }
+            item.format = "cdng";
+            item.formatLabel = "cDNG clip";
+            item.playable = true;
+            item.fps = facts.fps;
+            item.fpsFallback = facts.fpsFallback;
+            item.shotDateText = facts.shotDateText;
+            item.shotMs = facts.shotMs;
+            item.firstNumber = facts.frames.first;
+            item.lastNumber = facts.frames.last;
+            item.missingFrames = facts.frames.missing();
+            item.emptyFrames = facts.frames.empty;
+            item.ramp = facts.ramp;
+            item.token = facts.token;
+            item.timecodeStart = facts.timecodeStart;
+            std::error_code wavEc;
+            item.hasAudio = std::filesystem::exists(entry.path() / (folderName + ".wav"), wavEc);
+        } else if (!held) {
+            const MediaPathStats stats = mediaStatsForPath(entry.path());
+            addItemStats(&item, stats);
+            item.frameCount = stats.frameCount;
+            item.durationText = !containerType.empty()
+                ? "--"
+                : durationTextForFrameCount(stats.frameCount, fps);
+            item.fpsText = compactNumber(fps) + " FPS";
+        }
         item.downloadUrl = mediaDownloadUrl(item.kind, item.id);
         items.push_back(std::move(item));
         ec.clear();
@@ -7521,6 +7641,39 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
+    if (request.method == "GET" && request.path == "/api/media/clip") {
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        const auto requestedKind = queryParameterValue(request.query, "kind");
+        const auto requestedId = queryParameterValue(request.query, "id");
+        const std::filesystem::path mediaRoot(options_.mediaRoot);
+        const auto itemPath = requestedId ? resolveMediaLibraryPath(mediaRoot, *requestedId) : std::nullopt;
+        if (!requestedKind || *requestedKind != "folder" || !itemPath || !std::filesystem::is_directory(*itemPath)) {
+            response.status = 404;
+            response.body = errorReply(-1, "Clip not found.");
+            return response;
+        }
+        // The hold first, before anything reads the card: the last cached facts, or 409.
+        const std::string hold = playbackHoldReason();
+        playback::ClipFacts facts;
+        if (!hold.empty()) {
+            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok) {
+                response.status = 409;
+                response.body = errorReply(-1, "Playback held: " + hold + ".");
+                return response;
+            }
+        } else {
+            facts = clipFactsCache().get(*itemPath);
+            if (!facts.ok) {
+                response.status = 404;
+                response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
+                return response;
+            }
+        }
+        response.body = clipInfoJson(*requestedId, *itemPath, facts, hold);
+        return response;
+    }
+
     if (request.method == "GET" && request.path == "/api/config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
@@ -8030,14 +8183,16 @@ std::string ApertarCoreApp::buildMediaLibraryJson() const
 {
     const CaptureSettings settings = camera_.settings();
     const bool mediaMounted = isMountedPath(options_.mediaRoot);
+    const std::string hold = playbackHoldReason();      // T47: in a hold the list answers from the cache
     const std::vector<MediaLibraryItem> items = mediaMounted
-        ? discoverMediaLibraryItems(std::filesystem::path(options_.mediaRoot), settings.fps)
+        ? discoverMediaLibraryItems(std::filesystem::path(options_.mediaRoot), settings.fps, !hold.empty())
         : std::vector<MediaLibraryItem>{};
 
     std::ostringstream out;
     out << "{\"ok\":true"
         << ",\"mounted\":" << (mediaMounted ? "true" : "false")
         << ",\"media_root\":\"" << escapeJson(options_.mediaRoot) << "\""
+        << (hold.empty() ? std::string() : ",\"held\":\"" + hold + "\"")
         << ",\"items\":[";
     for (size_t i = 0; i < items.size(); ++i) {
         const auto &item = items[i];
@@ -8058,6 +8213,14 @@ std::string ApertarCoreApp::buildMediaLibraryJson() const
             << ",\"modified_text\":\"" << escapeJson(item.modifiedText) << "\""
             << ",\"modified_ms\":" << item.modifiedMs
             << ",\"download_url\":\"" << escapeJson(item.downloadUrl) << "\""
+            << ",\"format\":\"" << item.format << "\",\"format_label\":\"" << escapeJson(item.formatLabel) << "\""
+            << ",\"playable\":" << (item.playable ? "true" : "false") << ",\"play_reason\":\"\""
+            << ",\"fps\":" << item.fps << ",\"fps_fallback\":" << (item.fpsFallback ? "true" : "false")
+            << ",\"shot_date_text\":\"" << escapeJson(item.shotDateText) << "\",\"shot_ms\":" << item.shotMs
+            << ",\"first_number\":" << item.firstNumber << ",\"last_number\":" << item.lastNumber
+            << ",\"missing_frames\":" << item.missingFrames << ",\"empty_frames\":" << item.emptyFrames
+            << ",\"ramp\":" << (item.ramp ? "true" : "false") << ",\"has_audio\":" << (item.hasAudio ? "true" : "false")
+            << ",\"token\":\"" << item.token << "\",\"timecode_start\":\"" << item.timecodeStart << "\""
             << '}';
     }
     out << "]}";
@@ -8126,6 +8289,18 @@ std::string ApertarCoreApp::buildWebStateJson() const
         mediaSpeedLastWriteSpeedMBps = mediaSpeedLastWriteSpeedMBps_;
         mediaSpeedError = mediaSpeedError_;
     }
+
+    // T47: the hold rule over the values this builder already read (a second read of the camera would wait on its mutex).
+    playback::HoldSignals holdSignals;
+    holdSignals.recording = camera_.isRecording() || soundRecording;
+    holdSignals.soundRecording = soundRecording;
+    holdSignals.timelapse = timelapseActive;
+    holdSignals.writesPending = mediaWrite.pending;
+    holdSignals.speedTest = mediaSpeedRunning;
+    holdSignals.standby = cameraState == CameraState::Standby;
+    holdSignals.mediaUsable = mediaSnap.mounted() || mediaGateBypassed();
+    holdSignals.yieldReason = playbackYield().reasonIfActive(playbackNowMs());
+    const std::string playbackHoldFromState = playback::holdName(playback::playbackHoldFor(holdSignals));
 
     std::optional<double> cpuUsagePercent;
     if (const auto cpuTicks = readCpuTicks()) {
@@ -8296,6 +8471,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"media_mounted\":" << (mediaMounted ? "true" : "false")
         << ",\"media_state\":\"" << mediaSnap.stateName() << "\""
         << ",\"media_alive\":" << (mediaSnap.mounted() ? "true" : "false")
+        << ",\"playback_hold\":\"" << playbackHoldFromState << "\""
         << ",\"media_device\":\"" << escapeJson(mediaSnap.device) << "\""
         << ",\"media_fstype\":\"" << escapeJson(mediaSnap.fstype) << "\""
         << ",\"media_class\":\"" << mediaClassName(mediaProf.mediaClass) << "\""
@@ -9616,6 +9792,7 @@ void ApertarCoreApp::runMediaWatcher()
             const bool lost = havePrevious && previous.mounted() &&
                 (current.state == MediaSnapshot::State::Removed || current.state == MediaSnapshot::State::None);
             if (lost) {
+                playbackYield().yieldFor(playback::Hold::Media, playbackNowMs());   // T47: playback stops before anything else
                 if (!blockDeviceNodeExists(previous.device))
                     clearEjectIntent(previous.device);   // a real removal, like udev "remove"
                 const std::string why = current.state == MediaSnapshot::State::Removed
@@ -9648,6 +9825,17 @@ void ApertarCoreApp::runMediaWatcher()
         }
         previous = current;
         havePrevious = true;
+        // T47: while a hold lasts, keep the yield window open 1.5 s past each cycle, so a stream that checks
+        // only the window also stops for a take that began while its client stalled. Without the window's
+        // own signal here, it would renew itself for ever.
+        if (const std::string hold = playbackHoldReason(false); !hold.empty()) {
+            playback::Hold kept = playback::Hold::Recording;
+            if (hold == "writing") kept = playback::Hold::Writing;
+            else if (hold == "media_test") kept = playback::Hold::MediaTest;
+            else if (hold == "standby") kept = playback::Hold::Standby;
+            else if (hold == "media") kept = playback::Hold::Media;
+            playbackYield().yieldFor(kept, playbackNowMs(), 1500);
+        }
         std::unique_lock<std::mutex> lock(mediaStateMutex_);
         mediaWatcherCv_.wait_for(lock, std::chrono::milliseconds(camera_.isRecording() ? 250 : 1000),
                                  [this] { return !mediaWatcherRunning_.load(std::memory_order_acquire); });
@@ -9679,11 +9867,38 @@ MediaSnapshot ApertarCoreApp::mediaSnapshot() const
 // The record gate: mounted, alive and not full. One gate in handleCommand covers
 // the socket, the WebUI and the hardware buttons. APERTAR_MEDIA_REQUIRE_MOUNT=0
 // disables it for a development machine whose media root is a plain directory.
-std::string ApertarCoreApp::mediaGateError() const
+// True when the record gate is off (a development machine with a plain directory as media root).
+bool ApertarCoreApp::mediaGateBypassed() const
 {
     if (options_.simulateCamera)
-        return {};
-    if (const char *env = std::getenv("APERTAR_MEDIA_REQUIRE_MOUNT"); env && env[0] == '0')
+        return true;
+    const char *env = std::getenv("APERTAR_MEDIA_REQUIRE_MOUNT");
+    return env && env[0] == '0';
+}
+
+// T47: may playback read the card now? One rule for every playback route (design §2.7). The yield
+// window is what a command that starts a take opens before it touches the camera.
+std::string ApertarCoreApp::playbackHoldReason(bool withYield) const
+{
+    playback::HoldSignals s;
+    s.recording = camera_.isRecording();
+    s.soundRecording = soundRecordingActive();
+    s.timelapse = camera_.timelapseActive();
+    s.writesPending = camera_.mediaWritesPending();
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        s.speedTest = mediaSpeedTestRunning_;
+    }
+    s.standby = camera_.state() == CameraState::Standby;
+    s.mediaUsable = mediaSnapshot().mounted() || mediaGateBypassed();
+    if (withYield)
+        s.yieldReason = playbackYield().reasonIfActive(playbackNowMs());
+    return playback::holdName(playback::playbackHoldFor(s));
+}
+
+std::string ApertarCoreApp::mediaGateError() const
+{
+    if (mediaGateBypassed())
         return {};
     const MediaSnapshot snapshot = mediaSnapshot();
     switch (snapshot.state) {
@@ -9752,6 +9967,18 @@ void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
     std::lock_guard<std::mutex> commandLock(commandMutex_);
+    // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
+    // first, so a playback decode in flight stops before the take's first frame is written (design §2.7).
+    {
+        const std::string &name = command.name;
+        playback::Hold reason = playback::Hold::None;
+        if (name == "record_start" || name == "capture_photo" || name == "timelapse_start") reason = playback::Hold::Recording;
+        else if (name == "run_media_speed_test") reason = playback::Hold::MediaTest;
+        else if (name == "enter_standby") reason = playback::Hold::Standby;
+        else if (name == "eject_media" || name == "format_media") reason = playback::Hold::Media;
+        if (reason != playback::Hold::None)
+            playbackYield().yieldFor(reason, playbackNowMs());
+    }
     if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
     if ((command.name == "capture_photo" || command.name == "record_start" ||
          (command.name == "timelapse_start" && !camera_.timelapseActive())) && camera_.mediaWritesPending())

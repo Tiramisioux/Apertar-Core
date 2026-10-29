@@ -103,6 +103,8 @@ private:
     void stopMediaWatcher();
     MediaSnapshot mediaSnapshot() const;
     std::string mediaGateError() const;
+    bool mediaGateBypassed() const;
+    std::string playbackHoldReason(bool withYield = true) const;   // "" or recording, writing, media_test, standby, media
     void applyMediaTuning(const MediaProfile &profile, bool apply);
     MediaProfile mediaProfile() const;
     void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
