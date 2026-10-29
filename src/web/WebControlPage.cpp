@@ -2247,6 +2247,447 @@ std::string_view webControlPageHtml()
       }
     }
 
+    /* Playback (T50): the Clip Viewer. */
+    .pb-viewer {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 26px 28px 20px;
+      position: relative;
+    }
+
+    .pbv-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .pbv-main {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .pbv-stage {
+      position: relative;
+      flex: 1 1 0;
+      min-height: 120px;
+      border-radius: var(--radius-lg);
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .pbv-stage canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .pbv-badge {
+      position: absolute;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      pointer-events: none;
+    }
+
+    .pbv-badge.tr { top: 12px; right: 12px; }
+    .pbv-badge.tl { top: 12px; left: 12px; color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+    .pbv-badge.bl { bottom: 12px; left: 12px; }
+    .pbv-badge.br { bottom: 12px; right: 12px; }
+    .pbv-badge.hidden { display: none; }
+
+    .pbv-hole {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 13px;
+      font-weight: 600;
+      color: #6b6b73;
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+
+    .pbv-hole.hidden {
+      display: none;
+    }
+
+    .pbv-hold {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.72);
+      padding: 16px;
+    }
+
+    .pbv-hold.hidden {
+      display: none;
+    }
+
+    .pbv-hold-card {
+      max-width: 340px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 22px 26px;
+      border-radius: 26px;
+      border: 1px solid #3f3f46;
+      background: rgba(9, 9, 11, 0.9);
+      text-align: center;
+    }
+
+    .pbv-hold-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .pbv-hold-body {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .pbv-hold-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .pbv-hold-buttons .hidden {
+      display: none;
+    }
+
+    .pbv-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pbv-title-text {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .pbv-name {
+      font-size: 22px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pbv-info {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .pbv-icon-button,
+    .pbv-info-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 44px;
+      min-width: 44px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pbv-icon-button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .pbv-scrub {
+      padding: 10px 0;
+      touch-action: none;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .pbv-rail {
+      position: relative;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--surface);
+    }
+
+    .pbv-fill {
+      height: 100%;
+      width: 0;
+      border-radius: 999px;
+      background: #d7d9de;
+    }
+
+    .pbv-handle {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 18px;
+      height: 18px;
+      margin: -9px 0 0 -9px;
+      border-radius: 999px;
+      background: #f4f5f7;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    }
+
+    .pbv-time {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .pbv-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .pbv-remove {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+    }
+
+    .pbv-transport {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pbv-circle {
+      width: 52px;
+      height: 52px;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .pbv-circle.big {
+      width: 64px;
+      height: 64px;
+      background: #ffffff;
+      border-color: #ffffff;
+    }
+
+    .pbv-circle.big img {
+      filter: invert(1);
+    }
+
+    .pbv-circle.small {
+      width: 44px;
+      height: 44px;
+    }
+
+    .pbv-circle:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    .pbv-hist {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 3px;
+    }
+
+    .pbv-hist-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--muted-2);
+    }
+
+    .pbv-hist canvas {
+      width: 192px;
+      height: 48px;
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    .pbv-meta {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--card-border);
+      background: var(--surface);
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    .pbv-meta-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .pbv-meta-close {
+      display: none;
+      margin-left: auto;
+      min-height: 36px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pbv-meta-name {
+      font-size: 15px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .pbv-meta-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .pbv-meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .pbv-meta-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: var(--muted-2);
+    }
+
+    .pbv-meta-value {
+      font-size: 14px;
+      overflow-wrap: anywhere;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (min-width: 1120px) {
+      .pbv-body {
+        grid-template-columns: minmax(0, 1fr) clamp(340px, 27%, 420px);
+      }
+
+      .pbv-meta {
+        display: flex;
+      }
+
+      .pbv-info-button {
+        display: none;
+      }
+    }
+
+    @media (max-width: 1119px) {
+      .pbv-meta.open {
+        display: flex;
+        position: absolute;
+        inset: 16px;
+        z-index: 8;
+        background: rgba(9, 9, 11, 0.98);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+      }
+
+      .pbv-meta.open .pbv-meta-close {
+        display: block;
+      }
+    }
+
+    @media (max-width: 719px) {
+      .pb-viewer {
+        padding: 16px 14px 14px;
+        gap: 10px;
+      }
+
+      .pbv-stage {
+        flex: 0 0 auto;
+        aspect-ratio: 16 / 9;
+        max-height: calc((100vw - 28px) * 9 / 16);
+        min-height: 0;
+      }
+
+      .pbv-name {
+        font-size: 18px;
+      }
+
+      .pbv-controls {
+        flex-wrap: wrap;
+        justify-content: space-between;
+        row-gap: 10px;
+      }
+
+      .pbv-transport {
+        order: -1;
+        flex: 1 1 100%;
+        justify-content: center;
+      }
+
+      .pbv-hist canvas {
+        width: 92px;
+        height: 48px;
+      }
+    }
+
+    @media (max-height: 499px) and (orientation: landscape) {
+      .pb-viewer > .pb-header,
+      .pbv-title-text {
+        display: none;
+      }
+
+      .pb-viewer {
+        padding: 10px 14px;
+      }
+
+      .pbv-stage {
+        aspect-ratio: auto;
+        max-height: none;
+        flex: 1 1 0;
+      }
+    }
+
     .settings-card {
       border-radius: 22px;
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -4943,7 +5384,87 @@ std::string_view webControlPageHtml()
           <div class="pb-grid" id="pbGrid"></div>
         </div>
       </div>
-      <div class="pb-viewer hidden" id="pbViewerPage"></div>
+      <div class="pb-viewer hidden" id="pbViewerPage">
+        <div class="pb-header">
+          <div>
+            <div class="pb-eyebrow">PLAYBACK</div>
+            <h1 class="pb-h1">Clip Viewer</h1>
+          </div>
+          <div class="pb-actions">
+            <button class="pb-top-button" id="pbvBack" type="button">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"></path><path d="M11 6l-6 6 6 6"></path></svg>
+              <span>Back</span>
+            </button>
+          </div>
+        </div>
+        <div class="pbv-body">
+          <div class="pbv-main">
+            <div class="pbv-stage" id="pbvStage">
+              <canvas id="pbvCanvas"></canvas>
+              <span class="pbv-badge tr" id="pbvFps">-- FPS</span>
+              <span class="pbv-badge tl hidden" id="pbvDrop">DROP</span>
+              <span class="pbv-badge bl" id="pbvState">PAUSED</span>
+              <span class="pbv-badge br" id="pbvFrame">FRAME 0 / 0</span>
+              <div class="pbv-hole hidden" id="pbvHole"></div>
+              <div class="pbv-hold hidden" id="pbvHold">
+                <div class="pbv-hold-card">
+                  <div class="pbv-hold-title" id="pbvHoldTitle"></div>
+                  <div class="pbv-hold-body" id="pbvHoldBody"></div>
+                  <div class="pbv-hold-buttons">
+                    <button class="secondary-button hidden" id="pbvLiveButton" type="button">Live view</button>
+                    <button class="primary-button hidden" id="pbvWakeButton" type="button">Wake</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="pbv-title">
+              <div class="pbv-title-text">
+                <div class="pbv-name" id="pbvName"></div>
+                <div class="pbv-info" id="pbvInfo"></div>
+              </div>
+              <button class="pbv-icon-button" id="pbvDownload" type="button" aria-label="Download this clip" title="Download">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"></path><path d="M7 11l5 5 5-5"></path><path d="M5 20h14"></path></svg>
+              </button>
+              <button class="pbv-info-button" id="pbvInfoButton" type="button">
+                <img class="icon-image" src="/icons/info.png" alt="" width="18" height="18"><span>Info</span>
+              </button>
+            </div>
+            <div class="pbv-scrub" id="pbvScrub" role="slider" aria-label="Position in the clip" tabindex="0">
+              <div class="pbv-rail"><div class="pbv-fill" id="pbvFill"></div><div class="pbv-handle" id="pbvHandle"></div></div>
+            </div>
+            <div class="pbv-time"><span id="pbvTime">00:00 / 00:00</span><span id="pbvTc"></span></div>
+            <div class="pbv-controls">
+              <button class="danger-button pbv-remove" id="pbvRemove" type="button">
+                <img class="icon-image" src="/icons/delete.png" alt="" width="18" height="18"><span>Remove</span>
+              </button>
+              <div class="pbv-transport">
+                <button class="pbv-circle small" id="pbvStepBack" type="button" aria-label="Previous frame" title="Previous frame (left arrow)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+                </button>
+                <button class="pbv-circle" id="pbvPrev" type="button" aria-label="Previous clip"><img class="icon-image" src="/icons/previous.png" alt="" width="24" height="24"></button>
+                <button class="pbv-circle big" id="pbvPlay" type="button" aria-label="Play"><img class="icon-image" id="pbvPlayIcon" src="/icons/play.png" alt="" width="28" height="28"></button>
+                <button class="pbv-circle" id="pbvNext" type="button" aria-label="Next clip"><img class="icon-image" src="/icons/next.png" alt="" width="24" height="24"></button>
+                <button class="pbv-circle small" id="pbvStepFwd" type="button" aria-label="Next frame" title="Next frame (right arrow)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+                </button>
+              </div>
+              <div class="pbv-hist">
+                <span class="pbv-hist-label">HISTOGRAM</span>
+                <canvas id="pbvHist" width="192" height="48"></canvas>
+              </div>
+            </div>
+          </div>
+          <aside class="pbv-meta" id="pbvMeta" aria-label="Clip metadata">
+            <div class="pbv-meta-head">
+              <img class="icon-image" src="/icons/info.png" alt="" width="18" height="18">
+              <span>Clip Metadata</span>
+              <button class="pbv-meta-close" id="pbvMetaClose" type="button">Close</button>
+            </div>
+            <div class="pbv-meta-name" id="pbvMetaName"></div>
+            <div class="pbv-meta-grid" id="pbvMetaGrid"></div>
+          </aside>
+        </div>
+      </div>
       <div class="pb-scrim hidden" id="pbRemoveScrim">
         <div class="pb-dialog" role="alertdialog" aria-labelledby="pbRemoveTitle">
           <h2 id="pbRemoveTitle">Remove Selected Clips?</h2>
@@ -5187,6 +5708,7 @@ std::string_view webControlPageHtml()
         payload: null, items: [], filter: "clip", sort: "newest", selecting: false, selection: new Set(),
         lastOpenedId: "", thumbs: new Map(), queue: [], inFlight: 0, observer: null, fetching: false, queued: false,
         hold: "", snapshotHold: null, error: "", removing: false, pushed: false,
+        page: "browser", viewer: null, viewerPushed: false, ignorePop: false, removeTargets: [],
       },
       photoCaptureInProgress: false,
       photoCountdownSecondsRemaining: 0,
@@ -8268,10 +8790,15 @@ std::string_view webControlPageHtml()
         pbRender();
         void fetchMediaLibrary(false);
       } else if (!state.mediaBrowserOpen && wasOpen) {
+        const steps = 1 + (state.pb.viewerPushed ? 1 : 0);
+        if (state.pb.viewer)
+          pbvClose(true);
         document.getElementById("pbRemoveScrim").classList.add("hidden");
         pbResumeLive();
-        if (state.pb.pushed && !fromHistory)
-          history.back();
+        if (state.pb.pushed && !fromHistory) {
+          state.pb.ignorePop = true;
+          history.go(-steps);
+        }
         state.pb.pushed = false;
       }
     }
@@ -9813,14 +10340,7 @@ std::string_view webControlPageHtml()
     }
 
     function pbOpenClip(item) {
-      state.pb.lastOpenedId = mediaSelectionKey(item);
-      // The Clip Viewer is T50; until then a click shows the clip's first picture at full size in a new tab.
-      const url = pbThumbUrl(item);
-      if (url)
-        window.open(url.replace("&w=320", "&w=1920"), "_blank", "noopener");
-      else
-        showToast("The viewer for this clip arrives later.", false);
-      pbRender();
+      void pbvOpen(item);
     }
 
     function pbBuildCard(item) {
@@ -10032,27 +10552,35 @@ std::string_view webControlPageHtml()
       const hold = String(snapshot.playback_hold || "");
       if (state.pb.snapshotHold !== hold) {
         state.pb.snapshotHold = hold;
-        if (state.mediaBrowserOpen)
+        if (state.mediaBrowserOpen) {
           void fetchMediaLibrary(true);
+          if (state.pb.viewer)
+            pbvApplyHold(hold);
+        }
       }
     }
 
-    function pbOpenRemoveDialog() {
-      const items = pbSelectedItems();
+    function pbOpenRemoveDialog(targets, single) {
+      const items = Array.isArray(targets) ? targets : pbSelectedItems();
       if (items.length === 0)
         return;
-      setText("pbRemoveCount", items.length + " clip(s) selected");
+      state.pb.removeTargets = items;
+      setText("pbRemoveTitle", single ? "Remove Clip?" : "Remove Selected Clips?");
+      setText("pbRemoveCount", single ? "1 clip selected" : items.length + " clip(s) selected");
       setText("pbRemoveName", items[0].name || items[0].id);
       setText("pbRemoveMore", (items.length > 1 ? "+" + (items.length - 1) + " more. " : "") + "This action cannot be undone.");
+      setText("pbRemoveConfirm", single ? "Remove Clip" : "Remove Clips");
       document.getElementById("pbRemoveScrim").classList.remove("hidden");
       document.getElementById("pbRemoveCancel").focus();
     }
 
     async function pbRemoveSelected() {
-      const items = pbSelectedItems();
+      const items = state.pb.removeTargets || [];
       document.getElementById("pbRemoveScrim").classList.add("hidden");
       if (items.length === 0)
         return;
+      const fromViewer = state.pb.page === "viewer";
+      const index = fromViewer ? pbvCurrentIndex() : -1;
       state.pb.removing = true;
       pbRender();
       try {
@@ -10070,6 +10598,14 @@ std::string_view webControlPageHtml()
         await fetchMediaLibrary(true);
         await fetchState(true, { forceImmediate: true });
       }
+      if (fromViewer) {
+        // The clip now at the same place opens, or the browser when none is left.
+        const next = state.pb.items[Math.min(index, state.pb.items.length - 1)];
+        if (next && index >= 0 && !items.some((gone) => mediaSelectionKey(gone) === mediaSelectionKey(next)))
+          await pbvOpen(next, true);
+        else
+          pbvClose();
+      }
     }
 
     function pbDownloadSelected() {
@@ -10086,7 +10622,9 @@ std::string_view webControlPageHtml()
     }
 
     function pbBack() {
-      if (state.pb.selecting)
+      if (state.pb.page === "viewer")
+        pbvClose();
+      else if (state.pb.selecting)
         pbSetSelecting(false);
       else
         setMediaBrowserOpen(false);
@@ -10095,8 +10633,11 @@ std::string_view webControlPageHtml()
     // Escape: the dialog first, then the selection, then the page.
     function pbEscape() {
       const scrim = document.getElementById("pbRemoveScrim");
+      const meta = document.getElementById("pbvMeta");
       if (!scrim.classList.contains("hidden"))
         scrim.classList.add("hidden");
+      else if (state.pb.page === "viewer" && meta.classList.contains("open"))
+        meta.classList.remove("open");
       else if (!document.getElementById("pbShowMenu").classList.contains("hidden"))
         pbSetShowMenu(false);
       else
@@ -10132,6 +10673,751 @@ std::string_view webControlPageHtml()
       state.previewPausedForPlayback = false;
       if (state.previewStreamStarted)
         loadPreviewStream();
+    }
+
+    // ---- Playback: the Clip Viewer (T50) --------------------------------------------------------
+    // The touch UI's Clip Viewer in the WebUI. Core draws every picture (/api/media/frame); the page keeps the
+    // clock. The clock counts frame NUMBERS (design §2.6): sound and picture stay together on a take with drops,
+    // and a number that was never written (or a 0-byte frame) is drawn black (R2), not held. The rules are the
+    // sketch's playclock.js (node-tested, 16 checks). Sound is T51.
+    const pbvHoldText = {
+      recording: ["Recording", "Recording to media. Press Play when the take ends."],
+      writing: ["Writing to media", "Finishing the last take. Press Play when it is done."],
+      media_test: ["Media test", "A media speed test is running. Press Play when it ends."],
+      standby: ["Standby", "Wake the camera to play clips."],
+      media: ["Media not available", "Media was removed. Insert or mount media to play clips."],
+    };
+    const pbvWidths = [320, 480, 640, 960, 1280, 1920];
+
+    function pbvMergeHoles(holes) {
+      const out = [];
+      for (const [start, length] of holes.slice().sort((a, b) => a[0] - b[0])) {
+        const last = out[out.length - 1];
+        if (last && start <= last[0] + last[1])
+          last[1] = Math.max(last[1], start + length - last[0]);
+        else
+          out.push([start, length]);
+      }
+      return out;
+    }
+
+    function pbvTimeline(clip) {
+      const ramp = clip.ramp ? clip.ramp : null;
+      return {
+        first: Number(clip.first_number) || 0,
+        last: Number(clip.last_number) || 0,
+        count: Number(clip.frame_count) || 0,
+        holes: pbvMergeHoles(clip.holes || []),
+        fps: Number(clip.fps) > 0 ? Number(clip.fps) : 24,
+        ramp,
+      };
+    }
+
+    function pbvDuration(tl) {
+      return (tl.last - tl.first + 1) / tl.fps;      // the span, also the WAV's length
+    }
+
+    function pbvNumberAtTime(tl, t) {
+      return !(t > 0) ? tl.first : Math.min(tl.last, tl.first + Math.floor(t * tl.fps + 1e-9));
+    }
+
+    function pbvInHole(tl, n) {
+      for (const [start, length] of tl.holes) {
+        if (n < start)
+          return false;
+        if (n < start + length)
+          return true;
+      }
+      return false;
+    }
+
+    // Ask ahead by the measured round trip, never more than two frame periods.
+    function pbvLookAhead(tl, rttMs) {
+      return Math.min(Math.max(0, rttMs) / 1000, 2 / tl.fps);
+    }
+
+    // After a lane's answer: ms until it may ask again. 503 or a failed fetch: one frame period, 500 after three.
+    function pbvLaneWait(lane, outcome, tl) {
+      if (outcome === "ok") { lane.errors = 0; return 0; }
+      lane.errors = (lane.errors || 0) + 1;
+      return lane.errors >= 3 ? 500 : 1000 / tl.fps;
+    }
+
+    function pbvClock(seconds) {
+      const total = Math.max(0, Math.round(seconds));
+      const pad = (value) => String(value).padStart(2, "0");
+      return total >= 3600 ? pad(Math.floor(total / 3600)) + ":" + pad(Math.floor(total / 60) % 60) + ":" + pad(total % 60)
+        : pad(Math.floor(total / 60)) + ":" + pad(total % 60);
+    }
+
+    // The recorded timecode of a frame: the clip's start (tag 51043) plus the frames since the first.
+    function pbvTimecodeAt(clip, tl, number) {
+      const match = /^(\d\d):(\d\d):(\d\d):(\d\d)$/.exec(String(clip.timecode_start || ""));
+      if (!match)
+        return "";
+      const nominal = Math.max(1, Math.round(tl.fps));
+      let frames = ((Number(match[1]) * 60 + Number(match[2])) * 60 + Number(match[3])) * nominal + Number(match[4]) + (number - tl.first);
+      const pad = (value) => String(value).padStart(2, "0");
+      const f = frames % nominal;
+      frames = Math.floor(frames / nominal);
+      return pad(Math.floor(frames / 3600) % 24) + ":" + pad(Math.floor(frames / 60) % 60) + ":" + pad(frames % 60) + ":" + pad(f);
+    }
+
+    function pbvEls() {
+      return {
+        stage: document.getElementById("pbvStage"), canvas: document.getElementById("pbvCanvas"),
+        hist: document.getElementById("pbvHist"),
+      };
+    }
+
+    function pbvNewState(item) {
+      return {
+        item, clip: null, tl: null, t: 0, number: 0, playing: false, clockBase: 0, clockStart: 0, raf: 0,
+        lanes: [{ busy: false, until: 0, errors: 0 }, { busy: false, until: 0, errors: 0 }], ready: [], lastRequested: -1,
+        rtt: 60, drawn: [], shownIndex: 0, shownNumber: -1, shownKind: "none", bitmap: null, scrubbing: false, wasPlaying: false,
+        scrubBusy: false, scrubNext: -1, seq: 0, pausedTimer: 0, uiAt: 0, hold: "", awakeTimer: 0, keyTimer: 0,
+      };
+    }
+
+    function pbvResizeCanvas() {
+      const { stage, canvas } = pbvEls();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(2, Math.round(stage.clientWidth * ratio));
+      const height = Math.max(2, Math.round(stage.clientHeight * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        return true;
+      }
+      return false;
+    }
+
+    // A frame fitted inside the stage on black (the touch UI letterboxes), or plain black for a hole (R2).
+    function pbvDraw(bitmap) {
+      const { canvas } = pbvEls();
+      pbvResizeCanvas();
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!bitmap)
+        return;
+      const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height);
+      const w = bitmap.width * scale, h = bitmap.height * scale;
+      ctx.drawImage(bitmap, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    }
+
+    function pbvDrawHistogram(values) {
+      const canvas = document.getElementById("pbvHist");
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!values || values.length === 0)
+        return;
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, "rgba(255,255,255,0.96)");
+      gradient.addColorStop(1, "rgba(255,255,255,0.42)");
+      ctx.fillStyle = gradient;
+      const bar = canvas.width / values.length;
+      values.forEach((value, i) => {
+        const h = Math.max(1, (Math.min(1000, value) / 1000) * (canvas.height - 4));
+        ctx.fillRect(i * bar + 1, canvas.height - 2 - h, Math.max(1, bar - 2), h);
+      });
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillRect(0, canvas.height - 2, canvas.width, 1);
+    }
+
+    function pbvPausedWidth() {
+      const { stage } = pbvEls();
+      const needed = stage.clientWidth * (window.devicePixelRatio || 1);
+      return pbvWidths.find((w) => w >= Math.max(640, needed)) || 1920;
+    }
+
+    function pbvDropCount(clip) {
+      return Number(clip.missing_frames || 0) + Number(clip.empty_frames || 0);
+    }
+
+    function pbvUpdateUi(force) {
+      const v = state.pb.viewer;
+      if (!v || !v.tl)
+        return;
+      const now = performance.now();
+      if (!force && now - v.uiAt < 90)
+        return;
+      v.uiAt = now;
+      const tl = v.tl;
+      const dur = pbvDuration(tl);
+      const frac = dur > 0 ? Math.min(1, Math.max(0, v.t / dur)) : 0;
+      document.getElementById("pbvFill").style.width = (frac * 100) + "%";
+      document.getElementById("pbvHandle").style.left = (frac * 100) + "%";
+      setText("pbvTime", pbvClock(v.t) + " / " + pbvClock(dur));
+      const tc = pbvTimecodeAt(v.clip, tl, v.number);
+      setText("pbvTc", (tc ? "TC " + tc + "  " : "") + "No. " + v.number);
+      setText("pbvFrame", "FRAME " + (v.shownIndex + 1) + " / " + tl.count);
+      let label = v.playing ? "PLAYING" : "PAUSED";
+      if (v.playing) {
+        // O4: an honest rate while the player cannot keep up (under 95 % of the clip's rate).
+        const recent = v.drawn.filter((at) => now - at < 1000).length;
+        if (recent > 0 && recent < tl.fps * 0.95 && now - v.clockStart > 1500)
+          label = "PLAYING · " + recent + " FPS";
+      }
+      setText("pbvState", label);
+      const play = document.getElementById("pbvPlayIcon");
+      play.src = v.playing ? "/icons/pause.png" : "/icons/play.png";
+      document.getElementById("pbvPlay").setAttribute("aria-label", v.playing ? "Pause" : "Play");
+    }
+
+    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone, stale.
+    async function pbvFetchFrame(number, width) {
+      const v = state.pb.viewer;
+      const url = "/api/media/frame?kind=folder&id=" + encodeURIComponent(v.item.id) + "&n=" + number + "&w=" + width
+        + "&v=" + encodeURIComponent(v.clip.token);
+      const started = performance.now();
+      let response;
+      try {
+        response = await fetch(url);
+      } catch (error) {
+        return { outcome: "busy" };
+      }
+      if (response.status === 409)
+        return { outcome: "hold" };
+      if (response.status === 503)
+        return { outcome: "busy" };
+      if (response.status === 404) {
+        const body = await response.json().catch(() => ({}));
+        return { outcome: body.gone ? "gone" : "stale" };
+      }
+      if (!response.ok)
+        return { outcome: "busy" };
+      try {
+        const bitmap = await createImageBitmap(await response.blob());
+        return {
+          outcome: "ok", bitmap, number: Number(response.headers.get("X-Frame-Number")),
+          index: Number(response.headers.get("X-Frame-Index")), ms: performance.now() - started,
+          hist: String(response.headers.get("X-Histogram") || "").split(",").map(Number).filter(Number.isFinite),
+        };
+      } catch (error) {
+        return { outcome: "busy" };
+      }
+    }
+
+    function pbvShowFrame(frame) {
+      const v = state.pb.viewer;
+      if (v.bitmap && v.bitmap !== frame.bitmap && v.bitmap.close)
+        v.bitmap.close();
+      v.bitmap = frame.bitmap;
+      v.shownIndex = frame.index;
+      v.shownNumber = frame.number;
+      v.shownKind = "picture";
+      v.drawn.push(performance.now());
+      if (v.drawn.length > 120)
+        v.drawn.shift();
+      pbvDraw(frame.bitmap);
+      pbvDrawHistogram(frame.hist);
+      document.getElementById("pbvHole").classList.add("hidden");
+    }
+
+    function pbvShowHole(number) {
+      const v = state.pb.viewer;
+      v.shownKind = "hole";
+      pbvDraw(null);
+      const label = document.getElementById("pbvHole");
+      label.textContent = "Frame " + number + " dropped";
+      label.classList.toggle("hidden", v.playing);       // the words only when paused or scrubbed onto it
+    }
+
+    function pbvHandleOutcome(result) {
+      if (result.outcome === "hold") {
+        pbvPause(true);
+        pbvApplyHold(state.pb.snapshotHold || "recording");
+      } else if (result.outcome === "gone") {
+        pbvPause(true);
+        showToast("This clip was removed on another screen.", true);
+        pbvClose();
+        void fetchMediaLibrary(true);
+      } else if (result.outcome === "stale") {
+        pbvPause(true);
+        void pbvReload();
+      }
+    }
+
+    // The picture for the current number at the paused size (or 640 while dragging), the newest request wins.
+    async function pbvShowPaused(width) {
+      const v = state.pb.viewer;
+      if (!v || !v.tl)
+        return;
+      const number = pbvNumberAtTime(v.tl, v.t);
+      v.number = number;
+      if (pbvInHole(v.tl, number)) {
+        pbvShowHole(number);
+        pbvUpdateUi(true);
+        return;
+      }
+      const seq = ++v.seq;
+      const result = await pbvFetchFrame(number, width || pbvPausedWidth());
+      if (!state.pb.viewer || seq !== state.pb.viewer.seq || state.pb.viewer.playing)
+        return;
+      if (result.outcome === "ok")
+        pbvShowFrame(result);
+      else
+        pbvHandleOutcome(result);
+      pbvUpdateUi(true);
+    }
+
+    function pbvPlay() {
+      const v = state.pb.viewer;
+      if (!v || !v.tl || v.playing || v.hold)
+        return;
+      window.clearTimeout(v.pausedTimer);
+      v.playing = true;
+      v.clockBase = v.t;
+      v.clockStart = performance.now();
+      v.ready = [];
+      v.lastRequested = v.number - 1;
+      v.lanes.forEach((lane) => { lane.until = 0; lane.errors = 0; });
+      document.getElementById("pbvHole").classList.add("hidden");
+      const interval = Math.min(20000, Math.floor(Number(state.snapshot && state.snapshot.standby_timeout_seconds || 0) * 1000 / 3));
+      if (interval > 0) {
+        window.clearInterval(v.awakeTimer);
+        v.awakeTimer = window.setInterval(() => {
+          fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd: "user_activity" }) }).catch(() => {});
+        }, interval);
+      }
+      pbvUpdateUi(true);
+      v.raf = window.requestAnimationFrame(pbvTick);
+    }
+
+    function pbvPause(skipPaused) {
+      const v = state.pb.viewer;
+      if (!v)
+        return;
+      if (v.playing)
+        v.t = Math.min(pbvDuration(v.tl), v.clockBase + (performance.now() - v.clockStart) / 1000);
+      v.playing = false;
+      window.cancelAnimationFrame(v.raf);
+      window.clearInterval(v.awakeTimer);
+      v.ready.forEach((frame) => frame.bitmap.close && frame.bitmap.close());
+      v.ready = [];
+      pbvUpdateUi(true);
+      if (!skipPaused) {
+        window.clearTimeout(v.pausedTimer);
+        v.pausedTimer = window.setTimeout(() => { void pbvShowPaused(); }, 150);
+      }
+    }
+
+    function pbvToggle() {
+      const v = state.pb.viewer;
+      if (!v || !v.tl)
+        return;
+      if (v.playing)
+        pbvPause(false);
+      else
+        pbvPlay();
+    }
+
+    function pbvTick(now) {
+      const v = state.pb.viewer;
+      if (!v || !v.playing)
+        return;
+      const tl = v.tl;
+      let t = v.clockBase + (now - v.clockStart) / 1000;
+      if (t >= pbvDuration(tl)) {                      // loop to the first frame and go on, like the touch UI
+        v.ready.forEach((frame) => frame.bitmap.close && frame.bitmap.close());
+        v.ready = [];
+        v.clockBase = 0;
+        v.clockStart = now;
+        v.lastRequested = tl.first - 1;
+        t = 0;
+      }
+      v.t = t;
+      const target = pbvNumberAtTime(tl, t);
+      v.number = target;
+      if (pbvInHole(tl, target)) {
+        if (v.shownKind !== "hole")
+          pbvShowHole(target);                         // black: the camera did not write this frame
+      } else {
+        let best = -1;
+        v.ready.forEach((frame, i) => {
+          if (frame.number <= target && (best < 0 || frame.number > v.ready[best].number))
+            best = i;
+        });
+        if (best >= 0) {
+          const frame = v.ready[best];
+          v.ready.forEach((other, i) => { if (i !== best && other.number <= frame.number && other.bitmap.close) other.bitmap.close(); });
+          v.ready = v.ready.filter((other) => other.number > frame.number);
+          pbvShowFrame(frame);
+        }
+      }
+      const ahead = pbvLookAhead(tl, v.rtt);
+      const want = pbvNumberAtTime(tl, t + ahead);
+      v.lanes.forEach((lane) => {
+        if (lane.busy || now < lane.until)
+          return;
+        let n = Math.max(v.lastRequested + 1, target);
+        while (n <= tl.last && pbvInHole(tl, n))
+          n += 1;
+        if (n > tl.last || n > want + 1)
+          return;
+        lane.busy = true;
+        v.lastRequested = n;
+        void pbvFetchFrame(n, 640).then((result) => {
+          lane.busy = false;
+          lane.until = performance.now() + pbvLaneWait(lane, result.outcome, tl);
+          if (!state.pb.viewer || state.pb.viewer !== v || !v.playing) {
+            if (result.bitmap && result.bitmap.close)
+              result.bitmap.close();
+            return;
+          }
+          if (result.outcome === "ok") {
+            v.rtt = v.rtt * 0.7 + result.ms * 0.3;
+            // A frame that arrives late is still shown when it is newer than the picture on screen (a slow
+            // decode skips frames, as the touch screen does); an older one is dropped.
+            if (result.number > v.shownNumber)
+              v.ready.push(result);
+            else if (result.bitmap.close)
+              result.bitmap.close();
+          } else {
+            pbvHandleOutcome(result);
+          }
+        });
+      });
+      pbvUpdateUi(false);
+      v.raf = window.requestAnimationFrame(pbvTick);
+    }
+
+    function pbvSeekTo(fraction, width) {
+      const v = state.pb.viewer;
+      v.t = Math.min(1, Math.max(0, fraction)) * pbvDuration(v.tl);
+      v.number = pbvNumberAtTime(v.tl, v.t);
+      pbvUpdateUi(true);
+      if (v.scrubBusy) {
+        v.scrubNext = v.number;
+        return;
+      }
+      const run = async (number) => {
+        v.scrubBusy = true;
+        if (pbvInHole(v.tl, number)) {
+          pbvShowHole(number);
+        } else {
+          const result = await pbvFetchFrame(number, width);
+          if (state.pb.viewer === v && !v.playing) {
+            if (result.outcome === "ok")
+              pbvShowFrame(result);
+            else
+              pbvHandleOutcome(result);
+          }
+        }
+        v.scrubBusy = false;
+        if (v.scrubNext >= 0 && state.pb.viewer === v) {
+          const next = v.scrubNext;
+          v.scrubNext = -1;
+          await run(next);
+        }
+      };
+      void run(v.number);
+    }
+
+    function pbvInstallScrub() {
+      const scrub = document.getElementById("pbvScrub");
+      const fractionAt = (event) => {
+        const rect = scrub.getBoundingClientRect();
+        return rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+      };
+      scrub.addEventListener("pointerdown", (event) => {
+        const v = state.pb.viewer;
+        if (!v || !v.tl || v.hold)
+          return;
+        event.preventDefault();
+        scrub.setPointerCapture(event.pointerId);
+        v.scrubbing = true;
+        v.wasPlaying = v.playing;
+        if (v.playing)
+          pbvPause(true);
+        pbvSeekTo(fractionAt(event), 640);
+      });
+      scrub.addEventListener("pointermove", (event) => {
+        const v = state.pb.viewer;
+        if (v && v.scrubbing)
+          pbvSeekTo(fractionAt(event), 640);
+      });
+      const finish = () => {
+        const v = state.pb.viewer;
+        if (!v || !v.scrubbing)
+          return;
+        v.scrubbing = false;
+        if (v.wasPlaying) {
+          v.wasPlaying = false;
+          pbvPlay();                                   // the touch UI plays on after a seek
+        } else {
+          void pbvShowPaused();
+        }
+      };
+      scrub.addEventListener("pointerup", finish);
+      scrub.addEventListener("pointercancel", finish);
+    }
+
+    // O1: one frame at a time, by number (a number inside a hole shows black).
+    function pbvStep(delta) {
+      const v = state.pb.viewer;
+      if (!v || !v.tl || v.hold)
+        return;
+      if (v.playing)
+        pbvPause(true);
+      const number = Math.min(v.tl.last, Math.max(v.tl.first, v.number + delta));
+      v.t = (number - v.tl.first) / v.tl.fps + 0.0001;
+      void pbvShowPaused();
+    }
+
+    function pbvRepeat(button, delta) {
+      let timer = 0, interval = 0;
+      const stop = () => { window.clearTimeout(timer); window.clearInterval(interval); };
+      button.addEventListener("pointerdown", () => {
+        pbvStep(delta);
+        timer = window.setTimeout(() => { interval = window.setInterval(() => pbvStep(delta), 90); }, 400);
+      });
+      button.addEventListener("pointerup", stop);
+      button.addEventListener("pointerleave", stop);
+      button.addEventListener("pointercancel", stop);
+      button.addEventListener("click", (event) => event.preventDefault());
+    }
+
+    function pbvOpenAt(index) {
+      const item = state.pb.items[index];
+      if (item)
+        void pbvOpen(item);
+    }
+
+    function pbvCurrentIndex() {
+      const v = state.pb.viewer;
+      return v ? state.pb.items.findIndex((item) => mediaSelectionKey(item) === mediaSelectionKey(v.item)) : -1;
+    }
+
+    function pbvFillMeta(clip, tl) {
+      const meta = clip.meta || {}, extra = clip.extra || {};
+      const rows = [
+        ["CAPTURED", meta.captured], ["TYPE", meta.type], ["RESOLUTION", meta.resolution], ["BIT DEPTH", meta.bit_depth],
+        ["FRAME RATE", meta.frame_rate], ["DURATION", meta.duration], ["FRAMES", meta.frames], ["CLIP SIZE", meta.clip_size],
+        ["PATH", meta.path], ["TIMECODE", clip.timecode_start || "Unavailable"], ["SOUND", extra.sound], ["FORMAT", extra.format],
+        ["DROPPED", extra.dropped],
+      ];
+      const grid = document.getElementById("pbvMetaGrid");
+      grid.replaceChildren();
+      for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "pbv-meta-row";
+        const l = document.createElement("span");
+        l.className = "pbv-meta-label";
+        l.textContent = label;
+        const val = document.createElement("span");
+        val.className = "pbv-meta-value";
+        val.textContent = value === undefined || value === null || value === "" ? "Unavailable" : String(value);
+        row.append(l, val);
+        grid.appendChild(row);
+      }
+    }
+
+    async function pbvOpen(item, keepHistory) {
+      pbvPause(true);
+      const previous = state.pb.viewer;
+      if (previous && previous.bitmap && previous.bitmap.close)
+        previous.bitmap.close();
+      state.pb.lastOpenedId = mediaSelectionKey(item);
+      const v = state.pb.viewer = pbvNewState(item);
+      state.pb.page = "viewer";
+      document.getElementById("pbBrowserPage").classList.add("hidden");
+      document.getElementById("pbViewerPage").classList.remove("hidden");
+      if (!state.pb.viewerPushed && !keepHistory) {
+        history.pushState({ pb: 2 }, "");
+        state.pb.viewerPushed = true;
+      }
+      setText("pbvName", item.name || item.id);
+      setText("pbvInfo", "");
+      setText("pbvMetaName", item.name || item.id);
+      document.getElementById("pbvMeta").classList.remove("open");
+      document.getElementById("pbvHold").classList.add("hidden");
+      document.getElementById("pbvHole").classList.add("hidden");
+      pbvDraw(null);
+      pbvDrawHistogram(null);
+      const index = pbvCurrentIndex();
+      document.getElementById("pbvPrev").disabled = index <= 0;
+      document.getElementById("pbvNext").disabled = index < 0 || index >= state.pb.items.length - 1;
+      document.getElementById("pbvDownload").disabled = !item.download_url;
+      if (item.format !== "cdng") {
+        setText("pbvInfo", item.format_label || item.type || "");
+        setText("pbvFrame", "NO FRAMES");
+        pbvDrawNote(item.category === "clip" ? "Playback of " + (item.type || "this clip") + " arrives later." : "Playback of " + (item.type || "this item").toLowerCase() + " arrives later.");
+        return;
+      }
+      let clip;
+      try {
+        const response = await fetch("/api/media/clip?kind=folder&id=" + encodeURIComponent(item.id), { cache: "no-store" });
+        clip = await response.json();
+        if (response.status === 409) {
+          pbvApplyHold(clip.hold || state.pb.snapshotHold || "recording");
+          return;
+        }
+        if (!response.ok || !clip.ok)
+          throw new Error(clip.error || "Could not open the clip.");
+      } catch (error) {
+        showToast(error.message || "Could not open the clip.", true);
+        pbvClose();
+        return;
+      }
+      if (state.pb.viewer !== v)
+        return;
+      v.clip = clip;
+      v.tl = pbvTimeline(clip);
+      v.t = 0;
+      v.number = v.tl.first;
+      setText("pbvInfo", clip.info_line || "");
+      setText("pbvFps", clip.fps_badge || "");
+      const drop = pbvDropCount(clip);
+      const dropBadge = document.getElementById("pbvDrop");
+      dropBadge.textContent = "DROP " + drop;
+      dropBadge.classList.toggle("hidden", drop === 0 || !!clip.ramp);
+      pbvFillMeta(clip, v.tl);
+      if (state.pb.snapshotHold)
+        pbvApplyHold(state.pb.snapshotHold);
+      pbvUpdateUi(true);
+      await pbvShowPaused();                           // opens paused on the first frame
+    }
+
+    function pbvDrawNote(text) {
+      pbvDraw(null);
+      const label = document.getElementById("pbvHole");
+      label.textContent = text;
+      label.classList.remove("hidden");
+    }
+
+    async function pbvReload() {
+      const v = state.pb.viewer;
+      if (!v)
+        return;
+      await fetchMediaLibrary(true);
+      const item = (state.pb.payload && state.pb.payload.items || []).find((other) => mediaSelectionKey(other) === mediaSelectionKey(v.item));
+      if (item)
+        await pbvOpen(item, true);
+      else
+        pbvClose();
+    }
+
+    function pbvClose(fromHistory) {
+      const v = state.pb.viewer;
+      if (v) {
+        pbvPause(true);
+        window.clearTimeout(v.pausedTimer);
+        if (v.bitmap && v.bitmap.close)
+          v.bitmap.close();
+      }
+      state.pb.viewer = null;
+      state.pb.page = "browser";
+      document.getElementById("pbViewerPage").classList.add("hidden");
+      document.getElementById("pbBrowserPage").classList.remove("hidden");
+      document.getElementById("pbvMeta").classList.remove("open");
+      if (state.pb.viewerPushed && !fromHistory) {
+        state.pb.ignorePop = true;
+        history.back();
+      }
+      state.pb.viewerPushed = false;
+      pbRender();
+    }
+
+    function pbvApplyHold(hold) {
+      const v = state.pb.viewer;
+      if (!v)
+        return;
+      const card = document.getElementById("pbvHold");
+      if (!hold) {
+        const wasHeld = !!v.hold;
+        v.hold = "";
+        card.classList.add("hidden");
+        document.getElementById("pbvDownload").disabled = !v.item.download_url;
+        if (wasHeld && v.tl)
+          void pbvShowPaused();                        // redraw the frame; do not resume
+        return;
+      }
+      pbvPause(true);
+      v.hold = hold;
+      const text = pbvHoldText[hold] || ["Playback held", "Playback is not available right now."];
+      setText("pbvHoldTitle", text[0]);
+      setText("pbvHoldBody", text[1]);
+      document.getElementById("pbvLiveButton").classList.toggle("hidden", hold !== "recording");
+      document.getElementById("pbvWakeButton").classList.toggle("hidden", hold !== "standby");
+      card.classList.remove("hidden");
+      document.getElementById("pbvDownload").disabled = true;
+    }
+
+    function pbvRemoveCurrent() {
+      const v = state.pb.viewer;
+      if (!v)
+        return;
+      pbvPause(true);
+      pbOpenRemoveDialog([v.item], true);
+    }
+
+    function pbvDownloadCurrent() {
+      const v = state.pb.viewer;
+      if (!v || !v.item.download_url)
+        return;
+      const name = v.item.name || v.item.id;
+      if (!window.confirm("Download " + name + " (" + (v.item.size_text || "unknown size") + ")? Over Wi-Fi this can take a long time; copying the card is faster."))
+        return;
+      const link = document.createElement("a");
+      link.href = v.item.download_url;
+      link.setAttribute("download", "");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    function pbvToggleMeta() {
+      document.getElementById("pbvMeta").classList.toggle("open");
+    }
+
+    function pbvInstall() {
+      pbvInstallScrub();
+      document.getElementById("pbvBack").addEventListener("click", () => pbvClose());
+      document.getElementById("pbvPlay").addEventListener("click", pbvToggle);
+      document.getElementById("pbvPrev").addEventListener("click", () => pbvOpenAt(pbvCurrentIndex() - 1));
+      document.getElementById("pbvNext").addEventListener("click", () => pbvOpenAt(pbvCurrentIndex() + 1));
+      pbvRepeat(document.getElementById("pbvStepBack"), -1);
+      pbvRepeat(document.getElementById("pbvStepFwd"), 1);
+      document.getElementById("pbvRemove").addEventListener("click", pbvRemoveCurrent);
+      document.getElementById("pbvDownload").addEventListener("click", pbvDownloadCurrent);
+      document.getElementById("pbvInfoButton").addEventListener("click", pbvToggleMeta);
+      document.getElementById("pbvMetaClose").addEventListener("click", pbvToggleMeta);
+      document.getElementById("pbvLiveButton").addEventListener("click", () => setMediaBrowserOpen(false));
+      document.getElementById("pbvWakeButton").addEventListener("click", async () => {
+        try { await sendCommand({ cmd: "wake" }); } catch (error) { showToast(error.message, true); }
+      });
+      document.addEventListener("visibilitychange", () => {
+        const v = state.pb.viewer;
+        if (document.hidden && v && v.playing) {
+          pbvPause(false);
+          showToast("Paused: the tab is in the background.", false);
+        }
+      });
+      window.addEventListener("resize", () => {
+        const v = state.pb.viewer;
+        if (v && v.tl && !v.playing)
+          pbvDraw(v.shownKind === "picture" ? v.bitmap : null);
+      });
+      document.addEventListener("keydown", (event) => {
+        const v = state.pb.viewer;
+        if (!state.mediaBrowserOpen || !v || state.pb.page !== "viewer")
+          return;
+        const tag = (event.target && event.target.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "select" || tag === "textarea" || !document.getElementById("pbRemoveScrim").classList.contains("hidden"))
+          return;
+        if (event.key === " ") {
+          event.preventDefault();
+          pbvToggle();
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          pbvStep(-1);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          pbvStep(1);
+        }
+      });
     }
 
     function setMetric(prefix, valueText, sublabel, progress) {
@@ -13793,9 +15079,18 @@ std::string_view webControlPageHtml()
       });
       document.getElementById("pbRemoveConfirm").addEventListener("click", () => { void pbRemoveSelected(); });
       window.addEventListener("popstate", () => {
-        if (state.mediaBrowserOpen)
+        if (state.pb.ignorePop) {
+          state.pb.ignorePop = false;
+          return;
+        }
+        if (!state.mediaBrowserOpen)
+          return;
+        if (state.pb.page === "viewer")
+          pbvClose(true);                    // the phone's Back leaves the viewer first
+        else
           setMediaBrowserOpen(false, true);
       });
+      pbvInstall();
       document.getElementById("closeSettingsButton").addEventListener("click", () => setSettingsOpen(false));
       document.getElementById("clearFavoritesButton").addEventListener("click", () => {
         void clearFavorites();
