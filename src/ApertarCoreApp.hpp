@@ -130,6 +130,7 @@ private:
     TriggerOutput triggerOutput_;
     AudioRecordingSession soundRecorder_;
     std::atomic<bool> soundRecordingActive_{false};
+    std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
     std::string soundRecordingFolder_;
 
     std::atomic<bool> running_{false};

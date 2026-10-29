@@ -56,6 +56,9 @@
 #include <jpeglib.h>
 #endif
 
+#include <csignal>
+#include <functional>
+
 #include "playback/ClipProbe.hpp"
 #include "playback/PlaybackFrames.hpp"
 #include "playback/PlaybackHold.hpp"
@@ -5820,6 +5823,12 @@ playback::PlaybackYield &playbackYield()
     return yield;
 }
 
+// True while the yield window is open: a take, a capture, a media test, standby or an eject is starting.
+bool playbackYieldActive()
+{
+    return playbackYield().active(playbackNowMs());
+}
+
 playback::ClipFactsCache &clipFactsCache()
 {
     static playback::ClipFactsCache cache(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -5857,6 +5866,16 @@ struct MediaLibraryItem
     bool hasAudio = false;
     std::string token;
     std::string timecodeStart;      // the recorded start timecode of the first frame (R1)
+};
+
+// Q23: a delete in progress is visible to handleCommand, which refuses a take until it is done.
+struct MediaDeleteScope
+{
+    explicit MediaDeleteScope(std::atomic<bool> &flag) : flag_(flag) { flag_.store(true); }
+    ~MediaDeleteScope() { flag_.store(false); }
+    MediaDeleteScope(const MediaDeleteScope &) = delete;
+    MediaDeleteScope &operator=(const MediaDeleteScope &) = delete;
+    std::atomic<bool> &flag_;
 };
 
 struct MediaSelection
@@ -6564,7 +6583,7 @@ bool sendFileChunk(int clientFd, const char *data, size_t size)
     return true;
 }
 
-void streamFileToClient(int clientFd, const std::filesystem::path &path)
+void streamFileToClient(int clientFd, const std::filesystem::path &path, const std::function<bool()> &stop = {})
 {
     std::ifstream input(path, std::ios::binary);
     if (!input.is_open())
@@ -6572,6 +6591,8 @@ void streamFileToClient(int clientFd, const std::filesystem::path &path)
 
     std::array<char, 64 * 1024> buffer{};
     while (input.good()) {
+        if (stop && stop())      // T50: a take is starting; give the card back within one chunk
+            break;
         input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const std::streamsize bytesRead = input.gcount();
         if (bytesRead <= 0)
@@ -6588,7 +6609,8 @@ std::string zipProgramPath()
 
 void streamZipArchiveToClient(int clientFd,
                               const std::filesystem::path &workingDirectory,
-                              const std::vector<std::string> &relativeEntries)
+                              const std::vector<std::string> &relativeEntries,
+                              const std::function<bool()> &stop = {})
 {
     const std::string zipPath = zipProgramPath();
     if (zipPath.empty() || relativeEntries.empty())
@@ -6640,7 +6662,12 @@ void streamZipArchiveToClient(int clientFd,
     }
 
     std::array<char, 64 * 1024> buffer{};
+    bool stopped = false;
     while (true) {
+        if (stop && stop()) {    // T50: a take is starting; stop the archive within one chunk
+            stopped = true;
+            break;
+        }
         const ssize_t bytesRead = ::read(pipeFds[0], buffer.data(), buffer.size());
         if (bytesRead <= 0)
             break;
@@ -6649,6 +6676,8 @@ void streamZipArchiveToClient(int clientFd,
     }
 
     ::close(pipeFds[0]);
+    if (stopped)
+        ::kill(child, SIGTERM);
     int status = 0;
     ::waitpid(child, &status, 0);
 }
@@ -7788,6 +7817,14 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download") {
+        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
+            WebServer::Response response;
+            response.status = 409;
+            response.contentType = "application/json; charset=utf-8";
+            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
+            return response;
+        }
+
         const auto requestedKind = queryParameterValue(request.query, "kind");
         const auto requestedId = queryParameterValue(request.query, "id");
         if (!requestedKind || !requestedId) {
@@ -7839,7 +7876,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
                 "attachment; filename=\"" + sanitizeDownloadFileName(folderName) + ".zip\""
             });
             response.streamWriter = [mediaRoot, relativeEntry](int clientFd) {
-                streamZipArchiveToClient(clientFd, mediaRoot, {relativeEntry});
+                streamZipArchiveToClient(clientFd, mediaRoot, {relativeEntry}, playbackYieldActive);
             };
             return response;
         }
@@ -7864,7 +7901,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
                     "attachment; filename=\"" + sanitizeDownloadFileName(filePath.filename().string()) + "\""
                 });
                 response.streamWriter = [filePath](int clientFd) {
-                    streamFileToClient(clientFd, filePath);
+                    streamFileToClient(clientFd, filePath, playbackYieldActive);
                 };
                 return response;
             }
@@ -7896,7 +7933,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
                 "attachment; filename=\"" + sanitizeDownloadFileName(stemName) + ".zip\""
             });
             response.streamWriter = [mediaRoot, relativeFiles](int clientFd) {
-                streamZipArchiveToClient(clientFd, mediaRoot, relativeFiles);
+                streamZipArchiveToClient(clientFd, mediaRoot, relativeFiles, playbackYieldActive);
             };
             return response;
         }
@@ -7909,6 +7946,14 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download-selected") {
+        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
+            WebServer::Response response;
+            response.status = 409;
+            response.contentType = "application/json; charset=utf-8";
+            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
+            return response;
+        }
+
         std::string errorMessage;
         const std::vector<MediaSelection> selections = mediaSelectionsFromQuery(request.query, &errorMessage);
         if (selections.empty()) {
@@ -7945,7 +7990,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             "attachment; filename=\"Apertar-Media-Selection.zip\""
         });
         response.streamWriter = [mediaRoot, entries = *relativeEntries](int clientFd) {
-            streamZipArchiveToClient(clientFd, mediaRoot, entries);
+            streamZipArchiveToClient(clientFd, mediaRoot, entries, playbackYieldActive);
         };
         return response;
     }
@@ -8111,6 +8156,14 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "Stop recording before deleting media.");
             return response;
         }
+        if (camera_.mediaWritesPending()) {
+            WebServer::Response response;
+            response.status = 409;
+            response.contentType = "application/json; charset=utf-8";
+            response.body = errorReply(-1, "Wait for the current capture to finish writing to media.");
+            return response;
+        }
+        const MediaDeleteScope deleteScope(mediaDeleteActive_);
 
         const std::string kind = *requestedKind;
         const std::string id = *requestedId;
@@ -8183,6 +8236,14 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "Stop recording before deleting media.");
             return response;
         }
+        if (camera_.mediaWritesPending()) {
+            WebServer::Response response;
+            response.status = 409;
+            response.contentType = "application/json; charset=utf-8";
+            response.body = errorReply(-1, "Wait for the current capture to finish writing to media.");
+            return response;
+        }
+        const MediaDeleteScope deleteScope(mediaDeleteActive_);
 
         const std::filesystem::path mediaRoot(options_.mediaRoot);
         const auto targets = mediaSelectionDeletionTargets(mediaRoot, selections, &errorMessage);
@@ -10066,6 +10127,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             playbackYield().yieldFor(reason, playbackNowMs());
     }
     if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
+    if (mediaDeleteActive_.load() && (command.name == "capture_photo" || command.name == "record_start" ||
+                                      (command.name == "timelapse_start" && !camera_.timelapseActive())))
+        return errorReply(command.id, "Deleting media. One moment.");
     if ((command.name == "capture_photo" || command.name == "record_start" ||
          (command.name == "timelapse_start" && !camera_.timelapseActive())) && camera_.mediaWritesPending())
         return errorReply(command.id, "Wait for the current capture to finish writing to media.");
