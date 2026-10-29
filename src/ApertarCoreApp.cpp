@@ -10187,13 +10187,21 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (!value)
             return errorReply(command.id, "set_timecode_mode requires value.");
 
+        // target=files: the timecode written into the clips and the audio (DNG, MLV, ProRes, H.264,
+        // WAV); target=ui: the one the screens show (UI.conf); no target: both, as before.
+        const std::string target = command.string("target").value_or("both");
+        if (target != "both" && target != "ui" && target != "files")
+            return errorReply(command.id, "set_timecode_mode target must be ui, files or both.");
+
         const TimecodeMode mode = (*value == "rec_run") ? TimecodeMode::RecRun : TimecodeMode::FreeRun;
-        if (!camera_.setTimecodeMode(mode))
+        if (target != "ui" && !camera_.setTimecodeMode(mode))
             return errorReply(command.id, camera_.lastError());
 
-        (void)updateSharedUiGeneralSettings({
-            { "timecodeMode", mode == TimecodeMode::RecRun ? "Rec Run" : "Free Run" }
-        });
+        if (target != "files") {
+            (void)updateSharedUiGeneralSettings({
+                { "timecodeMode", mode == TimecodeMode::RecRun ? "Rec Run" : "Free Run" }
+            });
+        }
         return okReply(command.id, settingsBody(camera_.settings()));
     }
 
@@ -11228,8 +11236,6 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             if (*value != "free_run" && *value != "rec_run")
                 return errorReply(command.id, "Invalid preset timecode mode.");
             presetSettings.timecodeMode = *value == "rec_run" ? TimecodeMode::RecRun : TimecodeMode::FreeRun;
-            // The touch UI keeps its own copy, as set_timecode_mode writes it.
-            uiUpdates.emplace_back("timecodeMode", *value == "rec_run" ? "Rec Run" : "Free Run");
         }
         if (const auto value = command.number("cameraConformFps")) {
             if (!std::isfinite(*value) || *value < 1 || *value > 120)
@@ -11307,8 +11313,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             presetSettings.autofocusWindowWidth = *w; presetSettings.autofocusWindowHeight = *h;
         }
         if (const auto value = command.string("timecodeMode")) {
+            // The UI timecode. An older preset has only this one and sets the files' too.
             const auto normalized = normalizeTimecodeModeValue(*value);
-            presetSettings.timecodeMode = normalized == "Rec Run" ? TimecodeMode::RecRun : TimecodeMode::FreeRun;
+            if (!command.string("cameraTimecodeMode"))
+                presetSettings.timecodeMode = normalized == "Rec Run" ? TimecodeMode::RecRun : TimecodeMode::FreeRun;
             uiUpdates.emplace_back("timecodeMode", normalized);
         }
 

@@ -3708,11 +3708,17 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
-                  <p class="settings-card-copy">Timecode behavior.</p>
+                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another.</p>
                 </div>
-                <div class="online-pill" id="settingsTimecodeValue">Free Run</div>
               </div>
-              <div class="pill-grid" id="settingsTimecodeOptions"></div>
+              <div class="field-stack">
+                <span class="input-label">UI timecode</span>
+                <div class="pill-grid ladder-pair" id="settingsTimecodeOptions"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">File timecode (DNG, MLV, ProRes, H.264, WAV)</span>
+                <div class="pill-grid ladder-pair" id="settingsFileTimecodeOptions"></div>
+              </div>
             </div>
 
             <div class="settings-card">
@@ -7719,6 +7725,27 @@ std::string_view webControlPageHtml()
       return String(modeValue || "").toLowerCase() === "rec_run" ? "Rec Run" : "Free Run";
     }
 
+    // The UI timecode (what the screens show, UI.conf) and the file timecode (Core's timecode_mode:
+    // DNG, MLV, ProRes, H.264 and the WAV) are set apart; set_timecode_mode takes target=ui|files.
+    function uiTimecodeLabel(snapshot) {
+      const ui = (snapshot && snapshot.ui) || {};
+      return timecodeModeLabel(ui.timecode_mode || (snapshot && snapshot.timecode_mode));
+    }
+
+    function fileTimecodeLabel(snapshot) {
+      return timecodeModeLabel(snapshot && snapshot.timecode_mode);
+    }
+
+    function timecodeSummaryLabel(snapshot) {
+      const ui = uiTimecodeLabel(snapshot);
+      const file = fileTimecodeLabel(snapshot);
+      return ui === file ? ui : "UI " + ui + " · Files " + file;
+    }
+
+    function timecodeCommand(value, target) {
+      return { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run", target };
+    }
+
     function autofocusModeLabel(modeValue) {
       const value = String(modeValue || "").toLowerCase();
       if (value === "manual") return "Manual";
@@ -8315,7 +8342,7 @@ std::string_view webControlPageHtml()
         case "gyroData":
           return formatToggleLabel(!!uiState.record_gyro_enabled);
         case "timecode":
-          return timecodeText;
+          return timecodeSummaryLabel(snapshot);
         case "autofocus":
           return autofocusModeText + " • " + autofocusWindowText;
         case "audioOptions":
@@ -8925,8 +8952,11 @@ std::string_view webControlPageHtml()
             break;
           }
           case "timecode": {
-            card.appendChild(createFavoriteSelectBlock("Timecode Mode", timecodeText, timecodeOptions, timecodeText, async (value) => {
-              await dispatchFavoriteCommand({ cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run" });
+            card.appendChild(createFavoriteSelectBlock("UI Timecode", uiTimecodeLabel(snapshot), timecodeOptions, uiTimecodeLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeCommand(value, "ui"));
+            }));
+            card.appendChild(createFavoriteSelectBlock("File Timecode", fileTimecodeLabel(snapshot), timecodeOptions, fileTimecodeLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeCommand(value, "files"));
             }));
             break;
           }
@@ -10715,10 +10745,14 @@ std::string_view webControlPageHtml()
             snapshot.h264_height = Math.max(0, Math.round(Number(payload.height)));
           }
           break;
-        case "set_timecode_mode":
-          snapshot.timecode_mode = payload.value === "rec_run" ? "rec_run" : "free_run";
-          uiState.timecode_mode = timecodeModeLabel(snapshot.timecode_mode);
+        case "set_timecode_mode": {
+          const mode = payload.value === "rec_run" ? "rec_run" : "free_run";
+          if (payload.target !== "ui")
+            snapshot.timecode_mode = mode;
+          if (payload.target !== "files")
+            uiState.timecode_mode = timecodeModeLabel(mode);
           break;
+        }
         case "set_af_mode":
           snapshot.af_mode = String(payload.value || "continuous").toLowerCase();
           break;
@@ -11496,7 +11530,6 @@ std::string_view webControlPageHtml()
           ? "Raw sensor bit depth for the active capture mode."
           : "Bit-depth selection is only available on supported RAW sensors."));
       setText("settingsGyroDataValue", formatToggleLabel(recordGyroEnabled));
-      setText("settingsTimecodeValue", timecodeText);
       setText("settingsAutofocusValue", autofocusSummaryText);
       setText("settingsSensorValue", snapshot.capture.sensor);
       setText("settingsResolutionSummary", snapshot.resolution);
@@ -12044,13 +12077,17 @@ std::string_view webControlPageHtml()
         await applyStillTimelapseToggle(value === "On");
       }, 2);
 
-      buildOptionButtons("settingsTimecodeOptions", timecodeOptions, timecodeText, async (value) => {
-        try {
-          await sendCommand({ cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run" });
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      });
+      for (const [id, target, current] of [["settingsTimecodeOptions", "ui", uiTimecodeLabel(snapshot)],
+                                           ["settingsFileTimecodeOptions", "files", fileTimecodeLabel(snapshot)]]) {
+        buildOptionButtons(id, timecodeOptions.map((value) => ({ value, label: value, enabled: true })),
+          current, async (value) => {
+            try {
+              await sendCommand(timecodeCommand(value, target));
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 2);
+      }
 
       buildOptionButtons("settingsAutofocusModeOptions", autofocusModeOptions, autofocusModeText, async (value) => {
         try {
