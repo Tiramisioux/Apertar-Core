@@ -56,11 +56,12 @@ inline constexpr Spec kSpecs[] = {
     {"ev_up", "Exposure", "EV +1/3", "ev_up"},
     {"ev_down", "Exposure", "EV -1/3", "ev_down"},
     {"ev_value", "Exposure", "Set EV", "", Both, false, Arg::Ev, "ev{}"},
-    {"resolution", "Resolution", "Resolution: next (IMX585: Clear HDR toggle)", "resolution,resolution_cycle,res,res_cycle"},
+    {"resolution", "Resolution", "Resolution: next", "resolution,resolution_cycle,res,res_cycle"},
     {"resolution_up", "Resolution", "Resolution up", "resolution_up,resolution_next,resolution_plus,res_up,res_next,res_plus"},
     {"resolution_down", "Resolution", "Resolution down",
      "resolution_down,resolution_prev,resolution_previous,resolution_minus,res_down,res_prev,res_previous,res_minus"},
     {"resolution_value", "Resolution", "Set resolution", "", Both, false, Arg::Resolution, "resolution{}"},
+    {"clear_hdr", "Resolution", "Clear HDR on / off (IMX585, CinemaDNG or MLV)", "clear_hdr", Button},
     {"focus_peaking", "Monitoring", "Focus peaking on / off", "focus_peaking,peaking"},
     {"zebra", "Monitoring", "Zebra on / off", "zebra,zebras"},
     {"false_color", "Monitoring", "False color on / off", "false_color,falsecolour"},
@@ -290,7 +291,7 @@ inline bool isStepping(std::string_view id)
 inline bool warnOnTurn(std::string_view id)
 {
     return id == "capture" || id == "record_toggle" || id == "photo" || id == "timelapse" || id == "still_mode" ||
-        id == "eject";
+        id == "eject" || id == "clear_hdr";
 }
 
 // The analog targets (Grove's normalizer also maps none/off/disabled to "no target"; App only sees its result).

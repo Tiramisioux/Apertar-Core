@@ -9773,6 +9773,22 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
         return;
     }
 
+    if (action == "clear_hdr") {
+        // IMX585, raw formats: Clear HDR on or off. On asks for 16-bit, as the touch UI's resolution button does.
+        if (lowerAscii(camera_.sensorName()).find("imx585") == std::string::npos || cameraSettings.photoModeEnabled ||
+            (cameraSettings.recordingFormat != RecordingFormat::Cdng && cameraSettings.recordingFormat != RecordingFormat::Mlv)) {
+            std::cerr << "Hardware input action ignored: clear_hdr needs the IMX585 recording CinemaDNG or MLV.\n";
+            return;
+        }
+        if (cameraSettings.clearHdr) {
+            dispatch("set_clear_hdr", { { "enabled", "false" } });
+        } else {
+            dispatch("set_clear_hdr", { { "enabled", "true" } });
+            dispatch("set_raw_bit_depth", { { "value", "16" } });
+        }
+        return;
+    }
+
     if (const auto mode = pcfSettingStepMode(action, "resolution")) {
         if (cameraSettings.ladderActive)    // T34: the ladder picks the resolution
             return;
