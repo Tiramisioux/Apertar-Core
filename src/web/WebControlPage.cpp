@@ -10732,9 +10732,10 @@ std::string_view webControlPageHtml()
       return false;
     }
 
-    // Ask ahead by the measured round trip, never more than two frame periods.
+    // Ask for the frame that will be due when the answer arrives: the measured round trip (the decode is most of
+    // it), at most 0.35 s. Only two requests are ever in flight, so a long round trip is the decode, not a queue.
     function pbvLookAhead(tl, rttMs) {
-      return Math.min(Math.max(0, rttMs) / 1000, 2 / tl.fps);
+      return Math.min(Math.max(0, rttMs) / 1000, 0.35);
     }
 
     // After a lane's answer: ms until it may ask again. 503 or a failed fetch: one frame period, 500 after three.
@@ -11124,10 +11125,10 @@ std::string_view webControlPageHtml()
       v.lanes.forEach((lane) => {
         if (lane.busy || now < lane.until)
           return;
-        let n = Math.max(v.lastRequested + 1, target);
+        let n = Math.max(v.lastRequested + 1, want);
         while (n <= tl.last && pbvInHole(tl, n))
           n += 1;
-        if (n > tl.last || n > want + 1)
+        if (n > tl.last || n > want + 2)
           return;
         lane.busy = true;
         v.lastRequested = n;
