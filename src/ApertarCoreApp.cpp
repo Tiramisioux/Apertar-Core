@@ -4577,6 +4577,20 @@ std::string controlsConflictsJson(const std::vector<hwconf::Conflict> &conflicts
     return out.str();
 }
 
+std::string controlsReplacedJson(const hardware::ReplacedInfo &replaced)
+{
+    std::ostringstream out;
+    out << "{\"replaced\":" << (replaced.replaced ? "true" : "false");
+    if (replaced.replaced) {
+        out << ",\"reason\":\"" << escapeJson(replaced.reason) << "\""
+            << ",\"saved_at\":\"" << escapeJson(replaced.savedAt) << "\""
+            << ",\"source\":\"" << escapeJson(replaced.source) << "\""
+            << ",\"restore_revision\":\"" << escapeJson(replaced.restoreRevision) << "\"";
+    }
+    out << "}";
+    return out.str();
+}
+
 size_t controlsErrorCount(const std::vector<hwconf::Issue> &issues)
 {
     return static_cast<size_t>(std::count_if(issues.begin(), issues.end(), [](const hwconf::Issue &issue) { return issue.error; }));
@@ -7560,6 +7574,9 @@ bool ApertarCoreApp::start()
         std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
                   << errors << " errors, " << issues.size() - errors << " warnings"
                   << (adopted ? "; adopted, nothing changed" : "") << "\n";
+        if (const hardware::ReplacedInfo replaced = store.replacedByDefault(); replaced.replaced)
+            std::cerr << "ApertarCore controls: the file was replaced. " << replaced.reason << " The version " << replaced.source
+                      << (replaced.savedAt.empty() ? "" : " at " + replaced.savedAt) << " can be restored: set_controls restore=true.\n";
         for (size_t i = 0; i < issues.size() && i < 10; ++i)
             std::cerr << "ApertarCore controls: " << (issues[i].error ? "error: " : "warning: ") << issues[i].message << "\n";
     }
@@ -10370,7 +10387,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << ",\"errors\":" << errors
              << ",\"warnings\":" << issues.size() - errors
              << ",\"issues\":" << controlsIssuesJson(issues)
-             << ",\"text\":\"" << escapeJson(info.text) << "\"}";
+             << ",\"text\":\"" << escapeJson(info.text) << "\""
+             << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault()) << "}";
         return okReply(command.id, body.str());
     }
     if (command.name == "list_actions") {
@@ -10568,11 +10586,23 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 
     if (command.name == "set_controls") {
         const auto base = command.string("base");
-        const auto text = command.string("text");
+        std::optional<std::string> text = command.string("text");
         if (!base || base->empty())
             return errorReply(command.id, "set_controls needs base= (the revision you loaded).");
+        // restore=true puts back the version Core last knew, when the file was replaced by a default.
+        if (const auto restore = command.string("restore"); restore) {
+            bool wanted = false;
+            if (!parseBooleanToken(*restore, &wanted))
+                return errorReply(command.id, "restore must be true or false.");
+            if (wanted) {
+                const hardware::ReplacedInfo replaced = hardware::configStore().replacedByDefault();
+                if (!replaced.replaced)
+                    return errorReply(command.id, "Nothing to restore: the file has not been replaced.");
+                text = replaced.restoreText;
+            }
+        }
         if (!text)
-            return errorReply(command.id, "set_controls needs text= (the whole file).");
+            return errorReply(command.id, "set_controls needs text= (the whole file), or restore=true.");
         hardware::StoreFlags flags;
         flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
         const std::pair<const char *, bool *> flagFields[] = {

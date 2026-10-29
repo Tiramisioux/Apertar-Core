@@ -59,6 +59,14 @@ std::string safeName(const std::string &by)
     return out.empty() ? "unknown" : out;
 }
 
+// The first two lines of the text the touch UI used to write when the file was missing.
+constexpr const char *kUiTemplateHeader = "# Apertar hardware configuration\n# Primary location: /home/pi/apertar-hardware.conf";
+
+bool startsLikeUiTemplate(const std::string &text)
+{
+    return text.rfind(kUiTemplateHeader, 0) == 0;
+}
+
 bool isHistoryEntry(const std::string &name)
 {
     // <YYYYmmdd-HHMMSS>-h<16 hex>-<by>.conf
@@ -361,9 +369,12 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         result.error = "Could not write the file; nothing was saved.";
         return result;
     }
+    if (!existed)   // a new file gets the mode the file always had; atomicWrite keeps an old file's mode itself
+        ::chmod(file_.c_str(), 0644);
     rememberLocked(current);
     stamp_ = Stamp {};
     refreshLocked();
+    settingsFile::atomicWrite(notes_ / "hardware-last-written.conf", next);   // what replacedByDefault compares with
     writeStateLocked(by);
     result.ok = true;
     result.written = true;
@@ -400,6 +411,41 @@ void HardwareConfigStore::writeStateLocked(const std::string &by)
                               "written_revision=" + state_.writtenRevision + "\n" +
                               "written_at=" + state_.writtenAt + "\n" +
                               "written_by=" + state_.writtenBy + "\n");
+}
+
+ReplacedInfo HardwareConfigStore::replacedByDefault() const
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+    refreshLocked();
+    ReplacedInfo info;
+    std::filesystem::path reference = notes_ / "hardware-last-written.conf";
+    info.source = "last saved";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(reference, error)) {
+        info.source = "before Controls";
+        reference.clear();
+        for (const auto &entry : std::filesystem::directory_iterator(notes_ / "hardware-history", error))
+            if (entry.path().filename().string().rfind("adopted-", 0) == 0)
+                reference = entry.path();
+        if (reference.empty())
+            return info;
+    }
+    const std::string known = readTextFile(reference);
+    if (known.empty() || hwconf::revision(known) == revision_)
+        return info;
+    if (!stamp_.exists || hwconf::trim(text_).empty())
+        info.reason = "The file is missing or empty.";
+    else if (startsLikeUiTemplate(text_) && !startsLikeUiTemplate(known))
+        info.reason = "The file now starts like the touch UI's default (hat on bus 10, NeoRotary off).";
+    else
+        return info;
+    info.replaced = true;
+    info.restoreText = known;
+    info.restoreRevision = hwconf::revision(known);
+    struct stat referenceStat {};
+    if (::stat(reference.c_str(), &referenceStat) == 0)
+        info.savedAt = timestamp("%H:%M", referenceStat.st_mtime);
+    return info;
 }
 
 bool HardwareConfigStore::adopt()

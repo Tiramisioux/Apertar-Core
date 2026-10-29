@@ -46,6 +46,16 @@ struct StoreInfo {
     std::string writtenBy;
 };
 
+// Is the file something else than what Core last knew? (The touch UI's default, or gone.) See replacedByDefault().
+struct ReplacedInfo {
+    bool replaced = false;
+    std::string reason;           // plain words: why it counts as replaced
+    std::string restoreText;      // the version to put back
+    std::string restoreRevision;
+    std::string savedAt;          // "21:14": when that version was saved
+    std::string source;           // "last saved" or "before Controls"
+};
+
 class HardwareConfigStore {
 public:
     HardwareConfigStore(std::filesystem::path file, std::filesystem::path notesDirectory);
@@ -65,6 +75,10 @@ public:
     // The whole text (the Config page). A stale base whose changes are only key values merges like key edits.
     StoreResult replace(const std::string &base, const std::string &text, const std::string &by,
                         const StoreFlags &flags = {}, const hwconf::Facts &facts = {});
+
+    // The net for "mv" instead of "cp", an old touch UI binary or a test: the file is missing or empty, or it now starts
+    // like the touch UI's default template while the version Core knew did not. Needs a version Core wrote or adopted.
+    ReplacedInfo replacedByDefault() const;
 
     // Pins the file as found, once, in the history as adopted-<revision>.conf ("Before Controls"). True when it did.
     bool adopt();
