@@ -21,6 +21,7 @@
 
 #include <fcntl.h>
 #include <linux/gpio.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -407,10 +408,10 @@ GpioInput::Config GpioInput::loadConfig()
     return config;
 }
 
-bool GpioInput::requestLines(const std::vector<int> &offsets, int *lineFd, std::string *errorMessage) const
+bool GpioInput::requestLines(const std::vector<int> &offsets, bool edges, int *lineFd, std::string *errorMessage) const
 {
     if (config_.chipPath != "auto")
-        return requestLinesFromChip(config_.chipPath, offsets, lineFd, errorMessage);
+        return requestLinesFromChip(config_.chipPath, offsets, edges, lineFd, errorMessage);
 
     std::string lastError;
     std::vector<std::pair<int, std::string>> candidates;
@@ -430,7 +431,7 @@ bool GpioInput::requestLines(const std::vector<int> &offsets, int *lineFd, std::
     for (const auto &candidate : candidates) {
         const std::string &path = candidate.second;
         std::string error;
-        if (requestLinesFromChip(path, offsets, lineFd, &error))
+        if (requestLinesFromChip(path, offsets, edges, lineFd, &error))
             return true;
         if (!error.empty())
             lastError = error;
@@ -443,6 +444,7 @@ bool GpioInput::requestLines(const std::vector<int> &offsets, int *lineFd, std::
 
 bool GpioInput::requestLinesFromChip(const std::string &chipPath,
                                      const std::vector<int> &offsets,
+                                     bool edges,
                                      int *lineFd,
                                      std::string *errorMessage) const
 {
@@ -460,6 +462,8 @@ bool GpioInput::requestLinesFromChip(const std::string &chipPath,
     std::snprintf(request.consumer, sizeof(request.consumer), "apertar-gpio-input");
     request.num_lines = static_cast<__u32>(offsets.size());
     request.config.flags = GPIO_V2_LINE_FLAG_INPUT;
+    if (edges)
+        request.config.flags |= GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
     if (config_.activeLow)
         request.config.flags |= GPIO_V2_LINE_FLAG_ACTIVE_LOW;
     const std::string pull = normalizeToken(config_.pull);
@@ -543,19 +547,109 @@ void GpioInput::run()
 
     std::vector<RuntimeButton> buttons;
     std::vector<RuntimeEncoder> encoders;
+    std::unordered_map<int, int> indexByOffset;
+    for (size_t i = 0; i < offsets.size(); ++i)
+        indexByOffset[offsets[i]] = static_cast<int>(i);
+    bool edgeEvents = false;
+    uint64_t bits = 0;
+
+    const auto toMs = [](std::chrono::steady_clock::time_point at) {
+        return static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(at.time_since_epoch()).count());
+    };
+
+    // One sample of every line: buttons are debounced and counted, encoders stepped.
+    const auto process = [&](uint64_t levels, std::chrono::steady_clock::time_point now) {
+        const int64_t nowMs = toMs(now);
+        for (RuntimeButton &button : buttons) {
+            const bool level = (levels & (1ULL << button.lineIndex)) != 0;
+            if (!button.haveSample) {
+                // Like Cinemate: a button that already reads pressed at start is wired the other way round (a 1-0-1,
+                // normally closed button), so its levels are swapped from now on.
+                button.inverted = level;
+                if (level)
+                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                button.observedChangedAt = now;
+                button.haveSample = true;
+            }
+            const bool pressed = level != button.inverted;
+            if (pressed != button.observedPressed) {
+                button.observedPressed = pressed;
+                button.observedChangedAt = now;
+            } else {
+                const auto stableForMs =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - button.observedChangedAt).count();
+                if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed)
+                    button.stablePressed = button.observedPressed;
+            }
+            for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
+                switch (event) {
+                case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
+                case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
+                case hardware::ButtonGesture::Event::Double: emitAction(button.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: emitAction(button.triple); break;
+                case hardware::ButtonGesture::Event::Hold: emitAction(button.hold); break;
+                }
+            }
+        }
+
+        for (RuntimeEncoder &encoder : encoders) {
+            const int a = (levels & (1ULL << encoder.lineAIndex)) ? 1 : 0;
+            const int b = (levels & (1ULL << encoder.lineBIndex)) ? 1 : 0;
+            const int state = (a << 1) | b;
+            if (encoder.lastState < 0) {
+                encoder.lastState = state;
+                continue;
+            }
+            int delta = quadratureDelta(encoder.lastState, state);
+            encoder.lastState = state;
+            if (encoder.invertDirection)
+                delta = -delta;
+            if (delta == 0)
+                continue;
+
+            encoder.accumulatedSteps += delta;
+            while (encoder.accumulatedSteps >= encoder.stepsPerEvent) {
+                if (!encoder.clockwise.empty() && rotationCallback_)
+                    rotationCallback_(encoder.clockwise);
+                encoder.accumulatedSteps -= encoder.stepsPerEvent;
+            }
+            while (encoder.accumulatedSteps <= -encoder.stepsPerEvent) {
+                if (!encoder.counterClockwise.empty() && rotationCallback_)
+                    rotationCallback_(encoder.counterClockwise);
+                encoder.accumulatedSteps += encoder.stepsPerEvent;
+            }
+        }
+    };
+
+    // How long the thread may sleep with no edge: until a press settles or a click, long press or Hold is due.
+    // Never past kIdleWakeMs, so stop() is noticed.
+    const auto sleepMs = [&](int64_t nowMs) {
+        constexpr int64_t kIdleWakeMs = 250;
+        int64_t wakeMs = nowMs + kIdleWakeMs;
+        for (const RuntimeButton &button : buttons) {
+            if (button.observedPressed != button.stablePressed)   // + 1: the change time was rounded down
+                wakeMs = std::min(wakeMs, toMs(button.observedChangedAt) + config_.debounceMs + 1);
+            if (const int64_t gestureMs = button.gesture.nextWakeMs(); gestureMs >= 0)
+                wakeMs = std::min(wakeMs, gestureMs);
+        }
+        return static_cast<int>(std::max<int64_t>(0, wakeMs - nowMs));
+    };
 
     while (running_.load(std::memory_order_relaxed)) {
         if (lineFd < 0) {
             std::string errorMessage;
-            if (!requestLines(offsets, &lineFd, &errorMessage)) {
+            // Edge events first, so the thread sleeps until a pin changes, the way Cinemate's gpiozero buttons wait.
+            // A chip that cannot give them (no interrupt behind its lines) is read every poll_ms instead.
+            edgeEvents = requestLines(offsets, true, &lineFd, &errorMessage);
+            if (!edgeEvents && !requestLines(offsets, false, &lineFd, &errorMessage)) {
                 setLastError(errorMessage);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
-
-            std::unordered_map<int, int> indexByOffset;
-            for (size_t i = 0; i < offsets.size(); ++i)
-                indexByOffset[offsets[i]] = static_cast<int>(i);
+            if (!edgeEvents)
+                std::cerr << "GPIO input: these lines give no edge events; reading them every " << config_.pollMs
+                          << " ms.\n";
 
             buttons.clear();
             encoders.clear();
@@ -596,79 +690,54 @@ void GpioInput::run()
                 }
             }
             setLastError({});
+            if (edgeEvents) {
+                // The starting levels, before any edge: they decide which buttons are 1-0-1.
+                if (!readLineValues(lineFd, offsets.size(), &bits)) {
+                    setLastError("read failed: " + std::string(std::strerror(errno)));
+                    closeFd(&lineFd);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    continue;
+                }
+                process(bits, std::chrono::steady_clock::now());
+            }
         }
 
-        uint64_t bits = 0;
+        if (edgeEvents) {
+            pollfd ready{lineFd, POLLIN, 0};
+            const int count = ::poll(&ready, 1, sleepMs(toMs(std::chrono::steady_clock::now())));
+            if (count < 0 && errno != EINTR) {
+                setLastError("wait failed: " + std::string(std::strerror(errno)));
+                closeFd(&lineFd);
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                continue;
+            }
+            if (count > 0 && (ready.revents & POLLIN)) {
+                // Each edge in order, so an encoder sees every step even when several came in between.
+                std::array<gpio_v2_line_event, 16> events{};
+                const ssize_t got = ::read(lineFd, events.data(), sizeof(events));
+                const auto now = std::chrono::steady_clock::now();
+                for (ssize_t i = 0; got > 0 && i < got / static_cast<ssize_t>(sizeof(gpio_v2_line_event)); ++i) {
+                    const auto it = indexByOffset.find(static_cast<int>(events[i].offset));
+                    if (it == indexByOffset.end())
+                        continue;
+                    const uint64_t bit = 1ULL << it->second;
+                    bits = events[i].id == GPIO_V2_LINE_EVENT_RISING_EDGE ? (bits | bit) : (bits & ~bit);
+                    process(bits, now);
+                }
+            }
+        }
+
+        // With edge events this also catches up with any edge the kernel dropped, and moves the timers on.
         if (!readLineValues(lineFd, offsets.size(), &bits)) {
             setLastError("read failed: " + std::string(std::strerror(errno)));
             closeFd(&lineFd);
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             continue;
         }
+        process(bits, std::chrono::steady_clock::now());
 
-        const auto now = std::chrono::steady_clock::now();
-        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        for (RuntimeButton &button : buttons) {
-            const bool level = (bits & (1ULL << button.lineIndex)) != 0;
-            if (!button.haveSample) {
-                // Like Cinemate: a button that already reads pressed at start is wired the other way round (a 1-0-1,
-                // normally closed button), so its levels are swapped from now on.
-                button.inverted = level;
-                if (level)
-                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
-                button.observedChangedAt = now;
-                button.haveSample = true;
-            }
-            const bool pressed = level != button.inverted;
-            if (pressed != button.observedPressed) {
-                button.observedPressed = pressed;
-                button.observedChangedAt = now;
-            } else {
-                const auto stableForMs =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - button.observedChangedAt).count();
-                if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed)
-                    button.stablePressed = button.observedPressed;
-            }
-            for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
-                switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(button.doubleClick); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(button.triple); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(button.hold); break;
-                }
-            }
-        }
-
-        for (RuntimeEncoder &encoder : encoders) {
-            const int a = (bits & (1ULL << encoder.lineAIndex)) ? 1 : 0;
-            const int b = (bits & (1ULL << encoder.lineBIndex)) ? 1 : 0;
-            const int state = (a << 1) | b;
-            if (encoder.lastState < 0) {
-                encoder.lastState = state;
-                continue;
-            }
-            int delta = quadratureDelta(encoder.lastState, state);
-            encoder.lastState = state;
-            if (encoder.invertDirection)
-                delta = -delta;
-            if (delta == 0)
-                continue;
-
-            encoder.accumulatedSteps += delta;
-            while (encoder.accumulatedSteps >= encoder.stepsPerEvent) {
-                if (!encoder.clockwise.empty() && rotationCallback_)
-                    rotationCallback_(encoder.clockwise);
-                encoder.accumulatedSteps -= encoder.stepsPerEvent;
-            }
-            while (encoder.accumulatedSteps <= -encoder.stepsPerEvent) {
-                if (!encoder.counterClockwise.empty() && rotationCallback_)
-                    rotationCallback_(encoder.counterClockwise);
-                encoder.accumulatedSteps += encoder.stepsPerEvent;
-            }
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(config_.pollMs));
+        if (!edgeEvents)
+            std::this_thread::sleep_for(std::chrono::milliseconds(config_.pollMs));
     }
 
     closeFd(&lineFd);

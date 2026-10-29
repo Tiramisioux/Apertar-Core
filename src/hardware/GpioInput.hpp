@@ -90,9 +90,10 @@ private:
 
     static Config loadConfig();
     void run();
-    bool requestLines(const std::vector<int> &offsets, int *lineFd, std::string *errorMessage) const;
+    bool requestLines(const std::vector<int> &offsets, bool edges, int *lineFd, std::string *errorMessage) const;
     bool requestLinesFromChip(const std::string &chipPath,
                               const std::vector<int> &offsets,
+                              bool edges,
                               int *lineFd,
                               std::string *errorMessage) const;
     bool readLineValues(int lineFd, size_t lineCount, uint64_t *bits) const;

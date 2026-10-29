@@ -193,7 +193,7 @@ inline std::vector<SettingSpec> peripheralSettings(const std::string &section)
             {"active_low", "Pressed reads low (button to GND)", "bool", "true", "", 0, 0},
             {"pull", "Pull", "choice", "up", "up,down,none", 0, 0},
             {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
-            {"poll_ms", "Poll every (ms)", "number", "12", "", 1, 1000},
+            {"poll_ms", "Poll every (ms), chips without edge events", "number", "12", "", 1, 1000},
             {"chip", "GPIO chip", "text", "auto", "", 0, 0},
         };
     if (section == "neorotary4")
