@@ -4644,12 +4644,7 @@ path5=
 [imu]
 enabled=false
 driver=mpu6050
-bus=10
-address=0x68
-sample_rate_hz=500
-gyro_range_dps=2000
-accel_range_g=8
-orientation=XYZ
+sync_mode=free_run
 sync_offset_ms=0
 
 [pcf8574]
@@ -4661,13 +4656,30 @@ sync_offset_ms=0
 # standby (alias standby_toggle) sleeps on press; a button press wakes only.
 # Example: P2=standby or encoder0_press=standby. Put standby last in a group.
 enabled=false
-bus=10
+bus=1
 address=0x20
+
+[neorotary4]
+# Optional Adafruit NeoRotary 4 / seesaw quad rotary encoder. Each knob has clockwise, counter-clockwise and press actions.
+# Actions use the same names as [pcf8574]. Set an action to none to disable it.
+enabled=false
+bus=1
+address=0x49
 
 [gpio]
 # GPIO button actions use the same names as [pcf8574].
 # Example: d17=recindicatorled reserves GPIO17 as the recording LED output.
 enabled=false
+
+[gpio_encoders]
+# Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].
+enabled=false
+
+[grove_analog]
+# Optional Grove Base HAT analog controls: potentiometers, sliders, rotary angle sensors.
+enabled=false
+bus=1
+address=0x04
 
 [trigger_output]
 # Optional capture trigger pulse for DIY hot shoe, flash sync, tally, or accessories.
@@ -7561,6 +7573,22 @@ bool ApertarCoreApp::start()
     recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
     syncRecordingTracking(camera_.isRecording());
 
+    // T37: validate the hardware file once, say what it holds, and pin the version Core found. Nothing is changed.
+    {
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const hardware::StoreInfo info = store.info();
+        const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, hardwareConfigFacts());
+        const size_t errors = controlsErrorCount(issues);
+        controlsErrors_ = errors;
+        controlsWarnings_ = issues.size() - errors;
+        const bool adopted = store.adopt();
+        std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
+                  << errors << " errors, " << issues.size() - errors << " warnings"
+                  << (adopted ? "; adopted, nothing changed" : "") << "\n";
+        for (size_t i = 0; i < issues.size() && i < 10; ++i)
+            std::cerr << "ApertarCore controls: " << (issues[i].error ? "error: " : "warning: ") << issues[i].message << "\n";
+    }
+
     publishEvent("{\"event\":\"camera_state\",\"state\":\"ready\"}");
     return true;
 }
@@ -8743,6 +8771,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording\":" << (recording ? "true" : "false")
         << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
         << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
+        << ",\"controls_errors\":" << controlsErrors_.load()
+        << ",\"controls_warnings\":" << controlsWarnings_.load()
         << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
         << ",\"fps_phase_lock_err_us\":" << jsonNumber(phaseLockStatus.errorUs, 1)
         << ",\"fps_phase_lock_dur_us\":" << phaseLockStatus.durationUs
@@ -10315,6 +10345,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         const hardware::StoreInfo info = store.info();
         const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, hardwareConfigFacts());
         const size_t errors = controlsErrorCount(issues);
+        controlsErrors_ = errors;
+        controlsWarnings_ = issues.size() - errors;
         std::ostringstream body;
         body << "\"controls\":{\"revision\":\"" << escapeJson(info.revision) << "\""
              << ",\"path\":\"" << escapeJson(store.path().string()) << "\""
@@ -10545,6 +10577,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
                 ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
         }
+        if (result.written) {
+            controlsErrors_ = controlsErrorCount(result.issues);
+            controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+        }
         std::ostringstream body;
         body << "\"revision\":\"" << escapeJson(result.revision) << "\""
              << ",\"written\":" << (result.written ? "true" : "false")
@@ -10575,6 +10611,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
              << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
+             << ",\"controls_errors\":" << controlsErrors_.load()
+             << ",\"controls_warnings\":" << controlsWarnings_.load()
              << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
              << ",\"timelapse_active\":" << (camera_.timelapseActive() ? "true" : "false")
              << ",\"timelapse_interval_seconds\":" << camera_.timelapseIntervalSeconds()

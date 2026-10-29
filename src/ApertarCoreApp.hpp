@@ -132,6 +132,8 @@ private:
     AudioRecordingSession soundRecorder_;
     std::atomic<bool> soundRecordingActive_{false};
     std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
+    std::atomic<size_t> controlsErrors_{0};        // T37: what the validator found in the hardware file, shown in state
+    std::atomic<size_t> controlsWarnings_{0};
     std::string soundRecordingFolder_;
 
     std::atomic<bool> running_{false};
