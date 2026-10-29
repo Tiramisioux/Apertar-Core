@@ -57,6 +57,7 @@
 #endif
 
 #include "playback/ClipProbe.hpp"
+#include "playback/PlaybackFrames.hpp"
 #include "playback/PlaybackHold.hpp"
 
 namespace apertar {
@@ -7682,6 +7683,81 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
+    if (request.method == "GET" && request.path == "/api/media/frame") {
+        // T48: one picture of a cDNG clip, by frame number. The hold first: nothing reads the card in a take.
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        const auto requestedKind = queryParameterValue(request.query, "kind");
+        const auto requestedId = queryParameterValue(request.query, "id");
+        const auto requestedN = queryParameterValue(request.query, "n");
+        const auto requestedW = queryParameterValue(request.query, "w");
+        const auto requestedV = queryParameterValue(request.query, "v");
+        const auto toNumber = [](const std::optional<std::string> &text, uint64_t &out) {
+            if (!text || text->empty() || text->size() > 18 || text->find_first_not_of("0123456789") != std::string::npos)
+                return false;
+            out = std::stoull(*text);
+            return true;
+        };
+        uint64_t number = 0, width = 0;
+        if (!requestedKind || *requestedKind != "folder" || !requestedId || !toNumber(requestedN, number) ||
+            !toNumber(requestedW, width) || !playback::allowedFrameWidth(static_cast<uint32_t>(width))) {
+            response.status = 400;
+            response.body = errorReply(-1, "A frame needs kind=folder, id, n and a width of 320, 480, 640, 960, 1280 or 1920.");
+            return response;
+        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
+            response.status = 409;
+            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
+            return response;
+        }
+        const std::filesystem::path mediaRoot(options_.mediaRoot);
+        const auto itemPath = resolveMediaLibraryPath(mediaRoot, *requestedId);
+        if (!itemPath || !std::filesystem::is_directory(*itemPath)) {
+            response.status = 404;
+            response.body = "{\"ok\":false,\"error\":\"This clip was removed.\",\"gone\":true}";
+            return response;
+        }
+        const playback::ClipFacts facts = clipFactsCache().get(*itemPath);
+        if (!facts.ok) {
+            response.status = 404;
+            response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
+            return response;
+        }
+        if (requestedV && *requestedV != facts.token) {
+            response.status = 404;
+            response.body = errorReply(-1, "The clip changed. Refresh Media.");
+            return response;
+        }
+        const playback::FrameOut frame = playback::frameJpeg(
+            *requestedId, *itemPath, facts.frames, number, static_cast<uint32_t>(width), facts.token,
+            [] { return playbackYield().active(playbackNowMs()); });
+        if (frame.status != 200) {
+            response.status = frame.status;
+            if (frame.status == 409) {
+                // The read stopped because a take, a media test or an eject began: name the hold.
+                std::string why = playbackHoldReason();
+                if (why.empty()) why = "recording";
+                response.body = "{\"ok\":false,\"error\":\"Playback held: " + why + ".\",\"hold\":\"" + why + "\"}";
+            }
+            else if (frame.busy)
+                response.body = "{\"ok\":false,\"busy\":true}";
+            else
+                response.body = errorReply(-1, frame.error);
+            return response;
+        }
+        response.contentType = "image/jpeg";
+        response.body.assign(reinterpret_cast<const char *>(frame.jpeg.data()), frame.jpeg.size());
+        response.headers.push_back({"X-Frame-Number", std::to_string(frame.number)});
+        response.headers.push_back({"X-Frame-Index", std::to_string(frame.index)});
+        response.headers.push_back({"X-Frame-Count", std::to_string(frame.count)});
+        response.headers.push_back({"X-Histogram", frame.histogram});
+        response.headers.push_back({"X-Frame-Source", frame.fromCache ? "cache" : "decode"});
+        char decodeBuf[32];
+        std::snprintf(decodeBuf, sizeof decodeBuf, "%.1f", frame.decodeMs);
+        response.headers.push_back({"X-Decode-Ms", decodeBuf});
+        return response;
+    }
+
     if (request.method == "GET" && request.path == "/api/config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
@@ -9844,6 +9920,8 @@ void ApertarCoreApp::runMediaWatcher()
             else if (hold == "media") kept = playback::Hold::Media;
             playbackYield().yieldFor(kept, playbackNowMs(), 1500);
         }
+        // T48: idle decode slots give their memory back (30 s idle, or at once in a hold); no new thread.
+        playback::trimIdleFrameSlots(playbackNowMs(), !playbackHoldReason(false).empty());
         std::unique_lock<std::mutex> lock(mediaStateMutex_);
         mediaWatcherCv_.wait_for(lock, std::chrono::milliseconds(camera_.isRecording() ? 250 : 1000),
                                  [this] { return !mediaWatcherRunning_.load(std::memory_order_acquire); });

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(ApertarCore
     VERSION 0.1.0
     DESCRIPTION "Cinema-first libcamera backend for Apertar UI"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # ApertarCore is a real-time capture application. A CMake tree configured
@@ -74,6 +74,8 @@ add_executable(apertar-core
     src/camera/CameraController.cpp
     src/cdng/CdngEncoder.cpp
     src/cdng/LosslessJpegEncoder.cpp
+    src/playback/PlaybackFrames.cpp
+    third_party/liblj92/lj92.c
     src/color/ColorProfileConfig.cpp
     src/color/ProresIspProfile.cpp
     src/lossydng/LossyDngEncoder.cpp
@@ -98,6 +100,7 @@ add_executable(apertar-core
 set(APERTARCORE_PRIVATE_INCLUDE_DIRS
     include
     src
+    third_party/liblj92
 )
 
 if(TURBOJPEG_INCLUDE_DIR)
