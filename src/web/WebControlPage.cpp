@@ -2846,6 +2846,87 @@ std::string_view webControlPageHtml()
       padding-left: 18px;
     }
 
+    .config-issues.info {
+      border-color: #3f3f46;
+    }
+
+    .controls-group {
+      margin: 0 0 18px;
+    }
+
+    .controls-group-title {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .controls-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr) auto;
+      gap: 12px 18px;
+      align-items: center;
+      padding: 12px 14px;
+      margin: 0 0 8px;
+      border: 1px solid #27272a;
+      border-radius: 18px;
+      background: rgba(9, 9, 11, 0.45);
+    }
+
+    .controls-row.off,
+    .controls-row.removed {
+      opacity: 0.55;
+    }
+
+    .controls-row.changed {
+      border-color: #a1a1aa;
+    }
+
+    .controls-row-title {
+      font-weight: 700;
+    }
+
+    .controls-row-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .controls-row-detail {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .controls-line {
+      display: grid;
+      grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr);
+      gap: 10px;
+      align-items: center;
+      margin: 3px 0;
+    }
+
+    .controls-line-label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .controls-add {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 12px;
+      align-items: end;
+      margin: 8px 0 18px;
+    }
+
+    @media (max-width: 720px) {
+      .controls-row,
+      .controls-line,
+      .controls-add {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
     .config-meta-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5219,6 +5300,37 @@ std::string_view webControlPageHtml()
             <div class="settings-card">
               <div class="settings-card-head">
                 <div>
+                  <h3 class="settings-card-title">Controls</h3>
+                  <p class="settings-card-copy">Choose what each button and knob does. This writes the same file as the text editor below; a saved change takes effect when Apertar Core restarts.</p>
+                </div>
+                <div class="online-pill" id="controlsStatePill">Not Loaded</div>
+              </div>
+
+              <div class="config-issues" id="controlsMessage" hidden></div>
+              <div id="controlsRows"></div>
+
+              <div class="controls-add" id="controlsAdd" hidden>
+                <label class="field-stack">
+                  <span class="input-label">Add a GPIO button</span>
+                  <select class="settings-select" id="controlsAddPin"></select>
+                </label>
+                <label class="field-stack">
+                  <span class="input-label">Press does</span>
+                  <select class="settings-select" id="controlsAddAction"></select>
+                </label>
+                <button class="secondary-button" id="controlsAddButton" type="button">Add button</button>
+              </div>
+
+              <div class="settings-action-row">
+                <button class="secondary-button" id="reloadControlsButton" type="button">Reload</button>
+                <button class="primary-button" id="saveControlsButton" type="button" disabled>Save Controls</button>
+                <span class="subtle-note">Saved changes are checked first and kept in the file's history. Restart Apertar Core to apply them.</span>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <div>
                   <h3 class="settings-card-title">Apertar Config</h3>
                   <p class="settings-card-copy">Edit the hardware, display, input, media, and IMU config file used by ApertarCore and the native UI.</p>
                 </div>
@@ -5665,7 +5777,7 @@ std::string_view webControlPageHtml()
       },
       config: {
         title: "Config",
-        copy: "Edit the Apertar hardware and display config file.",
+        copy: "What each button and knob does, and the hardware and display config file as text.",
       },
       info: {
         title: "Info",
@@ -8842,6 +8954,8 @@ std::string_view webControlPageHtml()
 
       if (normalized === "presets")
         fetchPresetLibrary(true);
+      if (normalized === "config" && !controlsDirty())
+        void loadControls(true);
       if (normalized === "config" && !state.configDirty)
         fetchConfigFile(true);
       if (normalized === "record" && state.snapshot)
@@ -14189,6 +14303,358 @@ std::string_view webControlPageHtml()
       setText("settingsConfigStatePill", status);
     }
 
+    // ---- Controls: one row per button, knob and pin, each line a dropdown of actions ----------------------------
+    const controlsState = {
+      loading: false,
+      saving: false,
+      revision: "",
+      model: null,
+      catalog: null,
+      edits: new Map(),      // "section|key" -> { section, key, value } for every line changed here
+      added: [],             // GPIO buttons added on this page: { pin, key }
+      removed: new Set(),    // keys of GPIO buttons marked for removal
+    };
+    const controlsGroups = [
+      { source: "gpio_buttons", title: "GPIO buttons" },
+      { source: "neorotary4", title: "NeoRotary 4 knobs" },
+      { source: "pcf8574", title: "PCF8574 pins" },
+      { source: "gpio_encoders", title: "GPIO encoders" },
+    ];
+
+    function controlsDirty() {
+      return controlsState.edits.size > 0 || controlsState.removed.size > 0;
+    }
+
+    async function controlsCall(payload) {
+      const response = await fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return await response.json();
+    }
+
+    function updateControlsButtons() {
+      const saveButton = document.getElementById("saveControlsButton");
+      const reloadButton = document.getElementById("reloadControlsButton");
+      const busy = controlsState.loading || controlsState.saving;
+      if (saveButton)
+        saveButton.disabled = busy || !controlsDirty();
+      if (reloadButton)
+        reloadButton.disabled = busy;
+      setText("controlsStatePill", controlsState.loading ? "Loading" : controlsState.saving ? "Saving" : controlsDirty() ? "Unsaved" : "Ready");
+    }
+
+    function showControlsMessage(title, issues, isInfo) {
+      const box = document.getElementById("controlsMessage");
+      if (!box)
+        return;
+      const list = Array.isArray(issues) ? issues : [];
+      box.textContent = "";
+      box.classList.toggle("info", !!isInfo);
+      if (!title && list.length === 0) {
+        box.hidden = true;
+        return;
+      }
+      const head = document.createElement("div");
+      head.textContent = title;
+      box.appendChild(head);
+      if (list.length > 0) {
+        const items = document.createElement("ul");
+        list.slice(0, 20).forEach((issue) => {
+          const item = document.createElement("li");
+          item.textContent = (issue.line ? "Line " + issue.line + ": " : "") + issue.message;
+          items.appendChild(item);
+        });
+        box.appendChild(items);
+      }
+      box.hidden = false;
+    }
+
+    // The actions a line may run: the catalog without the families that need a value (iso200 and the like).
+    // A turn gets only the stepping actions (ISO up, shutter down...): anything else would start or stop
+    // something on every detent. A value already in the file stays selectable.
+    function controlsActionGroups(isTurn) {
+      const groups = [];
+      const byName = new Map();
+      ((controlsState.catalog && controlsState.catalog.actions) || []).forEach((action) => {
+        if (action.token || !(isTurn ? action.rotation && action.stepping : action.button))
+          return;
+        if (!byName.has(action.group)) {
+          const group = { name: action.group, actions: [] };
+          byName.set(action.group, group);
+          groups.push(group);
+        }
+        byName.get(action.group).actions.push(action);
+      });
+      return groups;
+    }
+
+    function controlsLineValue(section, line) {
+      const edit = controlsState.edits.get(section + "|" + line.key);
+      return edit ? edit.value : line.raw;
+    }
+
+    function buildControlsSelect(section, line, value) {
+      const isTurn = /_(cw|ccw)$/.test(line.key);
+      const select = document.createElement("select");
+      select.className = "settings-select";
+      const none = document.createElement("option");
+      none.value = "none";
+      none.textContent = "Nothing";
+      select.appendChild(none);
+      let known = value === "" || value === "none";
+      controlsActionGroups(isTurn).forEach((group) => {
+        const optgroup = document.createElement("optgroup");
+        optgroup.label = group.name;
+        group.actions.forEach((action) => {
+          const option = document.createElement("option");
+          option.value = action.id;
+          option.textContent = action.label;
+          optgroup.appendChild(option);
+          if (action.id === value)
+            known = true;
+        });
+        select.appendChild(optgroup);
+      });
+      if (!known) {                                  // several actions, a value family, or something written by hand
+        const custom = document.createElement("option");
+        custom.value = value;
+        custom.textContent = value + " (as written in the file)";
+        select.appendChild(custom);
+      }
+      select.value = value === "" ? "none" : value;
+      return select;
+    }
+
+    function setControlsValue(section, line, value) {
+      const id = section + "|" + line.key;
+      const original = line.raw === "" ? "none" : line.raw;
+      const isAdded = controlsState.added.some((entry) => entry.key === line.key);
+      if (value === original && !isAdded)
+        controlsState.edits.delete(id);
+      else
+        controlsState.edits.set(id, { section: section, key: line.key, value: value });
+      renderControls();
+    }
+
+    function buildControlsRow(row, isNew) {
+      const section = row.source;
+      const element = document.createElement("div");
+      const removed = row.source === "gpio_buttons" && controlsState.removed.has(row.lines[0].key);
+      const changed = row.lines.some((line) => controlsState.edits.has(section + "|" + line.key));
+      element.className = "controls-row" + (row.enabled ? "" : " off") + (removed ? " removed" : "") + (changed || isNew ? " changed" : "");
+      const head = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "controls-row-title";
+      title.textContent = row.title + (isNew ? " (new)" : "");
+      head.appendChild(title);
+      if (row.detail) {
+        const detail = document.createElement("div");
+        detail.className = "controls-row-detail";
+        detail.textContent = row.detail;
+        head.appendChild(detail);
+      }
+      element.appendChild(head);
+      const actions = document.createElement("div");
+      actions.className = "controls-row-actions";
+      if (row.source === "gpio_buttons") {
+        const key = row.lines[0].key;
+        const remove = document.createElement("button");
+        remove.className = (removed ? "secondary-button" : "danger-button") + " preset-action";
+        remove.type = "button";
+        remove.textContent = removed ? "Undo" : "Remove";
+        remove.setAttribute("aria-label", (removed ? "Keep " : "Remove ") + row.title);
+        remove.addEventListener("click", () => {
+          if (isNew) {
+            controlsState.added = controlsState.added.filter((entry) => entry.key !== key);
+            controlsState.edits.delete(section + "|" + key);
+          } else if (removed) {
+            controlsState.removed.delete(key);
+          } else {
+            controlsState.removed.add(key);
+            controlsState.edits.delete(section + "|" + key);
+          }
+          renderControls();
+        });
+        actions.appendChild(remove);
+      }
+      const lines = document.createElement("div");
+      row.lines.forEach((line) => {
+        const wrap = document.createElement("div");
+        wrap.className = "controls-line";
+        const label = document.createElement("div");
+        label.className = "controls-line-label";
+        label.textContent = line.label;
+        const select = buildControlsSelect(section, line, controlsLineValue(section, line));
+        select.disabled = removed || controlsState.saving;
+        select.addEventListener("change", () => setControlsValue(section, line, select.value));
+        wrap.appendChild(label);
+        wrap.appendChild(select);
+        lines.appendChild(wrap);
+      });
+      element.appendChild(lines);
+      element.appendChild(actions);
+      return element;
+    }
+
+    function renderControls() {
+      const host = document.getElementById("controlsRows");
+      const model = controlsState.model;
+      if (!host || !model)
+        return;
+      host.textContent = "";
+      const sections = {};
+      (model.sections || []).forEach((entry) => { sections[entry.name] = entry; });
+      controlsGroups.forEach((group) => {
+        const rows = (model.rows || []).filter((row) => row.source === group.source);
+        const added = group.source === "gpio_buttons" ? controlsState.added : [];
+        if (rows.length === 0 && added.length === 0)
+          return;
+        const on = !!(sections[group.source] && sections[group.source].enabled);
+        const wrap = document.createElement(on ? "div" : "details");
+        wrap.className = "controls-group";
+        const title = document.createElement(on ? "div" : "summary");
+        title.className = "controls-group-title";
+        title.textContent = group.title + (on ? "" : " (switched off in the file)");
+        wrap.appendChild(title);
+        rows.forEach((row) => wrap.appendChild(buildControlsRow(row, false)));
+        added.forEach((entry) => {
+          wrap.appendChild(buildControlsRow({
+            source: "gpio_buttons", title: "GPIO " + entry.pin, detail: "", pin: entry.pin, enabled: on,
+            lines: [{ label: "Press", key: entry.key, raw: "", actions: [] }],
+          }, true));
+        });
+        host.appendChild(wrap);
+      });
+      renderControlsAdd();
+      updateControlsButtons();
+    }
+
+    function renderControlsAdd() {
+      const box = document.getElementById("controlsAdd");
+      const pinSelect = document.getElementById("controlsAddPin");
+      const actionSelect = document.getElementById("controlsAddAction");
+      const model = controlsState.model;
+      if (!box || !model)
+        return;
+      const buttons = (model.sections || []).find((entry) => entry.name === "gpio_buttons");
+      const taken = new Set(controlsState.added.map((entry) => entry.pin));
+      const free = ((model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
+      box.hidden = !(buttons && buttons.enabled);
+      pinSelect.textContent = "";
+      free.forEach((pin) => {
+        const option = document.createElement("option");
+        option.value = String(pin);
+        option.textContent = "GPIO " + pin;
+        pinSelect.appendChild(option);
+      });
+      actionSelect.textContent = "";
+      controlsActionGroups(false).forEach((group) => {
+        const optgroup = document.createElement("optgroup");
+        optgroup.label = group.name;
+        group.actions.forEach((action) => {
+          const option = document.createElement("option");
+          option.value = action.id;
+          option.textContent = action.label;
+          optgroup.appendChild(option);
+        });
+        actionSelect.appendChild(optgroup);
+      });
+    }
+
+    function addControlsButton() {
+      const pin = parseInt(document.getElementById("controlsAddPin").value, 10);
+      const action = document.getElementById("controlsAddAction").value;
+      if (!Number.isFinite(pin) || !action)
+        return;
+      const key = "d" + pin;
+      controlsState.added.push({ pin: pin, key: key });
+      controlsState.edits.set("gpio_buttons|" + key, { section: "gpio_buttons", key: key, value: action });
+      renderControls();
+    }
+
+    async function loadControls(silent, discard) {
+      if (controlsState.loading)
+        return;
+      if (controlsDirty() && discard && !window.confirm("Reload and discard the changes you have not saved?"))
+        return;
+      controlsState.loading = true;
+      updateControlsButtons();
+      try {
+        const [controls, catalog] = await Promise.all([
+          controlsCall({ cmd: "get_controls" }),
+          controlsState.catalog ? Promise.resolve(null) : controlsCall({ cmd: "list_actions" }),
+        ]);
+        if (!controls.ok)
+          throw new Error(controls.error || "Could not load the controls.");
+        if (catalog) {
+          if (!catalog.ok)
+            throw new Error(catalog.error || "Could not load the list of actions.");
+          controlsState.catalog = catalog;
+        }
+        controlsState.revision = String(controls.controls.revision || "");
+        controlsState.model = controls.controls.model || null;
+        controlsState.edits = new Map();
+        controlsState.added = [];
+        controlsState.removed = new Set();
+        const found = controls.controls;
+        if (found.errors > 0)
+          showControlsMessage("The file has " + found.errors + (found.errors === 1 ? " error" : " errors") + ". Config shows where.", found.issues.filter((issue) => issue.error), false);
+        else if (found.replaced && found.replaced.replaced)
+          showControlsMessage("The file was replaced. " + found.replaced.reason + " Config can restore the version saved at " + (found.replaced.saved_at || "an earlier time") + ".", [], false);
+        else
+          showControlsMessage("", [], true);
+        if (!controlsState.model)
+          throw new Error("This Apertar Core does not describe its controls yet. Restart it after the update.");
+        renderControls();
+        if (!silent)
+          showToast("Controls loaded.", false);
+      } catch (error) {
+        showControlsMessage(error.message || "Could not load the controls.", [], false);
+        if (!silent)
+          showToast(error.message || "Could not load the controls.", true);
+      } finally {
+        controlsState.loading = false;
+        updateControlsButtons();
+      }
+    }
+
+    async function saveControls() {
+      if (!controlsDirty() || controlsState.saving)
+        return;
+      const payload = { cmd: "set_controls", base: controlsState.revision, by: "webui" };
+      controlsState.edits.forEach((edit) => { payload["set." + edit.section + "." + edit.key] = edit.value; });
+      controlsState.removed.forEach((key) => { payload["unset.gpio_buttons." + key] = "true"; });
+      controlsState.saving = true;
+      renderControls();
+      try {
+        const result = await controlsCall(payload);
+        if (!result.ok) {
+          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
+          const kept = result.code === "stale" || result.code === "conflict"
+            ? " Your choices stay on the page. Press Reload to see the newer file." : "";
+          showControlsMessage((result.error || "Could not save the controls.") + kept, found, false);
+          showToast(result.error || "Could not save the controls.", true);
+          return;
+        }
+        controlsState.saving = false;
+        await loadControls(true);
+        if (!state.configDirty)
+          await fetchConfigFile(true);     // the text editor below shows the same file
+        showControlsMessage("Saved. Restart Apertar Core to apply the change.", result.issues, true);
+        showToast("Controls saved.", false);
+      } catch (error) {
+        showControlsMessage(error.message || "Could not save the controls.", [], false);
+        showToast(error.message || "Could not save the controls.", true);
+      } finally {
+        controlsState.saving = false;
+        updateControlsButtons();
+        if (controlsState.model)
+          renderControls();
+      }
+    }
+
     // The box under the editor: what Core found in the text, with line numbers. Empty title and list hide it.
     function showConfigIssues(title, issues) {
       const box = document.getElementById("settingsConfigIssues");
@@ -14289,6 +14755,8 @@ std::string_view webControlPageHtml()
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
         await fetchConfigFile(true);
+        if (!controlsDirty())
+          await loadControls(true);        // the Controls card above shows the same file
         const found = Array.isArray(payload.issues) ? payload.issues : [];
         if (found.length > 0)
           showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
@@ -15450,6 +15918,9 @@ std::string_view webControlPageHtml()
         await importPresetFiles(event.target.files);
         event.target.value = "";
       });
+      document.getElementById("reloadControlsButton").addEventListener("click", () => loadControls(false, true));
+      document.getElementById("saveControlsButton").addEventListener("click", saveControls);
+      document.getElementById("controlsAddButton").addEventListener("click", addControlsButton);
       document.getElementById("reloadConfigButton").addEventListener("click", () => fetchConfigFile(false, true));
       document.getElementById("saveConfigButton").addEventListener("click", saveConfigFile);
       document.getElementById("settingsConfigEditor").addEventListener("input", () => {
