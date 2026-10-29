@@ -63,7 +63,7 @@ std::string_view webControlPageHtml()
     }
 
     body.settings-open,
-    body.media-browser-open {
+    body.pb-open {
       overflow: hidden;
     }
 
@@ -1721,7 +1721,12 @@ std::string_view webControlPageHtml()
       gap: 16px;
     }
 
-    .media-browser-overlay {
+    /* Playback (T49): the touch UI's Clip Browser, in the WebUI's shell. */
+    body.pb-open {
+      overflow: hidden;
+    }
+
+    .pb-overlay {
       position: fixed;
       inset: 0;
       display: flex;
@@ -1736,300 +1741,509 @@ std::string_view webControlPageHtml()
       overflow: hidden;
     }
 
-    .media-browser-overlay.hidden {
+    .pb-overlay.hidden {
       opacity: 0;
       pointer-events: none;
     }
 
-    .media-browser-shell {
-      width: min(900px, calc(100vw - 32px));
-      height: min(760px, calc(100dvh - 32px));
-      max-height: calc(100dvh - 32px);
+    .pb-shell {
+      position: relative;
+      width: min(1320px, calc(100vw - 32px));
+      height: calc(100dvh - 32px);
       display: flex;
       flex-direction: column;
+      min-height: 0;
       border-radius: 32px;
-      border: 1px solid #27272a;
+      border: 1px solid var(--card-border);
       background: rgba(9, 9, 11, 0.96);
       box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
       overflow: hidden;
+    }
+
+    .pb-page {
+      flex: 1 1 auto;
       min-height: 0;
-    }
-
-    .media-browser-header {
       display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 24px 24px 10px;
-      flex-shrink: 0;
+      flex-direction: column;
+      gap: 18px;
+      padding: 26px 28px 0;
     }
 
-    .media-browser-title-row {
+    .pb-page.hidden,
+    .pb-viewer.hidden {
+      display: none;
+    }
+
+    .pb-header {
       display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-
-    .media-browser-icon {
-      width: 44px;
-      height: 44px;
-      border-radius: 18px;
-      border: 1px solid #27272a;
-      background: rgba(24, 24, 27, 0.86);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-
-    .media-browser-body {
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      padding: 14px 24px 24px;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-      touch-action: pan-y;
-    }
-
-    .media-browser-toolbar {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-    }
-
-    .media-browser-filters {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .media-browser-tools {
-      margin-left: auto;
-      display: flex;
-      flex-direction: row;
       align-items: flex-end;
-      justify-content: flex-end;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .media-browser-tools-row {
-      justify-content: flex-end;
-    }
-
-    .media-filter-button {
-      min-height: 38px;
-      border-radius: 999px;
-      border: 1px solid #27272a;
-      background: rgba(24, 24, 27, 0.72);
-      color: #d4d4d8;
-      padding: 9px 14px;
-      font-size: 12px;
-      font-weight: 500;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      transition: background 0.12s ease, transform 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-    }
-
-    .media-filter-button.active {
-      background: #f4f4f5;
-      color: #09090b;
-      border-color: #f4f4f5;
-    }
-
-    .media-sort-select {
-      min-height: 34px;
-      width: 118px;
-      border-radius: 999px;
-      padding: 7px 30px 7px 12px;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .media-selection-toolbar {
-      display: flex;
-      align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px 16px;
+    }
+
+    .pb-eyebrow {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      color: var(--muted-2);
+    }
+
+    .pb-h1 {
+      margin: 6px 0 0;
+      font-size: 34px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .pb-actions {
+      display: flex;
+      align-items: center;
       gap: 10px;
-      margin: -2px 0 14px;
-      padding: 10px;
       flex-wrap: wrap;
-      border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(24, 24, 27, 0.48);
     }
 
-    .media-selection-count {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-
-    .media-selection-actions {
+    .pb-top-button,
+    .pb-show-button {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
       gap: 8px;
-      flex-wrap: wrap;
+      min-height: 48px;
+      padding: 0 20px;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
     }
 
-    .media-select-button {
-      min-height: 38px;
-      min-width: 104px;
-      border-radius: 15px;
-      padding: 9px 12px;
-      font-size: 12px;
-      text-align: center;
+    .pb-top-button:disabled {
+      opacity: 0.45;
+      cursor: default;
     }
 
-    .media-select-control {
-      width: 34px;
-      height: 34px;
-      border-radius: 14px;
-      border: 1px solid #3f3f46;
-      background: rgba(24, 24, 27, 0.78);
-      color: #09090b;
-      display: flex;
-      align-items: center;
+    .pb-show-wrap {
+      position: relative;
+    }
+
+    .pb-show-button {
+      flex-direction: column;
+      align-items: flex-start;
       justify-content: center;
-      flex-shrink: 0;
-      transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+      gap: 0;
+      padding: 4px 20px;
+      border-color: #3fd0ff;
+      background: rgba(63, 208, 255, 0.08);
     }
 
-    .media-select-control::after {
-      content: "";
-      width: 11px;
-      height: 6px;
-      border-left: 2px solid currentColor;
-      border-bottom: 2px solid currentColor;
-      opacity: 0;
-      transform: rotate(-45deg) translateY(-1px);
+    .pb-show-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #79ddff;
     }
 
-    .media-select-control.selected {
-      border-color: #f4f4f5;
-      background: #f4f4f5;
+    .pb-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 6px;
+      border-radius: 18px;
+      border: 1px solid var(--card-border);
+      background: var(--surface);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+      z-index: 5;
     }
 
-    .media-select-control.selected::after {
-      opacity: 1;
+    .pb-menu.hidden {
+      display: none;
     }
 
-    .media-select-control:active {
-      transform: scale(0.96);
+    .pb-menu button {
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
     }
 
-    .media-filter-button:active {
-      transform: scale(0.98);
+    .pb-menu button.active {
+      background: rgba(63, 208, 255, 0.12);
+      color: #79ddff;
     }
 
-    .media-browser-list {
+    .pb-sheet {
+      flex: 1 1 auto;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       gap: 12px;
+      padding: 20px 20px 0;
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      border: 1px solid var(--card-border);
+      border-bottom: none;
+      background: var(--surface-2);
     }
 
-    .media-row {
-      border-radius: 20px;
-      border: 1px solid #27272a;
-      background: rgba(9, 9, 11, 0.72);
-      padding: 14px 16px;
+    .pb-sheet-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+      flex-wrap: wrap;
+      gap: 12px;
     }
 
-    .media-row.selected {
-      border-color: rgba(34, 211, 238, 0.72);
-      background: rgba(8, 47, 73, 0.26);
+    .pb-section {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
     }
 
-    .media-row-type {
-      align-self: flex-start;
+    .pb-chip {
+      min-height: 34px;
+      padding: 0 14px;
       border-radius: 999px;
-      border: 1px solid #27272a;
-      background: rgba(39, 39, 42, 0.78);
-      padding: 6px 10px;
-      color: #d4d4d8;
+      border: 1px solid #3fd0ff;
+      background: rgba(63, 208, 255, 0.08);
+      color: #79ddff;
       font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      white-space: nowrap;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      cursor: pointer;
     }
 
-    .media-row-meta {
-      min-width: 0;
-      flex: 1;
+    .pb-spacer {
+      flex: 1 1 auto;
+    }
+
+    .pb-selection-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .pb-selection-actions.hidden {
+      display: none;
+    }
+
+    .pb-selection-actions .danger-button,
+    .pb-selection-actions .primary-button,
+    .pb-selection-actions .secondary-button {
+      min-height: 40px;
+      padding: 0 16px;
+      font-size: 13px;
+    }
+
+    .pb-count {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #d4d4d8;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .pb-status {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .pb-grid {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      align-content: start;
+      gap: 14px;
+      padding-bottom: 20px;
+    }
+
+    .pb-card {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-    }
-
-    .media-row-name {
-      color: #ffffff;
-      font-size: 16px;
-      font-weight: 650;
-      letter-spacing: -0.02em;
-      word-break: break-word;
-    }
-
-    .media-row-detail {
-      color: var(--muted);
-      font-size: 13px;
-      word-break: break-word;
-    }
-
-    .media-row-stats {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 2px;
-    }
-
-    .media-stat {
-      border-radius: 999px;
-      border: 1px solid #27272a;
-      background: rgba(24, 24, 27, 0.64);
-      color: #e4e4e7;
-      padding: 6px 9px;
-      font-size: 12px;
-      font-weight: 650;
-      white-space: nowrap;
-    }
-
-    .media-stat strong {
-      color: #ffffff;
-      font-weight: 850;
-    }
-
-    .media-row-actions {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
       gap: 10px;
-      flex-wrap: wrap;
-      flex-shrink: 0;
+      min-width: 0;
+      padding: 10px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--card-border);
+      background: var(--surface);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     }
 
-    .media-row-action {
-      min-width: 112px;
-      text-align: center;
-      text-decoration: none;
+    .pb-card:active {
+      transform: scale(0.985);
+    }
+
+    .pb-card.last {
+      border-color: rgba(255, 255, 255, 0.22);
+      background: #1d1d21;
+    }
+
+    .pb-card.selected {
+      border-color: rgba(239, 68, 68, 0.7);
+      background: #241c1f;
+    }
+
+    .pb-thumb {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: var(--surface-3);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .pb-thumb img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      -webkit-touch-callout: none;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .pb-nopreview {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: #8e8e98;
+    }
+
+    .pb-pill {
+      position: absolute;
+      bottom: 10px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--text);
+    }
+
+    .pb-pill.duration {
+      left: 10px;
+    }
+
+    .pb-pill.drop {
+      right: 10px;
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    .pb-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 28px;
+      height: 28px;
+      box-sizing: border-box;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1.5px solid rgba(255, 255, 255, 0.75);
+    }
+
+    .pb-grid.selecting .pb-badge,
+    .pb-card:hover .pb-badge {
+      display: flex;
+    }
+
+    .pb-card.selected .pb-badge {
+      display: flex;
+      background: #dc2626;
+      border: 1px solid #f87171;
+    }
+
+    .pb-badge svg {
+      display: none;
+    }
+
+    .pb-card.selected .pb-badge svg {
+      display: block;
+    }
+
+    .pb-foot {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 0 4px 4px;
+      min-width: 0;
+    }
+
+    .pb-name {
+      display: flex;
+      min-width: 0;
+      font-size: 17px;
+      font-weight: 700;
+      white-space: pre;
+    }
+
+    .pb-name-head {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pb-name-tail {
+      flex: 0 0 auto;
+    }
+
+    .pb-fmt {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .pb-date,
+    .pb-tc {
+      font-size: 12px;
+      color: #8e8e98;
+      white-space: pre;
+    }
+
+    .pb-tc {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .pb-scrim {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 10;
+    }
+
+    .pb-scrim.hidden {
+      display: none;
+    }
+
+    .pb-dialog {
+      width: min(420px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 24px;
+      border-radius: 26px;
+      border: 1px solid var(--card-border);
+      background: var(--surface);
+    }
+
+    .pb-dialog h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .pb-dialog p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .pb-dialog .pb-dialog-name {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .pb-dialog-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .pb-dialog-buttons button {
+      flex: 1 1 0;
+      min-height: 48px;
+    }
+
+    @media (max-width: 1119px) {
+      .pb-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 719px) {
+      .pb-overlay {
+        padding: 0;
+      }
+
+      .pb-shell {
+        width: 100vw;
+        height: 100dvh;
+        border-radius: 0;
+        border: 0;
+      }
+
+      .pb-page {
+        padding: 16px 14px 0;
+        gap: 12px;
+      }
+
+      .pb-h1 {
+        font-size: 28px;
+      }
+
+      .pb-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .pb-sheet {
+        padding: 14px 12px 0;
+        border-radius: 22px 22px 0 0;
+      }
+
+      .pb-name {
+        font-size: 15px;
+      }
+
+      .pb-top-button,
+      .pb-show-button {
+        padding: 0 14px;
+      }
+    }
+
+    @media (max-width: 419px) {
+      .pb-top-button span {
+        display: none;
+      }
     }
 
     .settings-card {
@@ -2682,13 +2896,11 @@ std::string_view webControlPageHtml()
         padding: 18px;
       }
 
-      .settings-overlay,
-      .media-browser-overlay {
+      .settings-overlay {
         padding: 10px;
       }
 
-      .settings-shell,
-      .media-browser-shell {
+      .settings-shell {
         width: calc(100vw - 20px);
         height: calc(100dvh - 20px);
         max-height: calc(100dvh - 20px);
@@ -2699,13 +2911,11 @@ std::string_view webControlPageHtml()
         padding: 18px;
       }
 
-      .settings-header,
-      .media-browser-header {
+      .settings-header {
         padding: 18px 18px 0;
       }
 
-      .settings-panels,
-      .media-browser-body {
+      .settings-panels {
         padding: 16px 18px 18px;
       }
 
@@ -2718,21 +2928,18 @@ std::string_view webControlPageHtml()
         grid-template-columns: 1fr;
       }
 
-      .preset-row,
-      .media-row {
+      .preset-row {
         flex-direction: column;
         align-items: stretch;
       }
 
-      .preset-actions,
-      .media-row-actions {
+      .preset-actions {
         width: 100%;
         justify-content: stretch;
       }
 
       .preset-action,
-      .preset-download,
-      .media-row-action {
+      .preset-download {
         flex: 1 1 0;
         width: 100%;
         text-align: center;
@@ -4687,54 +4894,65 @@ std::string_view webControlPageHtml()
     </div>
   </div>
 
-  <div class="media-browser-overlay hidden" id="mediaBrowserOverlay">
-    <div class="media-browser-shell">
-      <div class="media-browser-header">
-        <div>
-          <div class="media-browser-title-row">
-            <div class="media-browser-icon">
-              <img class="icon-image" src="/icons/folder.png" alt="">
+  <div class="pb-overlay hidden" id="playbackOverlay">
+    <div class="pb-shell" role="dialog" aria-label="Playback">
+      <div class="pb-page" id="pbBrowserPage">
+        <div class="pb-header">
+          <div>
+            <div class="pb-eyebrow">PLAYBACK</div>
+            <h1 class="pb-h1" id="pbTitle">Clip Browser</h1>
+          </div>
+          <div class="pb-actions">
+            <button class="pb-top-button" id="pbRefreshButton" type="button">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 4v5h-5"></path></svg>
+              <span id="pbRefreshLabel">Refresh Media</span>
+            </button>
+            <div class="pb-show-wrap">
+              <button class="pb-show-button" id="pbShowButton" type="button" aria-haspopup="true" aria-expanded="false">
+                <span class="pb-show-label">SHOW</span>
+                <span id="pbShowValue">Clips</span>
+              </button>
+              <div class="pb-menu hidden" id="pbShowMenu" role="menu">
+                <button type="button" role="menuitem" data-pb-filter="clip">Clips</button>
+                <button type="button" role="menuitem" data-pb-filter="still">Stills</button>
+                <button type="button" role="menuitem" data-pb-filter="timelapse">Timelapse</button>
+                <button type="button" role="menuitem" data-pb-filter="audio">Audio</button>
+              </div>
             </div>
-            <div>
-              <h2 class="section-title" style="margin:0;">Clip Browser</h2>
-              <p class="settings-sidebar-copy">Download or delete clips, stills, timelapses, and audio recordings from mounted media.</p>
-            </div>
+            <button class="pb-top-button" id="pbBackButton" type="button">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"></path><path d="M11 6l-6 6 6 6"></path></svg>
+              <span id="pbBackLabel">Back</span>
+            </button>
           </div>
         </div>
-        <button class="icon-button settings-back-button" id="closeMediaBrowserButton" type="button" aria-label="Back">
-          <span>Back</span>
-        </button>
+        <div class="pb-sheet">
+          <div class="pb-sheet-head">
+            <img class="icon-image" src="/icons/film.png" alt="" width="20" height="20">
+            <span class="pb-section" id="pbSection">CLIPS</span>
+            <button class="pb-chip" id="pbSortButton" type="button">NEWEST FIRST</button>
+            <span class="pb-spacer"></span>
+            <div class="pb-selection-actions hidden" id="pbSelectionActions">
+              <button class="danger-button" id="pbRemoveButton" type="button">Remove Selected</button>
+              <button class="primary-button" id="pbDownloadButton" type="button">Download Selected</button>
+              <button class="secondary-button" id="pbSelectAllButton" type="button">Select All</button>
+            </div>
+            <span class="pb-count" id="pbCount">0 items</span>
+          </div>
+          <div class="pb-status" id="pbStatus">Open the browser to scan mounted media.</div>
+          <div class="pb-grid" id="pbGrid"></div>
+        </div>
       </div>
-      <div class="media-browser-body">
-        <div class="media-browser-toolbar">
-          <div class="media-browser-filters" id="mediaBrowserFilters">
-            <button class="media-filter-button active" data-media-filter="clip" type="button">Clips</button>
-            <button class="media-filter-button" data-media-filter="still" type="button">Stills</button>
-            <button class="media-filter-button" data-media-filter="timelapse" type="button">Timelapse</button>
-            <button class="media-filter-button" data-media-filter="audio" type="button">Audio</button>
+      <div class="pb-viewer hidden" id="pbViewerPage"></div>
+      <div class="pb-scrim hidden" id="pbRemoveScrim">
+        <div class="pb-dialog" role="alertdialog" aria-labelledby="pbRemoveTitle">
+          <h2 id="pbRemoveTitle">Remove Selected Clips?</h2>
+          <p id="pbRemoveCount">1 clip(s) selected</p>
+          <p class="pb-dialog-name" id="pbRemoveName"></p>
+          <p id="pbRemoveMore">This action cannot be undone.</p>
+          <div class="pb-dialog-buttons">
+            <button class="secondary-button" id="pbRemoveCancel" type="button">Cancel</button>
+            <button class="danger-button" id="pbRemoveConfirm" type="button">Remove Clips</button>
           </div>
-          <div class="media-browser-tools">
-            <div class="media-browser-filters media-browser-tools-row">
-              <div class="online-pill" id="mediaBrowserCountPill">0 items</div>
-              <button class="secondary-button" id="refreshMediaBrowserButton" type="button">Refresh Media</button>
-              <select class="settings-select media-sort-select" id="mediaBrowserSortSelect" aria-label="Sort media">
-                <option value="newest">Newest First</option>
-                <option value="oldest">Oldest First</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div class="media-selection-toolbar" id="mediaSelectionToolbar">
-          <div class="media-selection-count" id="mediaSelectionCount">No items selected</div>
-          <div class="media-selection-actions">
-            <button class="secondary-button media-select-button" id="selectAllMediaButton" type="button">Select All</button>
-            <button class="secondary-button media-select-button" id="clearMediaSelectionButton" type="button">Clear</button>
-            <button class="primary-button media-select-button" id="downloadSelectedMediaButton" type="button" disabled>Download Selected</button>
-            <button class="danger-button media-select-button" id="deleteSelectedMediaButton" type="button" disabled>Delete Selected</button>
-          </div>
-        </div>
-        <div class="media-browser-list" id="mediaBrowserList">
-          <div class="preset-empty">Open the browser to scan mounted media.</div>
         </div>
       </div>
     </div>
@@ -4964,12 +5182,11 @@ std::string_view webControlPageHtml()
       configFetchInFlight: false,
       configSaveInFlight: false,
       configDirty: false,
-      mediaFetchInFlight: false,
-      mediaLibrary: [],
-      mediaLibraryPayload: null,
-      mediaBrowserFilter: "clip",
-      mediaBrowserSort: "newest",
-      mediaSelection: new Set(),
+      pb: {
+        payload: null, items: [], filter: "clip", sort: "newest", selecting: false, selection: new Set(),
+        lastOpenedId: "", thumbs: new Map(), queue: [], inFlight: 0, observer: null, fetching: false, queued: false,
+        hold: "", snapshotHold: null, error: "", removing: false, pushed: false,
+      },
       photoCaptureInProgress: false,
       photoCountdownSecondsRemaining: 0,
       pendingPhotoShots: 0,
@@ -8031,14 +8248,31 @@ std::string_view webControlPageHtml()
       if (state.settingsOpen && state.activeSettingsPanel === "record") void fetchModeLadder(false);
     }
 
-    function setMediaBrowserOpen(open) {
+    function setMediaBrowserOpen(open, fromHistory) {
+      const wasOpen = !!state.mediaBrowserOpen;
       state.mediaBrowserOpen = !!open;
       if (state.mediaBrowserOpen)
         setSettingsOpen(false);
-      document.body.classList.toggle("media-browser-open", state.mediaBrowserOpen);
-      document.getElementById("mediaBrowserOverlay").classList.toggle("hidden", !state.mediaBrowserOpen);
-      if (state.mediaBrowserOpen)
+      document.body.classList.toggle("pb-open", state.mediaBrowserOpen);
+      document.getElementById("playbackOverlay").classList.toggle("hidden", !state.mediaBrowserOpen);
+      if (state.mediaBrowserOpen && !wasOpen) {
+        // Opens on Stills in photo mode (filter only, Q2), else Clips; the live view steps aside; the phone's Back closes it.
+        state.pb.selecting = false;
+        state.pb.selection.clear();
+        state.pb.filter = state.snapshot && state.snapshot.ui && state.snapshot.ui.photo_mode_enabled ? "still" : "clip";
+        pbSetShowMenu(false);
+        pbPauseLive();
+        history.pushState({ pb: 1 }, "");
+        state.pb.pushed = true;
+        pbRender();
         void fetchMediaLibrary(false);
+      } else if (!state.mediaBrowserOpen && wasOpen) {
+        document.getElementById("pbRemoveScrim").classList.add("hidden");
+        pbResumeLive();
+        if (state.pb.pushed && !fromHistory)
+          history.back();
+        state.pb.pushed = false;
+      }
     }
 
     function setSettingsPanel(panelName) {
@@ -9424,15 +9658,16 @@ std::string_view webControlPageHtml()
       }
     }
 
-    function mediaBrowserFilterLabel(filter) {
-      if (filter === "still")
-        return "stills";
-      if (filter === "timelapse")
-        return "timelapses";
-      if (filter === "audio")
-        return "audio recordings";
-      return "clips";
-    }
+    // ---- Playback: the Clip Browser (T49) -------------------------------------------------------
+    // The touch UI's Clip Browser in the WebUI's shell: a grid of cards, a thumbnail from Core's own decoder
+    // (/api/media/frame), long press to select, Remove Selected, Download Selected. The Clip Viewer is T50.
+    // In a hold (a take, a media test, standby ...) Core answers from its cache and no picture is asked for.
+    const pbFilters = {
+      clip: { title: "Clip Browser", show: "Clips", section: "CLIPS", noun: "clip(s)", none: "No cDNG, ProRes, H.264 or MLV clips found in " },
+      still: { title: "Still Browser", show: "Stills", section: "STILLS", noun: "still(s)", none: "No stills found in " },
+      timelapse: { title: "Timelapse Browser", show: "Timelapse", section: "TIMELAPSE", noun: "timelapse(s)", none: "No timelapses found in " },
+      audio: { title: "Audio Browser", show: "Audio", section: "AUDIO", noun: "recording(s)", none: "No audio recordings found in " },
+    };
 
     function mediaItemCategory(item) {
       if (item && item.category)
@@ -9449,263 +9684,453 @@ std::string_view webControlPageHtml()
       return "clip";
     }
 
-    function formatMediaBrowserCountLabel(count, filter) {
-      const label = mediaBrowserFilterLabel(filter);
-      return count === 1 ? "1 " + label.replace(/s$/, "") : count + " " + label;
-    }
-
-    function setMediaBrowserFilter(filter) {
-      const normalized = ["clip", "still", "timelapse", "audio"].includes(filter) ? filter : "clip";
-      state.mediaBrowserFilter = normalized;
-      document.querySelectorAll(".media-filter-button").forEach((button) => {
-        button.classList.toggle("active", button.dataset.mediaFilter === normalized);
-      });
-      renderMediaLibrary(state.mediaLibraryPayload || { ok: true, mounted: false, items: [] });
-    }
-
-    function setMediaBrowserSort(sortMode) {
-      state.mediaBrowserSort = sortMode === "oldest" ? "oldest" : "newest";
-      const select = document.getElementById("mediaBrowserSortSelect");
-      if (select)
-        select.value = state.mediaBrowserSort;
-      renderMediaLibrary(state.mediaLibraryPayload || { ok: true, mounted: false, items: [] });
-    }
-
-    function sortedMediaItems(items) {
-      const sorted = Array.isArray(items) ? [...items] : [];
-      const direction = state.mediaBrowserSort === "oldest" ? 1 : -1;
-      sorted.sort((left, right) => {
-        const leftTime = Number(left && left.modified_ms) || 0;
-        const rightTime = Number(right && right.modified_ms) || 0;
-        if (leftTime !== rightTime)
-          return (leftTime - rightTime) * direction;
-        return String(left && left.name || "").localeCompare(String(right && right.name || "")) * direction;
-      });
-      return sorted;
-    }
-
-    function mediaFrameCountLabel(item) {
-      const frameCount = Number(item && item.frame_count) || 0;
-      if (mediaItemCategory(item) === "audio")
-        return "WAV";
-      if (mediaItemCategory(item) === "still")
-        return "1 still";
-      if (frameCount === 0) {
-        const fileCount = Number(item && item.file_count) || 0;
-        return fileCount === 1 ? "1 file" : fileCount + " files";
-      }
-      return frameCount === 1 ? "1 frame" : frameCount + " frames";
-    }
-
-    function mediaFpsLabel(item) {
-      if (mediaItemCategory(item) === "audio")
-        return String(item && item.fps_text || "Audio").toUpperCase();
-      return String(item && item.fps_text || "-- FPS").toUpperCase();
-    }
-
     function mediaSelectionKey(item) {
       if (!item || !item.kind || !item.id)
         return "";
       return String(item.kind) + ":" + String(item.id);
     }
 
-    function selectedMediaItems() {
-      const allItems = state.mediaLibraryPayload && Array.isArray(state.mediaLibraryPayload.items)
-        ? state.mediaLibraryPayload.items
-        : [];
-      return allItems.filter((item) => state.mediaSelection.has(mediaSelectionKey(item)));
+    function mediaSelectionQuery(items) {
+      return items.map((item) => "item=" + encodeURIComponent(mediaSelectionKey(item))).join("&");
     }
 
-    function pruneMediaSelection(allItems) {
-      const validKeys = new Set((Array.isArray(allItems) ? allItems : []).map(mediaSelectionKey).filter(Boolean));
-      for (const key of Array.from(state.mediaSelection)) {
-        if (!validKeys.has(key))
-          state.mediaSelection.delete(key);
+    function pbSortKey(item) {
+      return Number(item && item.shot_ms) || Number(item && item.modified_ms) || 0;
+    }
+
+    // Newest first by the time it was shot, then the names in natural order (CLM:559-568).
+    function pbSorted(items) {
+      const direction = state.pb.sort === "oldest" ? 1 : -1;
+      return [...items].sort((left, right) => {
+        const byTime = pbSortKey(left) - pbSortKey(right);
+        if (byTime !== 0)
+          return byTime * direction;
+        return String(left.name || "").localeCompare(String(right.name || ""), undefined, { numeric: true }) * direction;
+      });
+    }
+
+    function pbCountText(count) {
+      return state.pb.selecting ? count + " selected" : (count === 1 ? "1 item" : count + " items");
+    }
+
+    function pbSelectedItems() {
+      const items = state.pb.payload && Array.isArray(state.pb.payload.items) ? state.pb.payload.items : [];
+      return items.filter((item) => state.pb.selection.has(mediaSelectionKey(item)));
+    }
+
+    function pbThumbUrl(item) {
+      if (!item || item.format !== "cdng" || !item.playable || !item.token)
+        return "";
+      return "/api/media/frame?kind=folder&id=" + encodeURIComponent(item.id) + "&n=" + Number(item.first_number || 0)
+        + "&w=320&v=" + encodeURIComponent(item.token);
+    }
+
+    // Thumbnails: two requests in flight, a picture only when its card scrolls into view, the blob kept for the
+    // life of the page, nothing asked for while a hold lasts (the cards say NO PREVIEW until it clears).
+    function pbQueueThumb(img, placeholder, url) {
+      const kept = state.pb.thumbs.get(url);
+      if (kept) {
+        img.src = kept;
+        placeholder.classList.add("hidden");
+        return;
+      }
+      state.pb.queue.push({ img, placeholder, url });
+      pbPumpThumbs();
+    }
+
+    function pbPumpThumbs() {
+      while (state.pb.inFlight < 2 && state.pb.queue.length > 0 && !state.pb.hold) {
+        const job = state.pb.queue.shift();
+        if (!job.img.isConnected)
+          continue;
+        state.pb.inFlight += 1;
+        fetch(job.url, { cache: "force-cache" })
+          .then((response) => (response.ok ? response.blob() : Promise.reject(new Error("no picture"))))
+          .then((blob) => {
+            const objectUrl = URL.createObjectURL(blob);
+            state.pb.thumbs.set(job.url, objectUrl);
+            if (job.img.isConnected) {
+              job.img.src = objectUrl;
+              job.placeholder.classList.add("hidden");
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            state.pb.inFlight -= 1;
+            pbPumpThumbs();
+          });
       }
     }
 
-    function updateMediaSelectionControls() {
-      const selectedCount = state.mediaSelection.size;
-      const visibleCount = Array.isArray(state.mediaLibrary) ? state.mediaLibrary.length : 0;
-      setText("mediaSelectionCount", selectedCount === 0
-        ? "No items selected"
-        : (selectedCount === 1 ? "1 item selected" : selectedCount + " items selected"));
-
-      const selectAllButton = document.getElementById("selectAllMediaButton");
-      if (selectAllButton)
-        selectAllButton.disabled = visibleCount === 0;
-
-      const clearButton = document.getElementById("clearMediaSelectionButton");
-      if (clearButton)
-        clearButton.disabled = selectedCount === 0;
-
-      const downloadButton = document.getElementById("downloadSelectedMediaButton");
-      if (downloadButton)
-        downloadButton.disabled = selectedCount === 0;
-
-      const deleteButton = document.getElementById("deleteSelectedMediaButton");
-      if (deleteButton)
-        deleteButton.disabled = selectedCount === 0;
+    function pbObserveThumb(card, item) {
+      const url = pbThumbUrl(item);
+      const thumb = card.querySelector(".pb-thumb");
+      const placeholder = thumb.querySelector(".pb-nopreview");
+      if (!url)
+        return;
+      const img = document.createElement("img");
+      img.alt = "";
+      img.draggable = false;
+      img.addEventListener("contextmenu", (event) => event.preventDefault());
+      thumb.insertBefore(img, placeholder);
+      if (typeof IntersectionObserver !== "function") {
+        pbQueueThumb(img, placeholder, url);
+        return;
+      }
+      if (!state.pb.observer) {
+        state.pb.observer = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting)
+              continue;
+            state.pb.observer.unobserve(entry.target);
+            const job = entry.target._pbJob;
+            if (job)
+              pbQueueThumb(job.img, job.placeholder, job.url);
+          }
+        }, { root: document.getElementById("pbGrid"), rootMargin: "200px" });
+      }
+      card._pbJob = { img, placeholder, url };
+      state.pb.observer.observe(card);
     }
 
-    function toggleMediaSelection(item) {
+    function pbSetSelecting(on) {
+      state.pb.selecting = !!on;
+      if (!on)
+        state.pb.selection.clear();
+      pbRender();
+    }
+
+    function pbToggle(item) {
       const key = mediaSelectionKey(item);
       if (!key)
         return;
-      if (state.mediaSelection.has(key))
-        state.mediaSelection.delete(key);
+      if (state.pb.selection.has(key))
+        state.pb.selection.delete(key);
       else
-        state.mediaSelection.add(key);
-      renderMediaLibrary(state.mediaLibraryPayload || { ok: true, mounted: false, items: [] });
+        state.pb.selection.add(key);
+      pbRender();
     }
 
-    function selectAllVisibleMedia() {
-      const visibleItems = Array.isArray(state.mediaLibrary) ? state.mediaLibrary : [];
-      for (const item of visibleItems) {
-        const key = mediaSelectionKey(item);
-        if (key)
-          state.mediaSelection.add(key);
+    function pbOpenClip(item) {
+      state.pb.lastOpenedId = mediaSelectionKey(item);
+      // The Clip Viewer is T50; until then a click shows the clip's first picture at full size in a new tab.
+      const url = pbThumbUrl(item);
+      if (url)
+        window.open(url.replace("&w=320", "&w=1920"), "_blank", "noopener");
+      else
+        showToast("The viewer for this clip arrives later.", false);
+      pbRender();
+    }
+
+    function pbBuildCard(item) {
+      const key = mediaSelectionKey(item);
+      const selected = state.pb.selection.has(key);
+      const card = document.createElement("div");
+      card.className = "pb-card" + (selected ? " selected" : "") + (!state.pb.selecting && state.pb.lastOpenedId === key ? " last" : "");
+      card.setAttribute("role", "button");
+      card.tabIndex = 0;
+      card.setAttribute("aria-label", (state.pb.selecting ? (selected ? "Deselect " : "Select ") : "Open ") + (item.name || item.id));
+
+      const thumb = document.createElement("div");
+      thumb.className = "pb-thumb";
+      const none = document.createElement("span");
+      none.className = "pb-nopreview";
+      none.textContent = "NO PREVIEW";
+      thumb.appendChild(none);
+      const badge = document.createElement("span");
+      badge.className = "pb-badge";
+      badge.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg>';
+      thumb.appendChild(badge);
+      const category = mediaItemCategory(item);
+      const duration = document.createElement("span");
+      duration.className = "pb-pill duration";
+      duration.textContent = category === "still" ? "STILL" : (category === "audio" ? "WAV" : String(item.duration_text || "--"));
+      thumb.appendChild(duration);
+      const missing = Number(item.missing_frames || 0) + Number(item.empty_frames || 0);
+      if (missing > 0 && !item.ramp) {
+        const drop = document.createElement("span");
+        drop.className = "pb-pill drop";
+        drop.textContent = "DROP " + missing;
+        drop.title = missing + " frame(s) were not written";
+        thumb.appendChild(drop);
       }
-      renderMediaLibrary(state.mediaLibraryPayload || { ok: true, mounted: false, items: [] });
+      card.appendChild(thumb);
+
+      const foot = document.createElement("div");
+      foot.className = "pb-foot";
+      // The name is cut in the middle when it does not fit, so the take's number stays visible.
+      const fullName = String(item.name || item.id || "");
+      const name = document.createElement("span");
+      name.className = "pb-name";
+      name.title = fullName;
+      const tailLength = fullName.length > 12 ? 5 : 0;
+      const head = document.createElement("span");
+      head.className = "pb-name-head";
+      head.textContent = fullName.slice(0, fullName.length - tailLength);
+      const tail = document.createElement("span");
+      tail.className = "pb-name-tail";
+      tail.textContent = fullName.slice(fullName.length - tailLength);
+      name.append(head, tail);
+      const fmt = document.createElement("span");
+      fmt.className = "pb-fmt";
+      fmt.textContent = item.format_label || item.type || "Media";
+      const date = document.createElement("span");
+      date.className = "pb-date";
+      date.textContent = item.shot_date_text || item.modified_text || "Shot date unavailable";
+      foot.append(name, fmt, date);
+      if (item.timecode_start) {
+        const tc = document.createElement("span");
+        tc.className = "pb-tc";
+        tc.textContent = "TC " + item.timecode_start;
+        foot.appendChild(tc);
+      }
+      card.appendChild(foot);
+
+      // Tap opens; a long press (800 ms) starts the selection; in a selection a tap toggles.
+      let pressTimer = 0, startX = 0, startY = 0, fired = false;
+      const cancel = () => { window.clearTimeout(pressTimer); pressTimer = 0; };
+      card.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0)
+          return;
+        fired = false;
+        startX = event.clientX;
+        startY = event.clientY;
+        if (!state.pb.selecting) {
+          pressTimer = window.setTimeout(() => {
+            fired = true;
+            state.pb.selecting = true;
+            state.pb.selection.clear();
+            state.pb.selection.add(key);
+            pbRender();
+          }, 800);
+        }
+      });
+      card.addEventListener("pointermove", (event) => {
+        if (pressTimer && Math.hypot(event.clientX - startX, event.clientY - startY) > 10)
+          cancel();
+      });
+      card.addEventListener("pointerup", cancel);
+      card.addEventListener("pointerleave", cancel);
+      card.addEventListener("pointercancel", cancel);
+      card.addEventListener("contextmenu", (event) => event.preventDefault());
+      card.addEventListener("click", () => {
+        if (fired) {
+          fired = false;
+          return;
+        }
+        if (state.pb.selecting)
+          pbToggle(item);
+        else
+          pbOpenClip(item);
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          card.click();
+        }
+      });
+      if (!state.pb.hold)
+        pbObserveThumb(card, item);
+      return card;
     }
 
-    function clearMediaSelection() {
-      if (state.mediaSelection.size === 0)
+    function pbStatusText(payload, items, filter) {
+      const spec = pbFilters[filter];
+      const root = payload && payload.media_root ? payload.media_root : "/media/RAW";
+      if (state.pb.removing)
+        return "Removing…";
+      if (state.pb.error)
+        return state.pb.error;
+      if (!payload || !payload.mounted)
+        return root + " is not available.";
+      const hold = state.pb.hold;
+      if (hold)
+        return "Playback held: " + hold.replace("_", " ") + ". Pictures return when it ends.";
+      if (state.pb.selecting)
+        return "Tap " + spec.noun.replace("(s)", "s") + " to add or remove them. Cancel ends the selection.";
+      if (items.length === 0)
+        return spec.none + root + ".";
+      return "Found " + items.length + " " + spec.noun + " in " + root + ".";
+    }
+
+    function pbRender() {
+      const grid = document.getElementById("pbGrid");
+      if (!grid)
         return;
-      state.mediaSelection.clear();
-      renderMediaLibrary(state.mediaLibraryPayload || { ok: true, mounted: false, items: [] });
-    }
+      const payload = state.pb.payload;
+      const filter = state.pb.filter;
+      const spec = pbFilters[filter];
+      const all = payload && Array.isArray(payload.items) ? payload.items : [];
+      const items = pbSorted(all.filter((item) => mediaItemCategory(item) === filter));
+      state.pb.items = items;
+      const valid = new Set(all.map(mediaSelectionKey));
+      for (const key of Array.from(state.pb.selection)) {
+        if (!valid.has(key))
+          state.pb.selection.delete(key);
+      }
 
-    function mediaSelectionQuery(items) {
-      return items
-        .map((item) => "item=" + encodeURIComponent(mediaSelectionKey(item)))
-        .join("&");
-    }
-
-    function renderMediaLibrary(payload) {
-      const list = document.getElementById("mediaBrowserList");
-      if (!list)
-        return;
-
-      state.mediaLibraryPayload = payload;
-      const allItems = payload && Array.isArray(payload.items) ? payload.items : [];
-      const filter = state.mediaBrowserFilter || "clip";
-      const items = sortedMediaItems(allItems.filter((item) => mediaItemCategory(item) === filter));
-      state.mediaLibrary = items;
-      pruneMediaSelection(allItems);
-      updateMediaSelectionControls();
-      setText("mediaBrowserCountPill", formatMediaBrowserCountLabel(items.length, filter));
-      const sortSelect = document.getElementById("mediaBrowserSortSelect");
-      if (sortSelect)
-        sortSelect.value = state.mediaBrowserSort || "newest";
-      document.querySelectorAll(".media-filter-button").forEach((button) => {
-        button.classList.toggle("active", button.dataset.mediaFilter === filter);
+      setText("pbTitle", spec.title);
+      setText("pbShowValue", spec.show);
+      setText("pbSection", state.pb.selecting ? "SELECTION" : spec.section);
+      setText("pbBackLabel", state.pb.selecting ? "Cancel" : "Back");
+      setText("pbSortButton", state.pb.sort === "oldest" ? "OLDEST FIRST" : "NEWEST FIRST");
+      setText("pbCount", pbCountText(state.pb.selecting ? state.pb.selection.size : items.length));
+      setText("pbStatus", pbStatusText(payload, items, filter));
+      document.getElementById("pbSelectionActions").classList.toggle("hidden", !state.pb.selecting);
+      document.getElementById("pbRemoveButton").disabled = state.pb.selection.size === 0 || !!state.pb.removing;
+      document.getElementById("pbDownloadButton").disabled = state.pb.selection.size === 0;
+      document.querySelectorAll("#pbShowMenu button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.pbFilter === filter);
       });
 
-      list.innerHTML = "";
-      if (!payload || !payload.mounted) {
-        const empty = document.createElement("div");
-        empty.className = "preset-empty";
-        empty.textContent = "No media mounted. Mount a drive to browse clips and stills.";
-        list.appendChild(empty);
+      if (state.pb.observer)
+        state.pb.observer.disconnect();
+      state.pb.queue.length = 0;
+      grid.classList.toggle("selecting", state.pb.selecting);
+      const scrollTop = grid.scrollTop;
+      grid.replaceChildren();
+      if (payload && payload.mounted)
+        items.forEach((item) => grid.appendChild(pbBuildCard(item)));
+      grid.scrollTop = scrollTop;
+    }
+
+    async function fetchMediaLibrary(silent) {
+      if (state.pb.fetching) {
+        state.pb.queued = true;
         return;
       }
+      state.pb.fetching = true;
+      try {
+        const response = await fetch("/api/media", { cache: "no-store" });
+        const payload = await response.json();
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not load media.");
+        state.pb.error = "";
+        state.pb.payload = payload;
+        state.pb.hold = String(payload.held || "");
+        pbRender();
+      } catch (error) {
+        if (!silent)
+          showToast(error.message || "Could not load media.", true);
+        state.pb.error = silent ? state.pb.error : (error.message || "Could not load media.");
+        pbRender();
+      } finally {
+        state.pb.fetching = false;
+        if (state.pb.queued) {
+          state.pb.queued = false;
+          void fetchMediaLibrary(true);
+        }
+      }
+    }
 
-      if (items.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "preset-empty";
-        empty.textContent = "No " + mediaBrowserFilterLabel(filter) + " found on this media.";
-        list.appendChild(empty);
+    // From renderSnapshot: a take starting or ending changes what the browser may show.
+    function pbSnapshotChanged(snapshot) {
+      const button = document.getElementById("mediaBrowserButton");
+      if (button)
+        button.disabled = !!(snapshot.recording || snapshot.timelapse_active);
+      const hold = String(snapshot.playback_hold || "");
+      if (state.pb.snapshotHold !== hold) {
+        state.pb.snapshotHold = hold;
+        if (state.mediaBrowserOpen)
+          void fetchMediaLibrary(true);
+      }
+    }
+
+    function pbOpenRemoveDialog() {
+      const items = pbSelectedItems();
+      if (items.length === 0)
         return;
+      setText("pbRemoveCount", items.length + " clip(s) selected");
+      setText("pbRemoveName", items[0].name || items[0].id);
+      setText("pbRemoveMore", (items.length > 1 ? "+" + (items.length - 1) + " more. " : "") + "This action cannot be undone.");
+      document.getElementById("pbRemoveScrim").classList.remove("hidden");
+      document.getElementById("pbRemoveCancel").focus();
+    }
+
+    async function pbRemoveSelected() {
+      const items = pbSelectedItems();
+      document.getElementById("pbRemoveScrim").classList.add("hidden");
+      if (items.length === 0)
+        return;
+      state.pb.removing = true;
+      pbRender();
+      try {
+        const response = await fetch("/api/media/delete-selected?" + mediaSelectionQuery(items), { method: "POST" });
+        const payload = await response.json();
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not remove the selected clips.");
+        showToast("Removed " + (items.length === 1 ? items[0].name : items.length + " items") + ".", false);
+        state.pb.selection.clear();
+        state.pb.selecting = false;
+      } catch (error) {
+        showToast(error.message || "Could not remove the selected clips.", true);
+      } finally {
+        state.pb.removing = false;
+        await fetchMediaLibrary(true);
+        await fetchState(true, { forceImmediate: true });
       }
+    }
 
-      for (const item of items) {
-        const selectionKey = mediaSelectionKey(item);
-        const selected = state.mediaSelection.has(selectionKey);
-        const row = document.createElement("div");
-        row.className = "media-row";
-        row.classList.toggle("selected", selected);
-        row.addEventListener("click", (event) => {
-          if (event.target.closest("a, button"))
-            return;
-          toggleMediaSelection(item);
-        });
+    function pbDownloadSelected() {
+      const items = pbSelectedItems();
+      if (items.length === 0)
+        return;
+      const link = document.createElement("a");
+      link.href = "/api/media/download-selected?" + mediaSelectionQuery(items);
+      link.download = "Apertar-Media-Selection.zip";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      showToast("Preparing " + (items.length === 1 ? "1 item" : items.length + " items") + " for download.", false);
+    }
 
-        const select = document.createElement("button");
-        select.className = "media-select-control" + (selected ? " selected" : "");
-        select.type = "button";
-        select.setAttribute("aria-label", selected ? "Deselect media item" : "Select media item");
-        select.setAttribute("aria-pressed", selected ? "true" : "false");
-        select.addEventListener("click", (event) => {
-          event.stopPropagation();
-          toggleMediaSelection(item);
-        });
-        row.appendChild(select);
+    function pbBack() {
+      if (state.pb.selecting)
+        pbSetSelecting(false);
+      else
+        setMediaBrowserOpen(false);
+    }
 
-        const type = document.createElement("div");
-        type.className = "media-row-type";
-        type.textContent = item.type || "Media";
-        row.appendChild(type);
+    // Escape: the dialog first, then the selection, then the page.
+    function pbEscape() {
+      const scrim = document.getElementById("pbRemoveScrim");
+      if (!scrim.classList.contains("hidden"))
+        scrim.classList.add("hidden");
+      else if (!document.getElementById("pbShowMenu").classList.contains("hidden"))
+        pbSetShowMenu(false);
+      else
+        pbBack();
+    }
 
-        const meta = document.createElement("div");
-        meta.className = "media-row-meta";
+    function pbSetShowMenu(open) {
+      document.getElementById("pbShowMenu").classList.toggle("hidden", !open);
+      document.getElementById("pbShowButton").setAttribute("aria-expanded", open ? "true" : "false");
+    }
 
-        const name = document.createElement("div");
-        name.className = "media-row-name";
-        name.textContent = item.name || item.id || "Apertar media";
-        meta.appendChild(name);
+    function pbSetFilter(filter) {
+      if (!pbFilters[filter])
+        return;
+      state.pb.filter = filter;
+      state.pb.selecting = false;
+      state.pb.selection.clear();
+      pbSetShowMenu(false);
+      pbRender();
+    }
 
-        const detail = document.createElement("div");
-        detail.className = "media-row-detail";
-        detail.textContent = "Updated " + (item.modified_text || "Unknown");
-        meta.appendChild(detail);
+    // The live view stops while the browser is open (the page asks Core for pictures, and the live view
+    // would compete with them) and comes back when it closes.
+    function pbPauseLive() {
+      state.previewPausedForPlayback = true;
+      clearTimeout(state.previewRetryTimer);
+      const preview = document.getElementById("previewStream");
+      if (preview)
+        preview.removeAttribute("src");
+    }
 
-        const stats = document.createElement("div");
-        stats.className = "media-row-stats";
-        const statValues = [
-          mediaFrameCountLabel(item),
-          "Duration " + (item.duration_text || "--"),
-          mediaFpsLabel(item),
-          item.size_text || "--",
-        ];
-        for (const value of statValues) {
-          const stat = document.createElement("span");
-          stat.className = "media-stat";
-          stat.textContent = value;
-          stats.appendChild(stat);
-        }
-        meta.appendChild(stats);
-        row.appendChild(meta);
-
-        const actions = document.createElement("div");
-        actions.className = "media-row-actions";
-
-        const download = document.createElement("a");
-        download.className = "secondary-button media-row-action";
-        download.href = item.download_url || "#";
-        download.textContent = "Download";
-        if (item.download_url) {
-          download.setAttribute("download", "");
-          download.addEventListener("click", () => {
-            showToast("Downloading " + (item.name || "media") + ".", false);
-          });
-        } else {
-          download.setAttribute("aria-disabled", "true");
-        }
-        actions.appendChild(download);
-
-        const remove = document.createElement("button");
-        remove.className = "danger-button media-row-action";
-        remove.type = "button";
-        remove.textContent = "Delete";
-        remove.addEventListener("click", () => {
-          void deleteMediaLibraryItem(item);
-        });
-        actions.appendChild(remove);
-
-        row.appendChild(actions);
-        list.appendChild(row);
-      }
+    function pbResumeLive() {
+      state.previewPausedForPlayback = false;
+      if (state.previewStreamStarted)
+        loadPreviewStream();
     }
 
     function setMetric(prefix, valueText, sublabel, progress) {
@@ -10490,6 +10915,8 @@ std::string_view webControlPageHtml()
         setPreviewOverlay(false, "", false);
       });
       preview.addEventListener("error", () => {
+        if (state.previewPausedForPlayback)
+          return;
         setPreviewOverlay(true, "Preview unavailable. Retrying...", true);
         clearTimeout(state.previewRetryTimer);
         state.previewRetryTimer = window.setTimeout(loadPreviewStream, 1500);
@@ -12019,6 +12446,7 @@ std::string_view webControlPageHtml()
       renderSpeedRamp(snapshot);
       renderValueListsEditor(snapshot);
       renderModeLadder(snapshot);
+      pbSnapshotChanged(snapshot);
 
       buildOptionButtons("settingsGyroDataOptions", toggleOptions, formatToggleLabel(recordGyroEnabled), async (value) => {
         try {
@@ -12437,102 +12865,6 @@ std::string_view webControlPageHtml()
       } finally {
         state.configSaveInFlight = false;
         updateConfigEditorControls();
-      }
-    }
-
-    async function fetchMediaLibrary(silent) {
-      if (state.mediaFetchInFlight)
-        return;
-
-      state.mediaFetchInFlight = true;
-      try {
-        const response = await fetch("/api/media", { cache: "no-store" });
-        const payload = await response.json();
-        if (!payload.ok)
-          throw new Error(payload.error || "Could not load media.");
-        renderMediaLibrary(payload);
-      } catch (error) {
-        if (!silent)
-          showToast(error.message || "Could not load media.", true);
-      } finally {
-        state.mediaFetchInFlight = false;
-      }
-    }
-
-    async function deleteMediaLibraryItem(item) {
-      if (!item || !item.id || !item.kind)
-        return;
-
-      const name = item.name || item.id || "this media item";
-      if (!window.confirm("Delete " + name + " from media? This cannot be undone."))
-        return;
-
-      try {
-        const response = await fetch(
-          "/api/media/delete?kind=" + encodeURIComponent(item.kind) + "&id=" + encodeURIComponent(item.id),
-          { method: "POST" }
-        );
-        const payload = await response.json();
-        if (!payload.ok)
-          throw new Error(payload.error || "Could not delete media.");
-        showToast("Deleted " + name + ".", false);
-        await fetchMediaLibrary(true);
-        await fetchState(true, { forceImmediate: true });
-      } catch (error) {
-        showToast(error.message || "Could not delete media.", true);
-      }
-    }
-
-    function downloadSelectedMediaItems() {
-      const items = selectedMediaItems();
-      if (items.length === 0) {
-        showToast("Select media to download.", true);
-        return;
-      }
-
-      const query = mediaSelectionQuery(items);
-      if (!query) {
-        showToast("Selected media could not be prepared.", true);
-        return;
-      }
-
-      const link = document.createElement("a");
-      link.href = "/api/media/download-selected?" + query;
-      link.download = "Apertar-Media-Selection.zip";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      showToast("Preparing " + (items.length === 1 ? "1 item" : items.length + " items") + " for download.", false);
-    }
-
-    async function deleteSelectedMediaItems() {
-      const items = selectedMediaItems();
-      if (items.length === 0) {
-        showToast("Select media to delete.", true);
-        return;
-      }
-
-      const label = items.length === 1 ? (items[0].name || "this media item") : (items.length + " selected media items");
-      if (!window.confirm("Delete " + label + "? This cannot be undone."))
-        return;
-
-      const query = mediaSelectionQuery(items);
-      if (!query) {
-        showToast("Selected media could not be prepared.", true);
-        return;
-      }
-
-      try {
-        const response = await fetch("/api/media/delete-selected?" + query, { method: "POST" });
-        const payload = await response.json();
-        if (!payload.ok)
-          throw new Error(payload.error || "Could not delete selected media.");
-        state.mediaSelection.clear();
-        showToast("Deleted " + (items.length === 1 ? "1 item" : items.length + " items") + ".", false);
-        await fetchMediaLibrary(true);
-        await fetchState(true, { forceImmediate: true });
-      } catch (error) {
-        showToast(error.message || "Could not delete selected media.", true);
       }
     }
 
@@ -13437,21 +13769,33 @@ std::string_view webControlPageHtml()
       document.getElementById("recordButton").addEventListener("click", toggleRecord);
       document.getElementById("settingsButton").addEventListener("click", () => setSettingsOpen(true));
       document.getElementById("mediaBrowserButton").addEventListener("click", () => setMediaBrowserOpen(true));
-      document.getElementById("closeMediaBrowserButton").addEventListener("click", () => setMediaBrowserOpen(false));
-      document.getElementById("refreshMediaBrowserButton").addEventListener("click", () => fetchMediaLibrary(false));
-      document.getElementById("mediaBrowserSortSelect").addEventListener("change", (event) => {
-        setMediaBrowserSort(event.target.value);
+      document.getElementById("pbBackButton").addEventListener("click", pbBack);
+      document.getElementById("pbRefreshButton").addEventListener("click", () => fetchMediaLibrary(false));
+      document.getElementById("pbShowButton").addEventListener("click", () => {
+        pbSetShowMenu(document.getElementById("pbShowMenu").classList.contains("hidden"));
       });
-      document.getElementById("selectAllMediaButton").addEventListener("click", selectAllVisibleMedia);
-      document.getElementById("clearMediaSelectionButton").addEventListener("click", clearMediaSelection);
-      document.getElementById("downloadSelectedMediaButton").addEventListener("click", downloadSelectedMediaItems);
-      document.getElementById("deleteSelectedMediaButton").addEventListener("click", () => {
-        void deleteSelectedMediaItems();
+      document.querySelectorAll("#pbShowMenu button").forEach((button) => {
+        button.addEventListener("click", () => pbSetFilter(button.dataset.pbFilter));
+      });
+      document.getElementById("pbSortButton").addEventListener("click", () => {
+        state.pb.sort = state.pb.sort === "oldest" ? "newest" : "oldest";
+        pbRender();
+      });
+      document.getElementById("pbSelectAllButton").addEventListener("click", () => {
+        state.pb.items.forEach((item) => state.pb.selection.add(mediaSelectionKey(item)));
+        pbRender();
+      });
+      document.getElementById("pbDownloadButton").addEventListener("click", pbDownloadSelected);
+      document.getElementById("pbRemoveButton").addEventListener("click", pbOpenRemoveDialog);
+      document.getElementById("pbRemoveCancel").addEventListener("click", () => {
+        document.getElementById("pbRemoveScrim").classList.add("hidden");
+      });
+      document.getElementById("pbRemoveConfirm").addEventListener("click", () => { void pbRemoveSelected(); });
+      window.addEventListener("popstate", () => {
+        if (state.mediaBrowserOpen)
+          setMediaBrowserOpen(false, true);
       });
       document.getElementById("closeSettingsButton").addEventListener("click", () => setSettingsOpen(false));
-      document.querySelectorAll(".media-filter-button").forEach((button) => {
-        button.addEventListener("click", () => setMediaBrowserFilter(button.dataset.mediaFilter));
-      });
       document.getElementById("clearFavoritesButton").addEventListener("click", () => {
         void clearFavorites();
       });
@@ -13669,7 +14013,7 @@ std::string_view webControlPageHtml()
         if (event.target === event.currentTarget)
           setSettingsOpen(false);
       });
-      document.getElementById("mediaBrowserOverlay").addEventListener("click", (event) => {
+      document.getElementById("playbackOverlay").addEventListener("click", (event) => {
         if (event.target === event.currentTarget)
           setMediaBrowserOpen(false);
       });
@@ -13680,7 +14024,7 @@ std::string_view webControlPageHtml()
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && state.mediaBrowserOpen)
-          setMediaBrowserOpen(false);
+          pbEscape();
         else if (event.key === "Escape" && state.settingsOpen)
           setSettingsOpen(false);
       });
