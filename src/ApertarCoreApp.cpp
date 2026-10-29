@@ -4,6 +4,7 @@
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
+#include "hardware/ActionCatalog.hpp"
 #include "hardware/ButtonActionList.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
 #include "web/WebControlPage.hpp"
@@ -1476,34 +1477,21 @@ bool parseResolutionText(const std::string &value, uint32_t *width, uint32_t *he
     return true;
 }
 
+std::vector<std::string_view> prefixViews(const std::vector<std::string> &prefixes)
+{
+    return std::vector<std::string_view>(prefixes.begin(), prefixes.end());
+}
+
 std::optional<std::string> hardwareActionSuffix(const std::string &action,
                                                 const std::vector<std::string> &prefixes)
 {
-    for (const std::string &prefix : prefixes) {
-        if (action.rfind(prefix, 0) != 0)
-            continue;
-
-        std::string suffix = action.substr(prefix.size());
-        while (!suffix.empty() && suffix.front() == '_')
-            suffix.erase(suffix.begin());
-        if (!suffix.empty())
-            return suffix;
-    }
-    return std::nullopt;
+    return hardware::actions::suffixAfter(action, prefixViews(prefixes));
 }
 
 std::optional<double> parseHardwareActionNumber(const std::string &action,
                                                 const std::vector<std::string> &prefixes)
 {
-    auto suffix = hardwareActionSuffix(action, prefixes);
-    if (!suffix)
-        return std::nullopt;
-
-    std::string number = *suffix;
-    if (!number.empty() && (number.back() == 'k' || number.back() == 'p'))
-        number.pop_back();
-    std::replace(number.begin(), number.end(), '_', '.');
-    return parseDoubleValue(number);
+    return hardware::actions::numberAfter(action, prefixViews(prefixes));
 }
 
 std::optional<Resolution> parseHardwareActionResolution(const std::string &action)
@@ -9296,26 +9284,7 @@ void ApertarCoreApp::stopSoundRecording()
 
 std::string normalizeHardwareAnalogTarget(std::string target)
 {
-    target = lowerAscii(trimAscii(std::move(target)));
-    for (char &ch : target) {
-        if (ch == '-' || ch == ' ' || ch == '.')
-            ch = '_';
-    }
-    if (target == "white_balance" || target == "whitebalance")
-        return "wb";
-    if (target == "focus" || target == "focus_peaking" || target == "focus_peaking_value")
-        return "focus_peaking_threshold";
-    if (target == "zebra" || target == "zebras")
-        return "zebra_threshold";
-    if (target == "volume" || target == "input_gain")
-        return "input_volume";
-    if (target == "headphone" || target == "headphones")
-        return "headphone_volume";
-    if (target == "opacity" || target == "controls_opacity")
-        return "camera_controls_opacity";
-    if (target == "res")
-        return "resolution";
-    return target;
+    return hardware::actions::canonicalAnalogTarget(target);
 }
 
 size_t analogPresetIndex(double normalized, size_t count)
@@ -9892,7 +9861,9 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
         return;
     }
 
-    std::cerr << "Hardware input action ignored: unknown action '" << action << "'.\n";
+    const std::string suggestion = hardware::actions::suggestion(action);
+    std::cerr << "Hardware input action ignored: unknown action '" << action << "'."
+              << (suggestion.empty() ? "" : " Did you mean '" + suggestion + "'?") << "\n";
 }
 
 bool ApertarCoreApp::startMediaSpeedTest(std::string *errorMessage)
@@ -10434,8 +10405,30 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
+    if (command.name == "list_actions") {
+        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
+        const CaptureSettings cameraSettings = camera_.settings();
+        std::vector<std::string> resolutions;
+        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName()))
+            resolutions.push_back(resolution.toString());
+        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
+        body = body.substr(1, body.size() - 2);
+        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
+            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
+                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
+            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
+                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
+            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
+            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
+            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
+        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
+            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
+        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
+        return okReply(command.id, body);
+    }
+
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();

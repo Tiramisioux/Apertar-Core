@@ -1,4 +1,5 @@
 #include "hardware/RecordingIndicatorOutput.hpp"
+#include "hardware/ButtonActionList.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -117,15 +118,7 @@ bool parseConfigBool(const std::string &text, bool fallback)
 
 bool isRecordingIndicatorAction(const std::string &text)
 {
-    const std::string action = normalizeToken(text);
-    return action == "recindicatorled" ||
-           action == "rec_indicator_led" ||
-           action == "recording_indicator" ||
-           action == "recording_indicator_led" ||
-           action == "record_led" ||
-           action == "rec_led" ||
-           action == "tally" ||
-           action == "tally_led";
+    return hardware::isOutputAction(normalizeToken(text));
 }
 
 std::optional<int> pcfPinIndexForKey(std::string key)

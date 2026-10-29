@@ -1,4 +1,5 @@
 #include "hardware/GroveAnalogInput.hpp"
+#include "hardware/ActionCatalog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -124,24 +125,7 @@ bool parseConfigBool(const std::string &text, bool fallback)
 
 std::string normalizeTarget(std::string target)
 {
-    target = normalizeToken(std::move(target));
-    if (target.empty() || target == "none" || target == "off" || target == "disabled")
-        return {};
-    if (target == "white_balance" || target == "whitebalance")
-        return "wb";
-    if (target == "focus_peaking" || target == "focus_peaking_value" || target == "focus")
-        return "focus_peaking_threshold";
-    if (target == "zebra" || target == "zebras")
-        return "zebra_threshold";
-    if (target == "volume" || target == "input_gain")
-        return "input_volume";
-    if (target == "headphone" || target == "headphones")
-        return "headphone_volume";
-    if (target == "opacity" || target == "controls_opacity")
-        return "camera_controls_opacity";
-    if (target == "res")
-        return "resolution";
-    return target;
+    return hardware::actions::canonicalAnalogTarget(target);
 }
 
 std::optional<int> channelIndexFromKeyPrefix(const std::string &key)

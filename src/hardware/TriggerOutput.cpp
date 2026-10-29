@@ -1,4 +1,5 @@
 #include "hardware/TriggerOutput.hpp"
+#include "hardware/ActionCatalog.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -129,22 +130,15 @@ std::set<TriggerOutput::Event> defaultTriggerEvents()
 
 std::optional<TriggerOutput::Event> eventFromToken(std::string token)
 {
-    token = normalizeToken(std::move(token));
-    if (token == "record" || token == "record_start" || token == "recording" ||
-        token == "recording_start" || token == "rec_start") {
+    const std::string event = hardware::actions::canonicalTriggerEvent(token);
+    if (event == "recording_start")
         return TriggerOutput::Event::RecordingStart;
-    }
-    if (token == "still" || token == "photo" || token == "photo_capture" ||
-        token == "capture_photo" || token == "still_capture") {
+    if (event == "still")
         return TriggerOutput::Event::Still;
-    }
-    if (token == "timelapse" || token == "timelapse_start" || token == "time_lapse_start") {
+    if (event == "timelapse_start")
         return TriggerOutput::Event::TimelapseStart;
-    }
-    if (token == "timelapse_frame" || token == "timelapse_shot" ||
-        token == "timelapse_still" || token == "time_lapse_frame") {
+    if (event == "timelapse_frame")
         return TriggerOutput::Event::TimelapseFrame;
-    }
     return std::nullopt;
 }
 

@@ -1,4 +1,5 @@
 #include "hardware/GpioInput.hpp"
+#include "hardware/ActionCatalog.hpp"
 #include "hardware/ButtonActionList.hpp"
 
 #include <algorithm>
@@ -105,105 +106,9 @@ bool parseConfigBool(const std::string &text, bool fallback)
     return fallback;
 }
 
-std::string normalizeSingleAction(std::string action)
-{
-    action = normalizeToken(std::move(action));
-    if (action.empty() || action == "none" || action == "off" || action == "disabled")
-        return {};
-    if (action == "recindicatorled" || action == "rec_indicator_led" ||
-        action == "recording_indicator" || action == "recording_indicator_led" ||
-        action == "record_led" || action == "rec_led" || action == "tally" ||
-        action == "tally_led")
-        return {};
-
-    if (action == "record" || action == "capture" || action == "camera_button" || action == "take")
-        return "capture";
-    if (action == "record_toggle" || action == "toggle_record" || action == "rec")
-        return "record_toggle";
-    if (action == "still" || action == "photo" || action == "take_photo")
-        return "photo";
-    if (action == "timelapse" || action == "time_lapse")
-        return "timelapse";
-    if (action == "eject" || action == "unmount" || action == "eject_media" || action == "unmount_media")
-        return "eject";
-    if (action == "still_mode" || action == "photo_mode")
-        return "still_mode";
-    if (action == "settings" || action == "settings_page")
-        return "settings";
-    if (action == "clip_browser" || action == "browser" || action == "playback")
-        return "clip_browser";
-    if (action == "quick_menu" || action == "quickmenu")
-        return "quick_menu";
-    if (action == "standby" || action == "standby_toggle")
-        return "standby";
-    if (action == "zoom" || action == "zoom_toggle" || action == "preview_zoom")
-        return "zoom_toggle";
-    if (const auto script = hardware::normalizeScriptAction(action); !script.empty())
-        return script;
-    if (action == "focus_peaking" || action == "peaking")
-        return "focus_peaking";
-    if (action == "zebra" || action == "zebras")
-        return "zebra";
-    if (action == "false_color" || action == "falsecolour")
-        return "false_color";
-    if (action == "guides")
-        return "guides";
-    if (action == "center_marker" || action == "centre_marker")
-        return "center_marker";
-    if (action == "grayscale" || action == "greyscale")
-        return "grayscale";
-    if (action == "smpte" || action == "smpte_bars" || action == "color_bars" || action == "colour_bars")
-        return "smpte";
-    if (action == "external_monitor" || action == "external_monitoring" || action == "hdmi")
-        return "external_monitor";
-    if (action == "date_time" || action == "date_time_overlay")
-        return "date_time_overlay";
-    if (action == "audio_meter" || action == "vu_meter" || action == "vumeter")
-        return "audio_meter";
-    if (action == "fps" || action == "fps_cycle")
-        return "fps";
-    if (action == "fps_up" || action == "fps_next" || action == "fps_plus")
-        return "fps_up";
-    if (action == "fps_down" || action == "fps_prev" || action == "fps_previous" || action == "fps_minus")
-        return "fps_down";
-    if (action == "resolution" || action == "resolution_cycle" || action == "res" || action == "res_cycle")
-        return "resolution";
-    if (action == "resolution_up" || action == "resolution_next" || action == "resolution_plus" ||
-        action == "res_up" || action == "res_next" || action == "res_plus")
-        return "resolution_up";
-    if (action == "resolution_down" || action == "resolution_prev" || action == "resolution_previous" ||
-        action == "resolution_minus" || action == "res_down" || action == "res_prev" ||
-        action == "res_previous" || action == "res_minus")
-        return "resolution_down";
-    if (action == "iso" || action == "iso_cycle")
-        return "iso";
-    if (action == "iso_up" || action == "iso_next" || action == "iso_plus")
-        return "iso_up";
-    if (action == "iso_down" || action == "iso_prev" || action == "iso_previous" || action == "iso_minus")
-        return "iso_down";
-    if (action == "shutter" || action == "shutter_cycle")
-        return "shutter";
-    if (action == "shutter_up" || action == "shutter_next" || action == "shutter_plus")
-        return "shutter_up";
-    if (action == "shutter_down" || action == "shutter_prev" || action == "shutter_previous" ||
-        action == "shutter_minus")
-        return "shutter_down";
-    if (action == "wb" || action == "white_balance" || action == "whitebalance" ||
-        action == "wb_cycle" || action == "white_balance_cycle")
-        return "wb";
-    if (action == "wb_up" || action == "white_balance_up" || action == "whitebalance_up" ||
-        action == "wb_next" || action == "wb_plus")
-        return "wb_up";
-    if (action == "wb_down" || action == "white_balance_down" || action == "whitebalance_down" ||
-        action == "wb_prev" || action == "wb_previous" || action == "wb_minus")
-        return "wb_down";
-
-    return action;
-}
-
 std::string normalizeAction(std::string action)
 {
-    return hardware::normalizeButtonMapping(action, normalizeSingleAction);
+    return hardware::normalizeButtonMapping(action, hardware::actions::canonicalAction);
 }
 
 std::optional<int> gpioFromDigitalKey(std::string key)
