@@ -2876,6 +2876,12 @@ std::string_view webControlPageHtml()
       gap: 12px;
     }
 
+    .controls-settings .field-stack {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;          /* a label that wraps does not push its field out of line */
+    }
+
     .controls-settings .field-stack.changed .settings-select,
     .controls-settings .field-stack.changed .settings-input {
       border-color: #a1a1aa;
@@ -2910,14 +2916,14 @@ std::string_view webControlPageHtml()
       opacity: 0.55;
     }
 
-    .controls-row.changed {
-      box-shadow: inset 3px 0 0 #a1a1aa;
-    }
-
     .controls-row-head {
       display: grid;
       gap: 8px;
       padding-top: 10px;
+    }
+
+    .controls-row.new .controls-row-head {
+      padding-top: 0;
     }
 
     .controls-row-title {
@@ -14385,8 +14391,8 @@ std::string_view webControlPageHtml()
       peripherals: [],
       catalog: null,
       edits: new Map(),      // "section|key" -> { section, key, value }: a knob, pin or switch line changed here
-      buttons: new Map(),    // a GPIO button's key ("d6") -> its lines as edited here: [{ suffix, value, orig, raw, removed }]
-      removed: new Set(),    // "section|first key" of switch rows marked for removal
+      buttons: new Map(),    // "section|base" of a row with a push -> { section, base, lines: [{ suffix, value, orig, raw, removed }] }
+      removed: new Set(),    // "section|base or first key" of switch and encoder rows marked for removal
       added: [],             // rows added here: { kind: button, switch2 or switch3, pins, lines: [{ suffix, value, ... }] }
       settingEdits: new Map(),  // "section|key" -> { section, key, value }: device settings changed on the Hardware card
       buses: [],             // the Pi's I2C buses: { bus, name }
@@ -14394,7 +14400,7 @@ std::string_view webControlPageHtml()
     const controlsGroups = [
       { source: "gpio_buttons", title: "GPIO buttons", kinds: ["button"] },
       { source: "gpio_switches", title: "GPIO switches", kinds: ["switch2", "switch3"] },
-      { source: "gpio_encoders", title: "GPIO encoders", kinds: [] },
+      { source: "gpio_encoders", title: "GPIO rotary encoders", kinds: ["encoder"] },
       { source: "neorotary4", title: "NeoRotary 4 knobs", kinds: [] },
       { source: "pcf8574", title: "PCF8574 pins", kinds: [] },
     ];
@@ -14404,9 +14410,12 @@ std::string_view webControlPageHtml()
       neorotary4: ["neorotary4"],
       pcf8574: ["pcf8574"],
     };
-    const controlsNewTitles = { button: "New button", switch2: "New two-way switch", switch3: "New three-way switch" };
-    // + Add action picks the first of these a button does not have yet (Press, then the clicks and Hold).
-    const controlsAddOrder = ["", "_double", "_triple", "_hold", "_single"];
+    const controlsNewTitles = { button: "New button", switch2: "New two-way switch", switch3: "New three-way switch", encoder: "New rotary encoder" };
+    // + Add action picks the first of these a push does not have yet: Press, then the clicks and Hold.
+    const controlsAddOrder = ["_double", "_triple", "_hold", "_single"];
+    // Every row with a push (GPIO buttons, PCF pins, knobs, GPIO encoders): Press, clicks and Hold, keyed base + suffix.
+    const controlsPushGestures = (pressSuffix) => [{ suffix: pressSuffix, label: "Press" }, { suffix: "_single", label: "Single click" },
+      { suffix: "_double", label: "Double click" }, { suffix: "_triple", label: "Triple click" }, { suffix: "_hold", label: "Hold" }];
 
     // The lines of a switch: two-way on and off; three-way one per position, the middle one with neither pin closed.
     function switchLineSpecs(kind, pins) {
@@ -14425,7 +14434,7 @@ std::string_view webControlPageHtml()
 
     function controlsDirty() {
       return controlsState.edits.size > 0 || controlsState.removed.size > 0 || controlsState.added.length > 0 ||
-        [...controlsState.buttons.entries()].some(([base, lines]) => buttonLinesChanged(base, lines));
+        [...controlsState.buttons.values()].some((push) => buttonLinesChanged(push.base, push.lines));
     }
 
     async function controlsCall(payload) {
@@ -14570,10 +14579,12 @@ std::string_view webControlPageHtml()
     function buildControlsRowHead(title, detail) {
       const head = document.createElement("div");
       head.className = "controls-row-head";
-      const name = document.createElement("div");
-      name.className = "controls-row-title";
-      name.textContent = title;
-      head.appendChild(name);
+      if (title) {
+        const name = document.createElement("div");
+        name.className = "controls-row-title";
+        name.textContent = title;
+        head.appendChild(name);
+      }
       if (detail) {
         const text = document.createElement("div");
         text.className = "controls-row-detail";
@@ -14586,8 +14597,7 @@ std::string_view webControlPageHtml()
     // A GPIO button's lines, as in Cinemate: each line's gesture is a dropdown (the ones its other lines use are
     // greyed out), each line has its own Remove, and + Add action adds the next gesture the button lacks.
     // Removing the last line of a new button drops the button (onEmpty).
-    function appendButtonLines(container, title, base, lines, onEmpty) {
-      const gestures = (controlsState.model && controlsState.model.button_gestures) || [];
+    function appendButtonLines(container, title, section, base, lines, gestures, onEmpty) {
       const usedBy = (except) => new Set(lines.filter((line) => line !== except && !line.removed).map((line) => line.suffix));
       lines.forEach((line) => {
         const taken = usedBy(line);
@@ -14607,7 +14617,7 @@ std::string_view webControlPageHtml()
           line.suffix = name.value;
           renderControls();
         });
-        const select = buildControlsSelect("gpio_buttons", { key: base + line.suffix }, line.value);
+        const select = buildControlsSelect(section, { key: base + line.suffix }, line.value);
         select.disabled = line.removed || controlsState.saving;
         select.addEventListener("change", () => {
           line.value = select.value;
@@ -14628,7 +14638,7 @@ std::string_view webControlPageHtml()
           remove.disabled = true;                    // another line took its gesture meanwhile
         container.appendChild(buildControlsLine(name, select, remove, line.removed));
       });
-      const free = controlsAddOrder.filter((suffix) => !usedBy(null).has(suffix));
+      const free = [gestures[0].suffix, ...controlsAddOrder].filter((suffix) => !usedBy(null).has(suffix));
       if (free.length > 0) {
         const add = document.createElement("button");
         add.className = "secondary-button preset-action controls-add-action";
@@ -14650,37 +14660,34 @@ std::string_view webControlPageHtml()
       element.appendChild(buildControlsRowHead(row.title, row.detail));
       const lines = document.createElement("div");
       lines.className = "controls-lines";
-      let changed = false;
-      let removed = false;
-      if (row.kind === "button") {
-        const base = row.lines[0].key;
-        const draft = controlsState.buttons.get(base) || [];
-        changed = buttonLinesChanged(base, draft);
-        removed = draft.length > 0 && draft.every((line) => line.removed);
-        appendButtonLines(lines, row.title, base, draft, null);
-      } else {
-        const rowId = section + "|" + row.lines[0].key;
-        removed = controlsState.removed.has(rowId);
-        row.lines.forEach((line, index) => {
-          const edit = controlsState.edits.get(section + "|" + line.key);
-          changed = changed || !!edit;
-          const select = buildControlsSelect(section, line, edit ? edit.value : line.raw);
-          select.disabled = removed || controlsState.saving;
-          select.addEventListener("change", () => setControlsValue(section, line, select.value));
-          // A switch goes as a whole, its pins with it: its Remove sits in the first line's cell.
-          const remove = section === "gpio_switches" && index === 0 ? buildControlsRemove(row.title, removed, () => {
-            if (removed) {
-              controlsState.removed.delete(rowId);
-            } else {
-              controlsState.removed.add(rowId);
-              row.lines.forEach((other) => controlsState.edits.delete(section + "|" + other.key));
-            }
-            renderControls();
-          }) : null;
-          lines.appendChild(buildControlsLine(line.label, select, remove, false));
-        });
-        changed = changed || removed;
-      }
+      const gestures = row.gestures || [];
+      const pushKeys = new Set(gestures.map((gesture) => row.base + gesture.suffix));
+      const push = gestures.length > 0 ? controlsState.buttons.get(section + "|" + row.base) : null;
+      // A switch or an encoder goes as a whole, its pins with it: its Remove sits in the first line's cell.
+      const rowId = section + "|" + (row.base || row.lines[0].key);
+      const wholeRow = ["switch2", "switch3", "encoder"].includes(row.kind);
+      const removed = wholeRow ? controlsState.removed.has(rowId)
+        : !!push && push.lines.length > 0 && push.lines.every((line) => line.removed);
+      let changed = removed || (!!push && buttonLinesChanged(row.base, push.lines));
+      row.lines.filter((line) => !pushKeys.has(line.key)).forEach((line, index) => {
+        const edit = controlsState.edits.get(section + "|" + line.key);
+        changed = changed || !!edit;
+        const select = buildControlsSelect(section, line, edit ? edit.value : line.raw);
+        select.disabled = removed || controlsState.saving;
+        select.addEventListener("change", () => setControlsValue(section, line, select.value));
+        const remove = wholeRow && index === 0 ? buildControlsRemove(row.title, removed, () => {
+          if (removed) {
+            controlsState.removed.delete(rowId);
+          } else {
+            controlsState.removed.add(rowId);
+            row.lines.forEach((other) => controlsState.edits.delete(section + "|" + other.key));
+          }
+          renderControls();
+        }) : null;
+        lines.appendChild(buildControlsLine(line.label, select, remove, false));
+      });
+      if (push && !(wholeRow && removed))
+        appendButtonLines(lines, row.title, section, row.base, push.lines, gestures, null);
       element.className = "controls-row" + (row.enabled ? "" : " off") + (removed ? " removed" : "") + (changed ? " changed" : "");
       element.appendChild(lines);
       return element;
@@ -14693,40 +14700,73 @@ std::string_view webControlPageHtml()
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
-      controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => taken.add(pin)); });
+      controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => { if (pin !== null) taken.add(pin); }); });
       return ((model && model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
     }
 
     // A row added here: its pins are chosen in the row; a three-way switch has two.
     function buildControlsNewRow(entry, sectionOn) {
       const element = document.createElement("div");
-      element.className = "controls-row changed";
-      const head = buildControlsRowHead(controlsNewTitles[entry.kind], sectionOn ? "" : "Saving switches this group on.");
+      element.className = "controls-row changed new";
+      element.dataset.kind = entry.kind;
+      // No title: the pin dropdowns head the row; a switch or encoder says what it is underneath.
+      const kindName = { button: "", switch2: "Two-way switch", switch3: "Three-way switch", encoder: "Rotary encoder" }[entry.kind];
+      const head = buildControlsRowHead("", "");
       const free = controlsFreePins(entry);
+      const pinNames = entry.kind === "encoder" ? ["A", "B", "Push"] : entry.pins.length > 1 ? ["Pin 1", "Pin 2"] : [""];
       entry.pins.forEach((pin, index) => {
         const select = document.createElement("select");
         select.className = "settings-select controls-pin";
-        select.setAttribute("aria-label", entry.pins.length > 1 ? "Pin " + (index + 1) : "Pin");
+        select.setAttribute("aria-label", pinNames[index] || "Pin");
+        const prefix = pinNames[index] ? pinNames[index] + ": " : "";
+        if (entry.kind === "encoder" && index === 2) {          // the push is optional
+          const none = document.createElement("option");
+          none.value = "";
+          none.textContent = prefix + "none";
+          select.appendChild(none);
+        }
         free.filter((candidate) => candidate === pin || !entry.pins.includes(candidate)).forEach((candidate) => {
           const option = document.createElement("option");
           option.value = String(candidate);
-          option.textContent = (entry.pins.length > 1 ? "Pin " + (index + 1) + ": " : "") + "GPIO " + candidate;
+          option.textContent = prefix + "GPIO " + candidate;
           select.appendChild(option);
         });
-        select.value = String(pin);
+        select.value = pin === null ? "" : String(pin);
         select.disabled = controlsState.saving;
         select.addEventListener("change", () => {
-          entry.pins[index] = parseInt(select.value, 10);
+          entry.pins[index] = select.value === "" ? null : parseInt(select.value, 10);
           renderControls();
         });
         head.appendChild(select);
       });
+      if (kindName) {
+        const kind = document.createElement("div");
+        kind.className = "controls-row-detail";
+        kind.textContent = kindName;
+        head.appendChild(kind);
+      }
       element.appendChild(head);
       const lines = document.createElement("div");
       lines.className = "controls-lines";
       const drop = () => { controlsState.added = controlsState.added.filter((other) => other !== entry); };
       if (entry.kind === "button") {
-        appendButtonLines(lines, controlsNewTitles.button, "d" + entry.pins[0], entry.lines, drop);
+        appendButtonLines(lines, controlsNewTitles.button, "gpio_buttons", "d" + entry.pins[0], entry.lines, controlsPushGestures(""), drop);
+      } else if (entry.kind === "encoder") {
+        [{ suffix: "_cw", label: "Turn clockwise" }, { suffix: "_ccw", label: "Turn counter-clockwise" }].forEach((spec, index) => {
+          const select = buildControlsSelect("gpio_encoders", { key: spec.suffix }, entry.turns[spec.suffix]);
+          select.disabled = controlsState.saving;
+          select.addEventListener("change", () => {
+            entry.turns[spec.suffix] = select.value;
+            renderControls();
+          });
+          const remove = index === 0 ? buildControlsRemove(controlsNewTitles.encoder, false, () => {
+            drop();
+            renderControls();
+          }) : null;
+          lines.appendChild(buildControlsLine(spec.label, select, remove, false));
+        });
+        if (entry.pins[2] !== null)
+          appendButtonLines(lines, controlsNewTitles.encoder, "gpio_encoders", "encoder", entry.lines, controlsPushGestures("_press"), null);
       } else {
         switchLineSpecs(entry.kind, entry.pins).forEach((spec, index) => {
           const line = entry.lines[index];
@@ -14750,15 +14790,18 @@ std::string_view webControlPageHtml()
     function addControlsRow(kind) {
       const entry = { kind: kind, pins: [], lines: [] };
       const free = controlsFreePins(entry);
-      const count = kind === "switch3" ? 2 : 1;
+      const count = kind === "switch3" ? 2 : kind === "encoder" ? 3 : 1;
       if (free.length < count) {
         showToast("No free GPIO pin left.", true);
         return;
       }
       entry.pins = free.slice(0, count);
-      entry.lines = kind === "button"
-        ? [{ suffix: "", value: "none", orig: "", raw: "", removed: false }]
-        : switchLineSpecs(kind, entry.pins).map((spec) => ({ suffix: spec.suffix, value: "none" }));
+      if (kind === "button" || kind === "encoder")
+        entry.lines = [{ suffix: kind === "button" ? "" : "_press", value: "none", orig: "", raw: "", removed: false }];
+      else
+        entry.lines = switchLineSpecs(kind, entry.pins).map((spec) => ({ suffix: spec.suffix, value: "none" }));
+      if (kind === "encoder")
+        entry.turns = { _cw: "none", _ccw: "none" };
       controlsState.added.push(entry);
       renderControls();
     }
@@ -14766,7 +14809,8 @@ std::string_view webControlPageHtml()
     function buildControlsAddBar() {
       const bar = document.createElement("div");
       bar.className = "controls-add-bar";
-      [["button", "+ Add GPIO button"], ["switch2", "+ Add GPIO two-way switch"], ["switch3", "+ Add GPIO three-way switch"]].forEach(([kind, text]) => {
+      [["button", "+ Add GPIO button"], ["switch2", "+ Add GPIO two-way switch"], ["switch3", "+ Add GPIO three-way switch"],
+        ["encoder", "+ Add GPIO rotary encoder"]].forEach(([kind, text]) => {
         const button = document.createElement("button");
         button.className = "secondary-button";
         button.type = "button";
@@ -14805,6 +14849,12 @@ std::string_view webControlPageHtml()
         detail.textContent = status.detail;
         text.appendChild(detail);
       }
+      if (status.info) {                                      // what is there, always: the CFexpress hat's card and drive
+        const info = document.createElement("div");
+        info.className = "controls-row-detail";
+        info.textContent = status.info;
+        text.appendChild(info);
+      }
       head.appendChild(text);
       const pill = document.createElement("div");
       pill.className = "online-pill";
@@ -14829,7 +14879,8 @@ std::string_view webControlPageHtml()
         if (setting.type === "bool" || setting.type === "choice") {
           control = document.createElement("select");
           control.className = "settings-select";
-          const options = setting.type === "bool" ? [["true", "Yes"], ["false", "No"]] : (setting.options || []).map((option) => [option, option]);
+          const words = setting.type === "bool" && setting.options && setting.options.length === 2 ? setting.options : ["Yes", "No"];
+          const options = setting.type === "bool" ? [["true", words[0]], ["false", words[1]]] : (setting.options || []).map((option) => [option, option]);
           options.forEach(([optionValue, optionText]) => {
             const option = document.createElement("option");
             option.value = optionValue;
@@ -14876,12 +14927,13 @@ std::string_view webControlPageHtml()
       if (rows.length === 0 && added.length === 0)
         return null;
       const on = !!(sections[group.source] && sections[group.source].enabled);
-      const open = on || added.length > 0;
-      const wrap = document.createElement(open ? "div" : "details");
+      if (!on && added.length === 0)
+        return null;                                         // a switched-off group controls nothing; Config shows it
+      const wrap = document.createElement("div");
       wrap.className = "controls-group";
-      const title = document.createElement(open ? "div" : "summary");
+      const title = document.createElement("div");
       title.className = "controls-group-title";
-      title.textContent = group.title + (on ? "" : " (switched off in the file)");
+      title.textContent = group.title + (on ? "" : " (switched off in the file: saving switches these on)");
       wrap.appendChild(title);
       rows.forEach((row) => wrap.appendChild(buildControlsRow(row)));
       added.forEach((entry) => wrap.appendChild(buildControlsNewRow(entry, on)));
@@ -15045,12 +15097,13 @@ std::string_view webControlPageHtml()
         // Each GPIO button's lines as the file has them; the page edits these copies.
         controlsState.buttons = new Map();
         ((controlsState.model && controlsState.model.rows) || []).forEach((row) => {
-          if (row.kind !== "button")
+          if (!row.gestures || row.gestures.length === 0)
             return;
-          const base = row.lines[0].key;
-          controlsState.buttons.set(base, row.lines.filter((line) => line.raw !== "").map((line) => ({
-            suffix: line.key.slice(base.length), value: line.raw, orig: line.key, raw: line.raw, removed: false,
-          })));
+          const pushKeys = new Set(row.gestures.map((gesture) => row.base + gesture.suffix));
+          controlsState.buttons.set(row.source + "|" + row.base, { section: row.source, base: row.base,
+            lines: row.lines.filter((line) => pushKeys.has(line.key) && line.raw !== "").map((line) => ({
+              suffix: line.key.slice(row.base.length), value: line.raw, orig: line.key, raw: line.raw, removed: false,
+            })) });
         });
         const found = controls.controls;
         if (found.errors > 0)
@@ -15087,35 +15140,51 @@ std::string_view webControlPageHtml()
       const set = (section, key, value) => sets.set(section + "." + key, value);
       controlsState.edits.forEach((edit) => set(edit.section, edit.key, edit.value));
       controlsState.removed.forEach((id) => {
-        const row = rows.find((candidate) => candidate.source + "|" + candidate.lines[0].key === id);
+        const row = rows.find((candidate) => candidate.source + "|" + (candidate.base || candidate.lines[0].key) === id);
         (row ? row.keys || [] : []).forEach((key) => unsets.add(row.source + "." + key));
       });
-      controlsState.buttons.forEach((lines, base) => {
-        lines.forEach((line) => {
-          const key = base + line.suffix;
+      controlsState.buttons.forEach((push, id) => {
+        if (controlsState.removed.has(id))
+          return;
+        push.lines.forEach((line) => {
+          const key = push.base + line.suffix;
           if (line.orig && (line.removed || line.orig !== key))
-            unsets.add("gpio_buttons." + line.orig);
+            unsets.add(push.section + "." + line.orig);
           if (line.removed || (line.orig === key && line.value === line.raw) || (!line.orig && line.value === "none"))
             return;                                          // unchanged, or added and left at Nothing
-          set("gpio_buttons", key, line.value);
+          set(push.section, key, line.value);
         });
       });
       // New rows: a button is d<pin> plus its gestures; a switch takes the next free index, its pins and its actions.
       // Saving one into a group that is switched off switches the group on.
-      let nextSwitch = 0;
-      rows.forEach((row) => (row.keys || []).forEach((key) => {
-        const match = /^switch(\d+)_/.exec(key);
-        if (match)
-          nextSwitch = Math.max(nextSwitch, parseInt(match[1], 10) + 1);
-      }));
+      const nextIndex = (source, pattern) => {
+        let next = 0;
+        rows.filter((row) => row.source === source).forEach((row) => (row.keys || []).forEach((key) => {
+          const match = pattern.exec(key);
+          if (match)
+            next = Math.max(next, parseInt(match[1], 10) + 1);
+        }));
+        return next;
+      };
+      let nextSwitch = nextIndex("gpio_switches", /^switch(\d+)_/);
+      let nextEncoder = nextIndex("gpio_encoders", /^encoder(\d+)_/);
       controlsState.added.forEach((entry) => {
-        const section = entry.kind === "button" ? "gpio_buttons" : "gpio_switches";
-        const base = entry.kind === "button" ? "d" + entry.pins[0] : "switch" + nextSwitch++;
-        const chosen = entry.lines.filter((line) => line.value !== "none");
+        const section = { button: "gpio_buttons", encoder: "gpio_encoders" }[entry.kind] || "gpio_switches";
+        const lines = entry.kind === "encoder"
+          ? [...Object.entries(entry.turns).map(([suffix, value]) => ({ suffix, value })), ...(entry.pins[2] === null ? [] : entry.lines)]
+          : entry.lines;
+        const chosen = lines.filter((line) => line.value !== "none");
         if (chosen.length === 0)
           return;
-        if (entry.kind !== "button")
+        const base = entry.kind === "button" ? "d" + entry.pins[0] : entry.kind === "encoder" ? "encoder" + nextEncoder++ : "switch" + nextSwitch++;
+        if (entry.kind === "encoder") {
+          set(section, base + "_a", String(entry.pins[0]));
+          set(section, base + "_b", String(entry.pins[1]));
+          if (entry.pins[2] !== null)
+            set(section, base + "_press_gpio", String(entry.pins[2]));
+        } else if (entry.kind !== "button") {
           set(section, base + "_pins", entry.pins.join(","));
+        }
         chosen.forEach((line) => set(section, base + line.suffix, line.value));
         if (!(sections.get(section) || {}).enabled)
           set(section, "enabled", "true");
