@@ -5,6 +5,7 @@
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
 #include "hardware/ActionCatalog.hpp"
+#include "hardware/ControlsModel.hpp"
 #include "hardware/HardwareConfigStore.hpp"
 #include "hardware/ButtonActionList.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
@@ -10388,7 +10389,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << ",\"warnings\":" << issues.size() - errors
              << ",\"issues\":" << controlsIssuesJson(issues)
              << ",\"text\":\"" << escapeJson(info.text) << "\""
-             << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault()) << "}";
+             << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault())
+             << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text)) << "}";
         return okReply(command.id, body.str());
     }
     if (command.name == "list_actions") {
@@ -10601,8 +10603,14 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 text = replaced.restoreText;
             }
         }
-        if (!text)
-            return errorReply(command.id, "set_controls needs text= (the whole file), or restore=true.");
+        // Or single keys: set.<section>.<key>=value, unset.<section>.<key>=true, unset.<section>=true.
+        std::vector<hwconf::Edit> edits;
+        if (const std::string problem = hwconf::parseEdits(command.fields, edits); !problem.empty())
+            return errorReply(command.id, problem);
+        if (text && !edits.empty())
+            return errorReply(command.id, "Send the whole file (text=) or single keys (set.<section>.<key>=), not both.");
+        if (!text && edits.empty())
+            return errorReply(command.id, "set_controls needs text= (the whole file), restore=true, or set.<section>.<key>=value.");
         hardware::StoreFlags flags;
         flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
         const std::pair<const char *, bool *> flagFields[] = {
@@ -10611,8 +10619,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             if (const auto value = command.string(name); value && !parseBooleanToken(*value, flag))
                 return errorReply(command.id, std::string(name) + " must be true or false.");
         }
-        const hardware::StoreResult result = hardware::configStore().replace(
-            *base, *text, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        const std::string by = command.string("by").value_or("api");
+        const hardware::StoreResult result = edits.empty()
+            ? hardware::configStore().replace(*base, *text, by, flags, hardwareConfigFacts())
+            : hardware::configStore().edit(*base, edits, by, flags, hardwareConfigFacts());
         if (!result.ok) {
             return errorReplyBody(command.id, result.error,
                 "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
