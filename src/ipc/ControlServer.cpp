@@ -12,6 +12,9 @@
 namespace apertar {
 namespace {
 
+// One command line. A set_controls text is the whole file; 64 KiB used to drop the client without a word.
+constexpr size_t kMaxRequestLineBytes = 1024 * 1024;
+
 bool sendLine(int fd, const std::string &line)
 {
     std::string payload = line;
@@ -258,7 +261,7 @@ void ControlServer::clientLoop(std::shared_ptr<ClientConnection> client)
                 }
                 line.clear();
             } else if (ch != '\r') {
-                if (line.size() >= 64 * 1024)
+                if (line.size() >= kMaxRequestLineBytes)
                     return;
                 line.push_back(ch);
             }

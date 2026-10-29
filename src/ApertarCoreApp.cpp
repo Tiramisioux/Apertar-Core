@@ -5701,11 +5701,25 @@ std::string formatFileTimestampHuman(const std::filesystem::file_time_type &time
 std::string buildHardwareConfigFileJson()
 {
     const std::filesystem::path path = editableHardwareConfigPath();
+    const hardware::StoreInfo info = hardware::configStore().info();
     std::error_code ec;
-    const bool exists = std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec);
-    ec.clear();
+    const bool exists = info.exists;
 
-    const std::string text = exists ? readTextFileRaw(path) : defaultHardwareConfigTemplate();
+    // A missing file starts from a /boot copy when there is one (the readers take its sections), else the template.
+    std::string text = info.text;
+    std::string bootCopy;
+    if (!exists) {
+        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                bootCopy = candidate;
+                text = readTextFileRaw(candidate);
+                break;
+            }
+            ec.clear();
+        }
+        if (bootCopy.empty())
+            text = defaultHardwareConfigTemplate();
+    }
     uint64_t sizeBytes = static_cast<uint64_t>(text.size());
     if (exists) {
         const auto fileSize = std::filesystem::file_size(path, ec);
@@ -5723,6 +5737,8 @@ std::string buildHardwareConfigFileJson()
         << ",\"path\":\"" << escapeJson(path.string()) << "\""
         << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(path)) << "\""
         << ",\"exists\":" << (exists ? "true" : "false")
+        << ",\"revision\":\"" << escapeJson(info.revision) << "\""
+        << ",\"boot_copy\":\"" << escapeJson(bootCopy) << "\""
         << ",\"size_bytes\":" << sizeBytes
         << ",\"size_text\":\"" << escapeJson(formatBytesHuman(sizeBytes)) << "\""
         << ",\"modified_text\":\"" << escapeJson(modifiedText) << "\""
@@ -5731,7 +5747,8 @@ std::string buildHardwareConfigFileJson()
     return out.str();
 }
 
-bool saveHardwareConfigFile(const std::string &text, std::string *backupPath, std::string *errorMessage)
+// What the Config page may send before the store sees it. Empty, too large and binary texts never get that far.
+bool checkHardwareConfigText(const std::string &text, std::string *errorMessage)
 {
     if (trimAscii(text).empty()) {
         if (errorMessage)
@@ -5748,48 +5765,6 @@ bool saveHardwareConfigFile(const std::string &text, std::string *backupPath, st
     if (text.find('\0') != std::string::npos) {
         if (errorMessage)
             *errorMessage = "Config file contains invalid binary data.";
-        return false;
-    }
-
-    const std::filesystem::path path = editableHardwareConfigPath();
-    const std::filesystem::path parent = path.parent_path();
-    std::error_code ec;
-    if (!parent.empty() && !std::filesystem::exists(parent, ec)) {
-        std::filesystem::create_directories(parent, ec);
-        if (ec) {
-            if (errorMessage)
-                *errorMessage = "Could not create config directory: " + ec.message();
-            return false;
-        }
-    }
-    ec.clear();
-
-    const bool existed = std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec);
-    ec.clear();
-    if (existed) {
-        const std::filesystem::path backup = path.string() + ".bak";
-        std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, ec);
-        if (ec) {
-            if (errorMessage)
-                *errorMessage = "Could not create config backup: " + ec.message();
-            return false;
-        }
-        if (backupPath)
-            *backupPath = backup.string();
-    }
-
-    const std::filesystem::path tempPath = path.string() + ".tmp";
-    if (!writeTextFileRaw(tempPath, text)) {
-        if (errorMessage)
-            *errorMessage = "Could not write temporary config file.";
-        return false;
-    }
-
-    std::filesystem::rename(tempPath, path, ec);
-    if (ec) {
-        std::filesystem::remove(tempPath, ec);
-        if (errorMessage)
-            *errorMessage = "Could not save config file: " + ec.message();
         return false;
     }
 
@@ -8036,24 +8011,62 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "POST" && request.path == "/api/config") {
-        std::string backupPath;
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
         std::string errorMessage;
-        if (!saveHardwareConfigFile(request.body, &backupPath, &errorMessage)) {
-            WebServer::Response response;
+        if (!checkHardwareConfigText(request.body, &errorMessage)) {
             response.status = 400;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = errorReply(-1, errorMessage.empty() ? "Could not save config file." : errorMessage);
+            response.body = errorReply(-1, errorMessage);
             return response;
         }
 
-        WebServer::Response response;
-        response.contentType = "application/json; charset=utf-8";
+        // The page names the revision it loaded. A browser without one is a tab from before the update; a script
+        // (no Origin) keeps last-writer-wins.
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const auto revisionHeader = request.headers.find("x-apertar-revision");
+        if (revisionHeader == request.headers.end() && request.headers.count("origin")) {
+            response.status = 409;
+            response.body = errorReplyBody(-1, "Apertar was updated: reload this page. Your text stays in the box.",
+                                           "\"code\":\"old_page\"");
+            return response;
+        }
+        const std::string base = revisionHeader != request.headers.end() ? revisionHeader->second : store.currentRevision();
+
+        hardware::StoreFlags flags;
+        flags.backup = true;
+        const hardware::StoreResult result = store.replace(base, request.body, "webui", flags, hardwareConfigFacts());
+        if (!result.ok || result.needsReview) {
+            const bool changed = result.needsReview || result.code == "stale" || result.code == "conflict" ||
+                result.code == "being_written" || result.code == "locked";
+            response.status = changed ? 409 : 400;
+            const std::string code = result.needsReview ? "merge_review" : result.code;
+            const std::string message = result.needsReview
+                ? "The file changed since you loaded it. Reload; your text stays in the box."
+                : result.error;
+            response.body = errorReplyBody(-1, message,
+                "\"code\":\"" + escapeJson(code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
+                ",\"issues\":" + controlsIssuesJson(result.issues) +
+                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
+                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
+            return response;
+        }
+        if (result.written) {
+            controlsErrors_ = controlsErrorCount(result.issues);
+            controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+        }
+
+        const std::string backupPath = result.written && std::filesystem::exists(store.path().string() + ".bak")
+            ? store.path().string() + ".bak" : std::string();
         response.body = okReply(
             -1,
-            "\"path\":\"" + escapeJson(editableHardwareConfigPath().string()) + "\""
-            + ",\"display_path\":\"" + escapeJson(hardwareConfigDisplayPath(editableHardwareConfigPath())) + "\""
+            "\"path\":\"" + escapeJson(store.path().string()) + "\""
+            + ",\"display_path\":\"" + escapeJson(hardwareConfigDisplayPath(store.path())) + "\""
             + ",\"backup_path\":\"" + escapeJson(backupPath) + "\""
-            + ",\"backup_display_path\":\"" + escapeJson(backupPath.empty() ? std::string() : hardwareConfigDisplayPath(backupPath)) + "\"");
+            + ",\"backup_display_path\":\"" + escapeJson(backupPath.empty() ? std::string() : hardwareConfigDisplayPath(backupPath)) + "\""
+            + ",\"revision\":\"" + escapeJson(result.revision) + "\""
+            + ",\"written\":" + (result.written ? "true" : "false")
+            + ",\"errors\":" + std::to_string(controlsErrorCount(result.issues))
+            + ",\"issues\":" + controlsIssuesJson(result.issues));
         return response;
     }
 
