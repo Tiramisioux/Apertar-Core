@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <unordered_map>
@@ -267,6 +268,7 @@ GpioInput::Config GpioInput::loadConfig()
         bool encodersEnabled = false;
         std::array<EncoderMapping, 8> encoderDrafts{};
         std::array<bool, 8> encoderSeen{};
+        std::map<int, ButtonMapping> buttonDrafts;   // by GPIO: press, clicks and hold gathered from dN, dN_single...
 
         std::string line;
         while (std::getline(input, line)) {
@@ -319,10 +321,29 @@ GpioInput::Config GpioInput::loadConfig()
                 if (const auto parsed = parseConfigInteger(value))
                     config.debounceMs = std::clamp(*parsed, 0, 1000);
             } else if (inButtonsSection) {
-                if (const auto gpio = gpioFromDigitalKey(key)) {
+                std::string base = key;
+                std::string gesture;
+                for (const std::string suffix : { "_single", "_double", "_triple", "_hold" }) {
+                    if (base.size() > suffix.size() && base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        base.resize(base.size() - suffix.size());
+                        gesture = suffix;
+                        break;
+                    }
+                }
+                if (const auto gpio = gpioFromDigitalKey(base)) {
+                    ButtonMapping &mapping = buttonDrafts[*gpio];
+                    mapping.gpio = *gpio;
                     const std::string action = normalizeAction(value);
-                    if (!action.empty())
-                        config.buttons.push_back({ *gpio, action });
+                    if (gesture.empty())
+                        mapping.action = action;
+                    else if (gesture == "_single")
+                        mapping.single = action;
+                    else if (gesture == "_double")
+                        mapping.doubleClick = action;
+                    else if (gesture == "_triple")
+                        mapping.triple = action;
+                    else
+                        mapping.hold = action;
                 }
             } else if (inEncodersSection) {
                 if (const auto encoder = encoderIndexFromKeyPrefix(key)) {
@@ -355,6 +376,12 @@ GpioInput::Config GpioInput::loadConfig()
                     }
                 }
             }
+        }
+
+        for (auto &[gpio, mapping] : buttonDrafts) {
+            if (!mapping.action.empty() || !mapping.single.empty() || !mapping.doubleClick.empty() ||
+                !mapping.triple.empty() || !mapping.hold.empty())
+                config.buttons.push_back(std::move(mapping));
         }
 
         if (!buttonsEnabled)
@@ -533,8 +560,17 @@ void GpioInput::run()
             buttons.clear();
             encoders.clear();
             for (const ButtonMapping &button : config_.buttons) {
-                if (const auto it = indexByOffset.find(button.gpio); it != indexByOffset.end())
-                    buttons.push_back({ it->second, button.action });
+                if (const auto it = indexByOffset.find(button.gpio); it != indexByOffset.end()) {
+                    RuntimeButton runtime;
+                    runtime.lineIndex = it->second;
+                    runtime.gpio = button.gpio;
+                    runtime.action = button.action;
+                    runtime.single = button.single;
+                    runtime.doubleClick = button.doubleClick;
+                    runtime.triple = button.triple;
+                    runtime.hold = button.hold;
+                    buttons.push_back(std::move(runtime));
+                }
             }
             for (const EncoderMapping &encoder : config_.encoders) {
                 const auto a = indexByOffset.find(encoder.gpioA);
@@ -550,8 +586,13 @@ void GpioInput::run()
                     std::max(1, encoder.stepsPerEvent),
                 });
                 if (encoder.pressGpio >= 0 && !encoder.press.empty()) {
-                    if (const auto press = indexByOffset.find(encoder.pressGpio); press != indexByOffset.end())
-                        buttons.push_back({ press->second, encoder.press });
+                    if (const auto press = indexByOffset.find(encoder.pressGpio); press != indexByOffset.end()) {
+                        RuntimeButton runtime;
+                        runtime.lineIndex = press->second;
+                        runtime.gpio = encoder.pressGpio;
+                        runtime.action = encoder.press;
+                        buttons.push_back(std::move(runtime));
+                    }
                 }
             }
             setLastError({});
@@ -566,23 +607,35 @@ void GpioInput::run()
         }
 
         const auto now = std::chrono::steady_clock::now();
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         for (RuntimeButton &button : buttons) {
-            const bool pressed = (bits & (1ULL << button.lineIndex)) != 0;
+            const bool level = (bits & (1ULL << button.lineIndex)) != 0;
             if (!button.haveSample) {
-                button.observedPressed = pressed;
-                button.stablePressed = pressed;
+                // Like Cinemate: a button that already reads pressed at start is wired the other way round (a 1-0-1,
+                // normally closed button), so its levels are swapped from now on.
+                button.inverted = level;
+                if (level)
+                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
                 button.observedChangedAt = now;
                 button.haveSample = true;
-            } else if (pressed != button.observedPressed) {
+            }
+            const bool pressed = level != button.inverted;
+            if (pressed != button.observedPressed) {
                 button.observedPressed = pressed;
                 button.observedChangedAt = now;
             } else {
                 const auto stableForMs =
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - button.observedChangedAt).count();
-                if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed) {
+                if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed)
                     button.stablePressed = button.observedPressed;
-                    if (button.stablePressed)
-                        emitAction(button.action);
+            }
+            for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
+                switch (event) {
+                case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
+                case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
+                case hardware::ButtonGesture::Event::Double: emitAction(button.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: emitAction(button.triple); break;
+                case hardware::ButtonGesture::Event::Hold: emitAction(button.hold); break;
                 }
             }
         }

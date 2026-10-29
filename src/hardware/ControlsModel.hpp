@@ -22,7 +22,26 @@ struct ControlRow {
     std::string detail;                 // wiring, when the section has it
     int pin = -1;                       // BCM number of a GPIO button, else -1
     std::vector<ControlLine> lines;
+    std::vector<std::pair<std::string, std::string>> canAdd;   // key, label: clicks and hold not in the file yet
 };
+
+// The clicks and hold a GPIO button can carry next to Press (counted like Cinemate: ButtonGesture).
+inline const std::vector<std::pair<std::string, std::string>> &buttonGestures()
+{
+    static const std::vector<std::pair<std::string, std::string>> gestures = {
+        {"_single", "Single click"}, {"_double", "Double click"}, {"_triple", "Triple click"}, {"_hold", "Hold"}};
+    return gestures;
+}
+
+// Does the file hold d<pin> or any of its clicks and hold?
+inline bool gpioButtonInFile(const Document &doc, int pin)
+{
+    const std::string key = "d" + std::to_string(pin);
+    if (valueOf(doc, "gpio_buttons", key)) return true;
+    for (const auto &[suffix, label] : buttonGestures())
+        if (valueOf(doc, "gpio_buttons", key + suffix)) return true;
+    return false;
+}
 
 inline std::string jsonEscape(const std::string &text)
 {
@@ -82,18 +101,22 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
 {
     std::vector<ControlRow> rows;
     for (const int pin : indexesOf(doc, "gpio_buttons", "d")) {
+        if (!gpioButtonInFile(doc, pin)) continue;
         const std::string key = "d" + std::to_string(pin);
-        if (!valueOf(doc, "gpio_buttons", key)) continue;   // only d10_hold, no d10
-        ControlRow row{"gpio_buttons", "GPIO " + std::to_string(pin), {}, pin, {}};
+        ControlRow row{"gpio_buttons", "GPIO " + std::to_string(pin), {}, pin, {}, {}};
         row.lines.push_back(controlLine(doc, "gpio_buttons", "Press", key));
-        for (const auto &[suffix, label] : {std::pair<const char *, const char *>{"_hold", "Hold"}, {"_double", "Double press"}})
-            if (valueOf(doc, "gpio_buttons", key + suffix)) row.lines.push_back(controlLine(doc, "gpio_buttons", label, key + suffix));
+        for (const auto &[suffix, label] : buttonGestures()) {
+            if (valueOf(doc, "gpio_buttons", key + suffix))
+                row.lines.push_back(controlLine(doc, "gpio_buttons", label, key + suffix));
+            else
+                row.canAdd.emplace_back(key + suffix, label);
+        }
         rows.push_back(std::move(row));
     }
     if (hasSection(doc, "neorotary4")) {
         for (int knob = 0; knob < 4; ++knob) {
             const std::string base = "encoder" + std::to_string(knob);
-            ControlRow row{"neorotary4", "Knob " + std::to_string(knob + 1), {}, -1, {}};
+            ControlRow row{"neorotary4", "Knob " + std::to_string(knob + 1), {}, -1, {}, {}};
             row.lines.push_back(controlLine(doc, "neorotary4", "Turn clockwise", base + "_cw"));
             row.lines.push_back(controlLine(doc, "neorotary4", "Turn counter-clockwise", base + "_ccw"));
             row.lines.push_back(controlLine(doc, "neorotary4", "Press", base + "_press"));
@@ -103,13 +126,13 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
     for (const int pin : indexesOf(doc, "pcf8574", "pin")) {
         const std::string key = "pin" + std::to_string(pin);
         if (!valueOf(doc, "pcf8574", key)) continue;
-        ControlRow row{"pcf8574", "PCF pin " + std::to_string(pin), {}, -1, {}};
+        ControlRow row{"pcf8574", "PCF pin " + std::to_string(pin), {}, -1, {}, {}};
         row.lines.push_back(controlLine(doc, "pcf8574", "Press", key));
         rows.push_back(std::move(row));
     }
     for (const int index : indexesOf(doc, "gpio_encoders", "encoder")) {
         const std::string base = "encoder" + std::to_string(index);
-        ControlRow row{"gpio_encoders", "Encoder " + std::to_string(index), {}, -1, {}};
+        ControlRow row{"gpio_encoders", "Encoder " + std::to_string(index), {}, -1, {}, {}};
         row.detail = "A " + valueOf(doc, "gpio_encoders", base + "_a").value_or("?") + ", B " +
             valueOf(doc, "gpio_encoders", base + "_b").value_or("?") + ", press " + valueOf(doc, "gpio_encoders", base + "_press_gpio").value_or("-");
         row.lines.push_back(controlLine(doc, "gpio_encoders", "Turn clockwise", base + "_cw"));
@@ -135,7 +158,7 @@ inline std::vector<std::pair<int, std::string>> gpioPinsInUse(const Document &do
     auto add = [&](long pin, const std::string &by) { if (pin >= 0) used.emplace_back(static_cast<int>(pin), by); };
     if (sectionOn(doc, "gpio_buttons"))
         for (const int pin : indexesOf(doc, "gpio_buttons", "d"))
-            if (valueOf(doc, "gpio_buttons", "d" + std::to_string(pin))) add(pin, "button d" + std::to_string(pin));
+            if (gpioButtonInFile(doc, pin)) add(pin, "button d" + std::to_string(pin));
     if (sectionOn(doc, "gpio_encoders"))
         for (const int index : indexesOf(doc, "gpio_encoders", "encoder"))
             for (const char *field : {"_a", "_b", "_press_gpio"})
@@ -172,6 +195,32 @@ inline std::vector<SettingSpec> peripheralSettings(const std::string &section)
             {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
             {"poll_ms", "Poll every (ms)", "number", "12", "", 1, 1000},
             {"chip", "GPIO chip", "text", "auto", "", 0, 0},
+        };
+    if (section == "neorotary4")
+        return {
+            {"enabled", "On", "bool", "true", "", 0, 0},
+            {"bus", "I2C bus", "number", "1", "", 0, 255},
+            {"address", "Address", "text", "0x49", "", 0, 0},
+            {"invert_direction", "Reverse turning", "bool", "false", "", 0, 0},
+            {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
+            {"poll_ms", "Poll every (ms)", "number", "30", "", 1, 1000},
+        };
+    if (section == "pcf8574")
+        return {
+            {"enabled", "On", "bool", "true", "", 0, 0},
+            {"bus", "I2C bus", "number", "1", "", 0, 255},
+            {"address", "Address", "text", "0x20", "", 0, 0},
+            {"active_low", "Pressed reads low (button to GND)", "bool", "true", "", 0, 0},
+            {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
+            {"poll_ms", "Poll every (ms)", "number", "40", "", 1, 1000},
+        };
+    if (section == "grove_analog")
+        return {
+            {"enabled", "On", "bool", "true", "", 0, 0},
+            {"bus", "I2C bus", "number", "1", "", 0, 255},
+            {"address", "Address", "text", "0x04", "", 0, 0},
+            {"deadband", "Deadband", "number", "32", "", 0, 4095},
+            {"poll_ms", "Poll every (ms)", "number", "80", "", 1, 1000},
         };
     return {};
 }
@@ -229,6 +278,9 @@ inline std::string modelJson(const Document &doc)
             for (size_t k = 0; k < line.actions.size(); ++k) out += std::string(k ? "," : "") + "\"" + jsonEscape(line.actions[k]) + "\"";
             out += "]}";
         }
+        out += "],\"can_add\":[";
+        for (size_t i = 0; i < row.canAdd.size(); ++i)
+            out += std::string(i ? "," : "") + "{\"key\":\"" + row.canAdd[i].first + "\",\"label\":\"" + jsonEscape(row.canAdd[i].second) + "\"}";
         out += "]}";
         first = false;
     }

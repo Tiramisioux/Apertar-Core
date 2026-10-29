@@ -7,6 +7,7 @@
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
 #include "hardware/GpioChipInfo.hpp"
+#include "hardware/I2cProbe.hpp"
 #include "hardware/HardwareConfigStore.hpp"
 #include "hardware/ButtonActionList.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
@@ -10433,6 +10434,71 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
     return out.str();
 }
 
+// An I2C peripheral as the Controls page shows it: its settings, and whether it is there. A device Core's driver runs
+// is reported by that driver (a probe in the middle of its polls could disturb it); any other is probed once at the
+// file's bus and address.
+std::string ApertarCoreApp::i2cPeripheralJson(const hwconf::Document &doc, const std::string &section, const std::string &title,
+                                             int defaultAddress, bool coreOn, const std::string &error)
+{
+    const bool present = hwconf::hasSection(doc, section);
+    const bool fileOn = hwconf::sectionOn(doc, section);
+    const auto busValue = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
+    const auto addressValue = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
+    const int bus = busValue ? static_cast<int>(*busValue) : 1;
+    const int address = addressValue ? static_cast<int>(*addressValue) : defaultAddress;
+    const std::string where = "bus " + std::to_string(bus) + " at " + hwconf::hex(address);
+    std::string state;
+    std::string detail;
+    if (coreOn) {
+        state = error.empty() ? "running" : "error";
+        detail = error.empty() ? "Core reads it on " + where + "." : error;
+        if (!fileOn) {
+            state = "restart";
+            detail = "Switched off in the file; Core stops it when it restarts.";
+        }
+    } else {
+        const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
+        if (probe.found) {
+            state = fileOn ? "restart" : "found";
+            detail = fileOn ? "Found on " + where + " and switched on in the file; Core starts it when it restarts."
+                            : "Found on " + where + ", switched off.";
+            if (probe.kernelDriver)
+                detail += " A kernel driver holds this address.";
+        } else {
+            state = "missing";
+            detail = probe.busExists ? "Not found on " + where + "." : probe.error;
+        }
+    }
+    std::ostringstream out;
+    out << "{\"id\":\"" << section << "\",\"section\":\"" << section << "\",\"title\":\"" << escapeJson(title) << "\""
+        << ",\"in_file\":" << (present ? "true" : "false")
+        << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, section)
+        << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\""
+        << ",\"bus\":" << bus << ",\"address\":\"" << hwconf::hex(address) << "\"}}";
+    return out.str();
+}
+
+// The I2C buses this Pi has, with the adapter's name (/sys/bus/i2c/devices: /sys/class/i2c-adapter is missing on
+// this kernel). /dev links such as i2c-6 -> i2c-10 are not listed twice.
+static std::string i2cBusesJson()
+{
+    std::vector<std::pair<int, std::string>> buses;
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/bus/i2c/devices", error)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("i2c-", 0) != 0 || !hwconf::allDigits(name.substr(4)))
+            continue;
+        buses.emplace_back(std::stoi(name.substr(4)), trimAscii(readTextFileRaw(entry.path() / "name")));
+    }
+    std::sort(buses.begin(), buses.end());
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < buses.size(); ++i)
+        out << (i ? "," : "") << "{\"bus\":" << buses[i].first << ",\"name\":\"" << escapeJson(buses[i].second) << "\"}";
+    out << ']';
+    return out.str();
+}
+
 // The hardware commands that only read: they run without the command lock.
 std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
 {
@@ -10456,7 +10522,11 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << ",\"text\":\"" << escapeJson(info.text) << "\""
              << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault())
              << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text))
-             << ",\"peripherals\":[" << gpioPeripheralJson(hwconf::parse(info.text)) << "]}";
+             << ",\"peripherals\":[" << gpioPeripheralJson(hwconf::parse(info.text))
+             << "," << i2cPeripheralJson(hwconf::parse(info.text), "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
+             << "," << i2cPeripheralJson(hwconf::parse(info.text), "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
+             << "," << i2cPeripheralJson(hwconf::parse(info.text), "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
+             << "],\"i2c_buses\":" << i2cBusesJson() << "}";
         return okReply(command.id, body.str());
     }
     if (command.name == "list_actions") {

@@ -112,7 +112,7 @@ inline std::string stripSuffix(std::string key, std::string_view suffix)
 // Gesture suffixes (T44): written by Core as <control>_hold / <control>_double. Old Core ignores them.
 inline std::string splitGesture(std::string &key)
 {
-    for (const std::string_view gesture : {"_hold", "_double"}) {
+    for (const std::string_view gesture : {"_single", "_double", "_triple", "_hold"}) {
         if (key.size() > gesture.size() && key.compare(key.size() - gesture.size(), gesture.size(), gesture) == 0) {
             key.resize(key.size() - gesture.size());
             return std::string(gesture);
@@ -451,7 +451,7 @@ inline bool knownKey(std::string_view section, std::string_view key)
     };
     if (section == "gpio_buttons")
         return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "hold_ms", "double_ms"}) ||
-            indexedKey(key, "d", 63, {"", "_hold", "_double"});
+            indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"});
     if (section == "gpio_encoders")
         return key == "enabled" || indexedKey(key, "encoder", 7, {"_a", "_b", "_press_gpio", "_cw", "_ccw", "_press",
             "_invert", "_steps_per_event", "_hold", "_double"});
@@ -855,17 +855,21 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
                     "only pull low, so an LED from the pin to GND never lights. Turn open drain off, or wire the LED from 3.3 V to the pin and use active low.");
         }
     }
+    std::set<long> claimedButtons;
     for (const auto &line : doc.lines) {
         if (line.kind != Kind::Key) continue;
         const bool gpioButton = line.section == "gpio_buttons" && line.key.size() > 1 && line.key[0] == 'd' &&
             std::isdigit(static_cast<unsigned char>(line.key[1]));
-        if (gpioButton && line.key.find('_') == std::string::npos) {
+        if (gpioButton) {
+            // d10, and its clicks and hold (d10_double...), are one button on one pin: it is claimed once.
+            const bool plain = line.key.find('_') == std::string::npos;
             const auto mapped = act::canonicalAction(line.value);
-            if (hardware::isOutputAction(normalizeToken(line.value)))
+            const long pin = std::stol(line.key.substr(1));
+            if (plain && hardware::isOutputAction(normalizeToken(line.value)))
                 add(line.number, false, "tally_shorthand", line.section, line.key, "", "The tally shorthand on line " +
                     N(line.number) + " loses to an enabled [recording_indicator] section and has no polarity key. Use the section.");
-            else if (buttonsOn && !mapped.empty())
-                claim(std::stol(line.key.substr(1)), "button " + line.key, line.section, line.key, line.number);
+            else if (buttonsOn && !mapped.empty() && claimedButtons.insert(pin).second)
+                claim(pin, "button d" + std::to_string(pin), line.section, line.key, line.number);
         }
         if (line.section == "gpio_encoders" && encodersOn && line.key.rfind("encoder", 0) == 0) {
             const std::string field = line.key.substr(line.key.find('_') + 1);

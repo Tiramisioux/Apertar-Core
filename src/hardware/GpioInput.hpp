@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hardware/ButtonGesture.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -28,7 +30,11 @@ private:
     friend struct HardwareInputTestAccess;
     struct ButtonMapping {
         int gpio = -1;
-        std::string action;
+        std::string action;       // press (dN)
+        std::string single;       // dN_single, dN_double, dN_triple, dN_hold: counted like Cinemate (ButtonGesture)
+        std::string doubleClick;
+        std::string triple;
+        std::string hold;
     };
 
     struct EncoderMapping {
@@ -57,11 +63,18 @@ private:
 
     struct RuntimeButton {
         int lineIndex = -1;
+        int gpio = -1;
         std::string action;
+        std::string single;
+        std::string doubleClick;
+        std::string triple;
+        std::string hold;
         bool observedPressed = false;
         bool stablePressed = false;
         bool haveSample = false;
+        bool inverted = false;    // read pressed at start: wired the other way round (a 1-0-1 button)
         std::chrono::steady_clock::time_point observedChangedAt{};
+        hardware::ButtonGesture gesture;
     };
 
     struct RuntimeEncoder {
