@@ -52,6 +52,10 @@ private:
         std::string clockwise;
         std::string counterClockwise;
         std::string press;
+        std::string pressSingle;   // encoderN_single, _double, _triple, _hold: the push counted like a button
+        std::string pressDouble;
+        std::string pressTriple;
+        std::string pressHold;
         bool invertDirection = false;
         int stepsPerEvent = 4;
     };

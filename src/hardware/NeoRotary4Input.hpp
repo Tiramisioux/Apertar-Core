@@ -29,6 +29,10 @@ public:
         std::string clockwise;
         std::string counterClockwise;
         std::string press;
+        std::string single;       // encoderN_single, _double, _triple, _hold: the push counted like Cinemate (ButtonGesture)
+        std::string doubleClick;
+        std::string triple;
+        std::string hold;
     };
 
 private:

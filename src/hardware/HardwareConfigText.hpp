@@ -455,16 +455,16 @@ inline bool knownKey(std::string_view section, std::string_view key)
             indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"});
     if (section == "gpio_encoders")
         return key == "enabled" || indexedKey(key, "encoder", 7, {"_a", "_b", "_press_gpio", "_cw", "_ccw", "_press",
-            "_invert", "_steps_per_event", "_hold", "_double"});
+            "_invert", "_steps_per_event", "_single", "_double", "_triple", "_hold"});
     if (section == "gpio_switches")
         return key == "enabled" || indexedKey(key, "switch", 15, {"_pins", "_on", "_off", "_position0", "_position1", "_position2"});
     if (section == "pcf8574")
         return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "hold_ms", "double_ms"}) ||
-            indexedKey(key, "pin", 7, {"", "_hold", "_double"});
+            indexedKey(key, "pin", 7, {"", "_single", "_double", "_triple", "_hold"});
     if (section == "neorotary4")
         return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "invert_direction", "reset_on_start",
                    "max_events_per_poll", "hold_ms", "double_ms"}) ||
-            indexedKey(key, "encoder", 3, {"_cw", "_ccw", "_press", "_hold", "_double"});
+            indexedKey(key, "encoder", 3, {"_cw", "_ccw", "_press", "_single", "_double", "_triple", "_hold"});
     if (section == "grove_analog")
         return in({"enabled", "bus", "address", "poll_ms", "deadband", "emit_on_start"}) ||
             indexedKey(key, "a", 7, {"", "_min", "_max", "_step", "_deadband", "_invert", "_mode", "_presets"});
@@ -918,8 +918,9 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
             (line.section == "gpio_switches" && line.key.rfind("switch", 0) == 0 && line.key.find("_pins") == std::string::npos) ||
             ((line.section == "neorotary4" || line.section == "gpio_encoders") && line.key.rfind("encoder", 0) == 0 &&
              (line.key.find("_cw") != std::string::npos || line.key.find("_ccw") != std::string::npos ||
-              line.key.find("_press") != std::string::npos || line.key.find("_hold") != std::string::npos ||
-              line.key.find("_double") != std::string::npos) && line.key.find("_press_gpio") == std::string::npos);
+              line.key.find("_press") != std::string::npos || line.key.find("_single") != std::string::npos ||
+              line.key.find("_double") != std::string::npos || line.key.find("_triple") != std::string::npos ||
+              line.key.find("_hold") != std::string::npos) && line.key.find("_press_gpio") == std::string::npos);
         if (!actionKey) continue;
         const auto parsed = hardware::parseButtonActions(line.value, [](const std::string &t) { return act::canonicalAction(t); });
         if (!parsed.error.empty()) {

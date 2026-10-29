@@ -1,6 +1,7 @@
 #include "hardware/NeoRotary4Input.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ButtonActionList.hpp"
+#include "hardware/ButtonGesture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -164,7 +165,8 @@ std::string encoderFieldFromKey(std::string key)
 bool hasMappedAction(const std::array<NeoRotary4Input::EncoderActions, 4> &encoders)
 {
     return std::any_of(encoders.begin(), encoders.end(), [](const auto &actions) {
-        return !actions.clockwise.empty() || !actions.counterClockwise.empty() || !actions.press.empty();
+        return !actions.clockwise.empty() || !actions.counterClockwise.empty() || !actions.press.empty() ||
+            !actions.single.empty() || !actions.doubleClick.empty() || !actions.triple.empty() || !actions.hold.empty();
     });
 }
 
@@ -337,6 +339,14 @@ NeoRotary4Input::Config NeoRotary4Input::loadConfig()
                     config.encoders[*encoder].counterClockwise = normalized;
                 } else if (field == "press" || field == "push" || field == "button" || field == "click") {
                     config.encoders[*encoder].press = normalized;
+                } else if (field == "single") {
+                    config.encoders[*encoder].single = normalized;
+                } else if (field == "double") {
+                    config.encoders[*encoder].doubleClick = normalized;
+                } else if (field == "triple") {
+                    config.encoders[*encoder].triple = normalized;
+                } else if (field == "hold") {
+                    config.encoders[*encoder].hold = normalized;
                 }
             }
         }
@@ -531,8 +541,10 @@ void NeoRotary4Input::run()
     int fd = -1;
     uint8_t observedPressedMask = 0;
     uint8_t stablePressedMask = 0;
+    uint8_t heldAtStartMask = 0;   // pushes held when the device was opened: counted from their release
     auto observedChangedAt = std::chrono::steady_clock::now();
     bool haveButtonSample = false;
+    std::array<hardware::ButtonGesture, 4> gestures{};
 
     while (running_.load(std::memory_order_relaxed)) {
         if (fd < 0) {
@@ -544,6 +556,7 @@ void NeoRotary4Input::run()
             }
             setLastError({});
             haveButtonSample = false;
+            gestures = {};
 
             // Clear any movement accumulated while ApertarCore was not polling.
             for (int encoder = 0; encoder < 4; ++encoder) {
@@ -593,6 +606,7 @@ void NeoRotary4Input::run()
         if (!haveButtonSample) {
             observedPressedMask = pressedMask;
             stablePressedMask = pressedMask;
+            heldAtStartMask = pressedMask;
             observedChangedAt = now;
             haveButtonSample = true;
         } else if (pressedMask != observedPressedMask) {
@@ -601,14 +615,25 @@ void NeoRotary4Input::run()
         } else {
             const auto stableForMs =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - observedChangedAt).count();
-            if (stableForMs >= config_.debounceMs && observedPressedMask != stablePressedMask) {
-                const uint8_t changedMask = static_cast<uint8_t>(observedPressedMask ^ stablePressedMask);
+            if (stableForMs >= config_.debounceMs && observedPressedMask != stablePressedMask)
                 stablePressedMask = observedPressedMask;
-                for (int encoder = 0; encoder < 4; ++encoder) {
-                    const uint8_t bit = static_cast<uint8_t>(1u << encoder);
-                    if ((changedMask & bit) == 0 || (stablePressedMask & bit) == 0)
-                        continue;
-                    emitAction(config_.encoders[encoder].press);
+        }
+
+        // Press at once; single, double and triple click and hold counted like the GPIO buttons (ButtonGesture).
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        heldAtStartMask &= stablePressedMask;
+        for (int encoder = 0; encoder < 4; ++encoder) {
+            const uint8_t bit = static_cast<uint8_t>(1u << encoder);
+            if (heldAtStartMask & bit)
+                continue;
+            const EncoderActions &actions = config_.encoders[encoder];
+            for (const auto event : gestures[encoder].update((stablePressedMask & bit) != 0, nowMs)) {
+                switch (event) {
+                case hardware::ButtonGesture::Event::Press: emitAction(actions.press); break;
+                case hardware::ButtonGesture::Event::Single: emitAction(actions.single); break;
+                case hardware::ButtonGesture::Event::Double: emitAction(actions.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: emitAction(actions.triple); break;
+                case hardware::ButtonGesture::Event::Hold: emitAction(actions.hold); break;
                 }
             }
         }

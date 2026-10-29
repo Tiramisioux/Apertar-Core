@@ -399,6 +399,14 @@ GpioInput::Config GpioInput::loadConfig()
                             mapping.pressGpio = *parsed;
                     } else if (field == "press" || field == "button" || field == "push" || field == "click") {
                         mapping.press = normalizeAction(value);
+                    } else if (field == "single") {
+                        mapping.pressSingle = normalizeAction(value);
+                    } else if (field == "double") {
+                        mapping.pressDouble = normalizeAction(value);
+                    } else if (field == "triple") {
+                        mapping.pressTriple = normalizeAction(value);
+                    } else if (field == "hold") {
+                        mapping.pressHold = normalizeAction(value);
                     } else if (field == "invert" || field == "invert_direction" || field == "reverse_direction") {
                         mapping.invertDirection = parseConfigBool(value, mapping.invertDirection);
                     } else if (field == "steps_per_event" || field == "steps" || field == "detent_steps") {
@@ -423,7 +431,9 @@ GpioInput::Config GpioInput::loadConfig()
                 EncoderMapping mapping = encoderDrafts[i];
                 if (!encoderSeen[i] || mapping.gpioA < 0 || mapping.gpioB < 0)
                     continue;
-                if (mapping.clockwise.empty() && mapping.counterClockwise.empty() && mapping.press.empty())
+                if (mapping.clockwise.empty() && mapping.counterClockwise.empty() && mapping.press.empty() &&
+                    mapping.pressSingle.empty() && mapping.pressDouble.empty() && mapping.pressTriple.empty() &&
+                    mapping.pressHold.empty())
                     continue;
                 config.encoders.push_back(std::move(mapping));
             }
@@ -758,12 +768,18 @@ void GpioInput::run()
                     encoder.invertDirection,
                     std::max(1, encoder.stepsPerEvent),
                 });
-                if (encoder.pressGpio >= 0 && !encoder.press.empty()) {
+                const bool pushMapped = !encoder.press.empty() || !encoder.pressSingle.empty() || !encoder.pressDouble.empty() ||
+                                        !encoder.pressTriple.empty() || !encoder.pressHold.empty();
+                if (encoder.pressGpio >= 0 && pushMapped) {
                     if (const auto press = indexByOffset.find(encoder.pressGpio); press != indexByOffset.end()) {
                         RuntimeButton runtime;
                         runtime.lineIndex = press->second;
                         runtime.gpio = encoder.pressGpio;
                         runtime.action = encoder.press;
+                        runtime.single = encoder.pressSingle;
+                        runtime.doubleClick = encoder.pressDouble;
+                        runtime.triple = encoder.pressTriple;
+                        runtime.hold = encoder.pressHold;
                         buttons.push_back(std::move(runtime));
                     }
                 }

@@ -1,6 +1,7 @@
 #include "hardware/Pcf8574Input.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ButtonActionList.hpp"
+#include "hardware/ButtonGesture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -143,12 +144,21 @@ std::string normalizeAction(std::string action)
     return hardware::normalizeButtonMapping(action, hardware::actions::canonicalAction);
 }
 
-bool hasMappedAction(const std::array<std::string, 8> &actions)
+bool pinMapped(const std::array<std::string, 8> &actions, const std::array<std::array<std::string, 4>, 8> &gestureActions, int pin)
 {
-    return std::any_of(actions.begin(), actions.end(), [](const std::string &action) {
-        return !action.empty();
-    });
+    return !actions[pin].empty() || std::any_of(gestureActions[pin].begin(), gestureActions[pin].end(),
+                                                [](const std::string &action) { return !action.empty(); });
 }
+
+bool hasMappedAction(const std::array<std::string, 8> &actions, const std::array<std::array<std::string, 4>, 8> &gestureActions)
+{
+    for (int pin = 0; pin < 8; ++pin)
+        if (pinMapped(actions, gestureActions, pin))
+            return true;
+    return false;
+}
+
+constexpr std::array<const char *, 4> kGestureSuffixes{"_single", "_double", "_triple", "_hold"};
 
 std::string i2cDevicePath(int busNumber)
 {
@@ -174,7 +184,7 @@ bool Pcf8574Input::start()
     if (!config_.configured || !config_.enabled)
         return false;
 
-    if (!hasMappedAction(config_.actions)) {
+    if (!hasMappedAction(config_.actions, config_.gestureActions)) {
         std::cerr << "PCF8574 config in " << config_.configPath
                   << " has no pin actions; input disabled.\n";
         return false;
@@ -274,8 +284,23 @@ Pcf8574Input::Config Pcf8574Input::loadConfig()
                     config.debounceMs = std::clamp(*parsed, 0, 1000);
             } else if (key == "active_low") {
                 config.activeLow = parseConfigBool(value, config.activeLow);
-            } else if (const auto pin = pinIndexForKey(key)) {
-                config.actions[*pin] = normalizeAction(value);
+            } else {
+                std::string base = key;
+                int gesture = -1;
+                for (size_t i = 0; i < kGestureSuffixes.size(); ++i) {
+                    const std::string suffix = kGestureSuffixes[i];
+                    if (base.size() > suffix.size() && base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        base.resize(base.size() - suffix.size());
+                        gesture = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (const auto pin = pinIndexForKey(base)) {
+                    if (gesture < 0)
+                        config.actions[*pin] = normalizeAction(value);
+                    else
+                        config.gestureActions[*pin][static_cast<size_t>(gesture)] = normalizeAction(value);
+                }
             }
         }
 
@@ -369,8 +394,10 @@ void Pcf8574Input::run()
     int fd = -1;
     uint8_t observedPressedMask = 0;
     uint8_t stablePressedMask = 0;
+    uint8_t invertedMask = 0;
     auto observedChangedAt = std::chrono::steady_clock::now();
     bool haveSample = false;
+    std::array<hardware::ButtonGesture, 8> gestures{};
 
     while (running_.load(std::memory_order_relaxed)) {
         if (fd < 0) {
@@ -382,6 +409,7 @@ void Pcf8574Input::run()
             }
             setLastError({});
             haveSample = false;
+            gestures = {};
         }
 
         uint8_t raw = 0xff;
@@ -392,7 +420,19 @@ void Pcf8574Input::run()
             continue;
         }
 
-        const uint8_t pressedMask = config_.activeLow ? static_cast<uint8_t>(~raw) : raw;
+        const uint8_t levelMask = config_.activeLow ? static_cast<uint8_t>(~raw) : raw;
+        if (!haveSample) {
+            // Like the GPIO buttons (Cinemate): a mapped pin that reads pressed at start is wired the other way round
+            // (a 1-0-1, normally closed button), so its levels are swapped from now on.
+            invertedMask = 0;
+            for (int pin = 0; pin < 8; ++pin) {
+                if ((levelMask & (1u << pin)) && pinMapped(config_.actions, config_.gestureActions, pin)) {
+                    invertedMask |= static_cast<uint8_t>(1u << pin);
+                    std::cerr << "PCF8574 input: pin " << pin << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                }
+            }
+        }
+        const uint8_t pressedMask = static_cast<uint8_t>(levelMask ^ invertedMask);
         const auto now = std::chrono::steady_clock::now();
         if (!haveSample) {
             observedPressedMask = pressedMask;
@@ -405,14 +445,21 @@ void Pcf8574Input::run()
         } else {
             const auto stableForMs =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - observedChangedAt).count();
-            if (stableForMs >= config_.debounceMs && observedPressedMask != stablePressedMask) {
-                const uint8_t changedMask = static_cast<uint8_t>(observedPressedMask ^ stablePressedMask);
+            if (stableForMs >= config_.debounceMs && observedPressedMask != stablePressedMask)
                 stablePressedMask = observedPressedMask;
-                for (int pin = 0; pin < 8; ++pin) {
-                    const uint8_t bit = static_cast<uint8_t>(1u << pin);
-                    if ((changedMask & bit) == 0 || (stablePressedMask & bit) == 0)
-                        continue;
-                    emitAction(config_.actions[pin]);
+        }
+
+        // Press at once; single, double and triple click and hold counted like the GPIO buttons (ButtonGesture).
+        const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        for (int pin = 0; pin < 8; ++pin) {
+            const auto &more = config_.gestureActions[pin];
+            for (const auto event : gestures[pin].update((stablePressedMask & (1u << pin)) != 0, nowMs)) {
+                switch (event) {
+                case hardware::ButtonGesture::Event::Press: emitAction(config_.actions[pin]); break;
+                case hardware::ButtonGesture::Event::Single: emitAction(more[0]); break;
+                case hardware::ButtonGesture::Event::Double: emitAction(more[1]); break;
+                case hardware::ButtonGesture::Event::Triple: emitAction(more[2]); break;
+                case hardware::ButtonGesture::Event::Hold: emitAction(more[3]); break;
                 }
             }
         }

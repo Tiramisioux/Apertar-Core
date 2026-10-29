@@ -10547,6 +10547,7 @@ static std::string cfeHatPeripheralJson(const hwconf::Document &doc, const std::
         << ",\"in_file\":" << (hwconf::hasSection(doc, "cfexpress_hat") ? "true" : "false")
         << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, "cfexpress_hat")
         << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\""
+        << ",\"info\":\"" << escapeJson(state == "running" ? detail : std::string()) << "\""   // shown even when all is well
         << ",\"bus\":" << config.bus << ",\"address\":\"" << hwconf::hex(config.address) << "\"}}";
     return out.str();
 }
