@@ -2828,6 +2828,24 @@ std::string_view webControlPageHtml()
       overflow: auto;
     }
 
+    .config-issues {
+      margin: 0 0 12px;
+      padding: 10px 14px;
+      border: 1px solid var(--danger);
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .config-issues[hidden] {
+      display: none;
+    }
+
+    .config-issues ul {
+      margin: 6px 0 0;
+      padding-left: 18px;
+    }
+
     .config-meta-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5223,6 +5241,8 @@ std::string_view webControlPageHtml()
                 <textarea class="settings-input config-editor" id="settingsConfigEditor" spellcheck="false" wrap="off" placeholder="Loading Apertar config..."></textarea>
               </label>
 
+              <div class="config-issues" id="settingsConfigIssues" hidden></div>
+
               <div class="settings-action-row">
                 <button class="secondary-button" id="reloadConfigButton" type="button">Reload Config</button>
                 <button class="primary-button" id="saveConfigButton" type="button" disabled>Save Config</button>
@@ -5705,6 +5725,7 @@ std::string_view webControlPageHtml()
       configFetchInFlight: false,
       configSaveInFlight: false,
       configDirty: false,
+      configRevision: "",
       pb: {
         payload: null, items: [], filter: "clip", sort: "newest", selecting: false, selection: new Set(),
         lastOpenedId: "", thumbs: new Map(), queue: [], inFlight: 0, observer: null, fetching: false, queued: false,
@@ -14168,12 +14189,40 @@ std::string_view webControlPageHtml()
       setText("settingsConfigStatePill", status);
     }
 
+    // The box under the editor: what Core found in the text, with line numbers. Empty title and list hide it.
+    function showConfigIssues(title, issues) {
+      const box = document.getElementById("settingsConfigIssues");
+      if (!box)
+        return;
+      const list = Array.isArray(issues) ? issues : [];
+      box.textContent = "";
+      if (!title && list.length === 0) {
+        box.hidden = true;
+        return;
+      }
+      const head = document.createElement("div");
+      head.textContent = title;
+      box.appendChild(head);
+      if (list.length > 0) {
+        const items = document.createElement("ul");
+        list.slice(0, 20).forEach((issue) => {
+          const item = document.createElement("li");
+          item.textContent = (issue.line ? "Line " + issue.line + ": " : "") + issue.message;
+          items.appendChild(item);
+        });
+        box.appendChild(items);
+      }
+      box.hidden = false;
+    }
+
     function renderHardwareConfig(payload) {
       const editor = document.getElementById("settingsConfigEditor");
       const text = String(payload && payload.text || "");
       if (editor)
         editor.value = text;
       state.configDirty = false;
+      state.configRevision = String(payload && payload.revision || "");
+      showConfigIssues("", []);
 
       const displayPath = payload && (payload.display_path || payload.path) ? (payload.display_path || payload.path) : "/home/pi/apertar-hardware.conf";
       const exists = !!(payload && payload.exists);
@@ -14221,19 +14270,37 @@ std::string_view webControlPageHtml()
       state.configSaveInFlight = true;
       updateConfigEditorControls();
       try {
+        // The revision the text was loaded at: Core refuses a save over a newer file, and an old tab without one.
+        const headers = { "Content-Type": "text/plain; charset=utf-8" };
+        if (state.configRevision)
+          headers["X-Apertar-Revision"] = state.configRevision;
         const response = await fetch("/api/config", {
           method: "POST",
-          headers: { "Content-Type": "text/plain; charset=utf-8" },
+          headers: headers,
           body: text,
         });
         const payload = await response.json();
-        if (!payload.ok)
-          throw new Error(payload.error || "Could not save config.");
+        if (!payload.ok) {
+          const failure = new Error(payload.error || "Could not save config.");
+          failure.payload = payload;
+          throw failure;
+        }
         state.configDirty = false;
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
         await fetchConfigFile(true);
+        const found = Array.isArray(payload.issues) ? payload.issues : [];
+        if (found.length > 0)
+          showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
       } catch (error) {
+        // A refused save leaves the text in the box (no reload), so nothing typed is lost.
+        const payload = error && error.payload;
+        if (payload) {
+          const found = payload.new_errors && payload.new_errors.length > 0 ? payload.new_errors : payload.issues;
+          const kept = payload.code === "stale" || payload.code === "conflict" || payload.code === "merge_review"
+            ? " Your text stays in the box. Press Reload Config to see the newer file." : "";
+          showConfigIssues(error.message + kept, found);
+        }
         showToast(error.message || "Could not save config.", true);
       } finally {
         state.configSaveInFlight = false;
