@@ -18,6 +18,8 @@ public:
     using ActionCallback = std::function<void(const std::string &)>;
 
     explicit GpioInput(ActionCallback actionCallback, ActionCallback rotationCallback = {});
+    // Called with "section|key" each time a control fires, mapped or not (the WebUI's Listen). Set before start().
+    void setSeenCallback(ActionCallback seenCallback) { seenCallback_ = std::move(seenCallback); }
     ~GpioInput();
 
     bool start();
@@ -41,6 +43,7 @@ private:
     // [gpio_switches]: one pin is a two-way switch (switchN_off, switchN_on), two pins a three-way switch
     // (switchN_position0: first pin closed, position1: neither, position2: second pin closed).
     struct SwitchMapping {
+        int index = -1;
         std::vector<int> pins;
         std::array<std::string, 3> positions;   // two-way: off, on
     };
@@ -58,6 +61,7 @@ private:
         std::string pressHold;
         bool invertDirection = false;
         int stepsPerEvent = 4;
+        int index = -1;
     };
 
     struct Config {
@@ -86,11 +90,14 @@ private:
         bool stablePressed = false;
         bool haveSample = false;
         bool inverted = false;    // read pressed at start: wired the other way round (a 1-0-1 button)
+        std::string seenKey;      // section|base for Listen; gestures add their suffix
+        std::string pressSuffix;  // "" for dN, "_press" for an encoder push
         std::chrono::steady_clock::time_point observedChangedAt{};
         hardware::ButtonGesture gesture;
     };
 
     struct RuntimeSwitch {
+        int index = -1;
         std::vector<int> lineIndexes;
         std::array<std::string, 3> positions;
         int observed = -2;        // -1: both pins of a three-way switch closed, no position
@@ -107,6 +114,7 @@ private:
         int stepsPerEvent = 4;
         int lastState = -1;
         int accumulatedSteps = 0;
+        int index = -1;
     };
 
     static Config loadConfig();
@@ -124,6 +132,7 @@ private:
 
     ActionCallback actionCallback_;
     ActionCallback rotationCallback_;
+    ActionCallback seenCallback_;
     Config config_;
     std::atomic<bool> running_{false};
     std::thread thread_;

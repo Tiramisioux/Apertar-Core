@@ -317,6 +317,7 @@ GpioInput::Config GpioInput::loadConfig()
                     switchesEnabled = parseConfigBool(value, switchesEnabled);
                 } else if (key.rfind("switch", 0) == 0 && digits > 0 && digits <= 2) {
                     SwitchMapping &mapping = switchDrafts[std::stoi(key.substr(6, digits))];
+                    mapping.index = std::stoi(key.substr(6, digits));
                     const std::string field = key.substr(6 + digits);
                     if (field == "_pins") {
                         mapping.pins.clear();
@@ -429,6 +430,7 @@ GpioInput::Config GpioInput::loadConfig()
         if (encodersEnabled) {
             for (size_t i = 0; i < encoderDrafts.size(); ++i) {
                 EncoderMapping mapping = encoderDrafts[i];
+                mapping.index = static_cast<int>(i);
                 if (!encoderSeen[i] || mapping.gpioA < 0 || mapping.gpioB < 0)
                     continue;
                 if (mapping.clockwise.empty() && mapping.counterClockwise.empty() && mapping.press.empty() &&
@@ -637,6 +639,11 @@ void GpioInput::run()
                     button.stablePressed = button.observedPressed;
             }
             for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
+                if (seenCallback_) {
+                    static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
+                    const auto at = static_cast<size_t>(event);
+                    seenCallback_(button.seenKey + (at == 0 ? button.pressSuffix : std::string(suffixes[at])));
+                }
                 switch (event) {
                 case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
                 case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
@@ -657,6 +664,7 @@ void GpioInput::run()
                 position.observedChangedAt = now;
                 if (reading >= 0)
                     emitAction(position.positions[static_cast<size_t>(reading)]);
+                // (not shown to Listen: a switch at start is not a control being moved)
             } else if (reading != position.observed) {
                 position.observed = reading;
                 position.observedChangedAt = now;
@@ -664,6 +672,10 @@ void GpioInput::run()
                        std::chrono::duration_cast<std::chrono::milliseconds>(now - position.observedChangedAt).count() >=
                            config_.debounceMs) {
                 position.stable = position.observed;
+                if (position.stable >= 0 && seenCallback_)
+                    seenCallback_("gpio_switches|switch" + std::to_string(position.index) +
+                                  (position.lineIndexes.size() == 1 ? (position.stable ? "_on" : "_off")
+                                                                    : "_position" + std::to_string(position.stable)));
                 if (position.stable >= 0)
                     emitAction(position.positions[static_cast<size_t>(position.stable)]);
             }
@@ -685,6 +697,8 @@ void GpioInput::run()
                 continue;
 
             encoder.accumulatedSteps += delta;
+            if (seenCallback_ && std::abs(encoder.accumulatedSteps) >= encoder.stepsPerEvent)
+                seenCallback_("gpio_encoders|encoder" + std::to_string(encoder.index) + (encoder.accumulatedSteps > 0 ? "_cw" : "_ccw"));
             while (encoder.accumulatedSteps >= encoder.stepsPerEvent) {
                 if (!encoder.clockwise.empty() && rotationCallback_)
                     rotationCallback_(encoder.clockwise);
@@ -735,6 +749,7 @@ void GpioInput::run()
             switches.clear();
             for (const SwitchMapping &mapping : config_.switches) {
                 RuntimeSwitch runtime;
+                runtime.index = mapping.index;
                 runtime.positions = mapping.positions;
                 for (const int pin : mapping.pins)
                     if (const auto it = indexByOffset.find(pin); it != indexByOffset.end())
@@ -752,6 +767,7 @@ void GpioInput::run()
                     runtime.doubleClick = button.doubleClick;
                     runtime.triple = button.triple;
                     runtime.hold = button.hold;
+                    runtime.seenKey = "gpio_buttons|d" + std::to_string(button.gpio);
                     buttons.push_back(std::move(runtime));
                 }
             }
@@ -767,6 +783,9 @@ void GpioInput::run()
                     encoder.counterClockwise,
                     encoder.invertDirection,
                     std::max(1, encoder.stepsPerEvent),
+                    -1,
+                    0,
+                    encoder.index,
                 });
                 const bool pushMapped = !encoder.press.empty() || !encoder.pressSingle.empty() || !encoder.pressDouble.empty() ||
                                         !encoder.pressTriple.empty() || !encoder.pressHold.empty();
@@ -780,6 +799,8 @@ void GpioInput::run()
                         runtime.doubleClick = encoder.pressDouble;
                         runtime.triple = encoder.pressTriple;
                         runtime.hold = encoder.pressHold;
+                        runtime.seenKey = "gpio_encoders|encoder" + std::to_string(encoder.index);
+                        runtime.pressSuffix = "_press";
                         buttons.push_back(std::move(runtime));
                     }
                 }

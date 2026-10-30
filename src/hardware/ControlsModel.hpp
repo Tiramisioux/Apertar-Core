@@ -147,16 +147,16 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
         const std::string first = std::to_string(pins[0]);
         ControlRow row{"gpio_switches", "GPIO " + first, "Two-way switch", static_cast<int>(pins[0]), {}, {}, "switch2", {}, {}, {}};
         if (pins.size() == 1) {
-            row.lines.push_back(controlLine(doc, "gpio_switches", "On", base + "_on"));
-            row.lines.push_back(controlLine(doc, "gpio_switches", "Off", base + "_off"));
+            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 0 (open)", base + "_off"));
+            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 1 (closed)", base + "_on"));
         } else {
             const std::string second = std::to_string(pins[1]);
             row.title = "GPIO " + first + " + " + second;
             row.detail = "Three-way switch";
             row.kind = "switch3";
-            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 1 (GPIO " + first + ")", base + "_position0"));
-            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 2 (middle)", base + "_position1"));
-            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 3 (GPIO " + second + ")", base + "_position2"));
+            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 0 (GPIO " + first + ")", base + "_position0"));
+            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 1 (middle)", base + "_position1"));
+            row.lines.push_back(controlLine(doc, "gpio_switches", "Position 2 (GPIO " + second + ")", base + "_position2"));
         }
         row.keys = keysWithBase(doc, "gpio_switches", base);
         rows.push_back(std::move(row));
@@ -164,7 +164,7 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
     if (hasSection(doc, "neorotary4")) {
         for (int knob = 0; knob < 4; ++knob) {
             const std::string base = "encoder" + std::to_string(knob);
-            ControlRow row{"neorotary4", "Knob " + std::to_string(knob + 1), {}, -1, {}, {}, "knob", {}, {}, {}};
+            ControlRow row{"neorotary4", "Adafruit rotary " + std::to_string(knob), {}, -1, {}, {}, "knob", {}, {}, {}};
             row.lines.push_back(controlLine(doc, "neorotary4", "Turn clockwise", base + "_cw"));
             row.lines.push_back(controlLine(doc, "neorotary4", "Turn counter-clockwise", base + "_ccw"));
             addPushLines(row, doc, base, "_press");
@@ -246,6 +246,14 @@ inline std::vector<SettingSpec> peripheralSettings(const std::string &section)
             {"pull", "Pull", "choice", "up", "up,down,none", 0, 0},
             {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
         };   // poll_ms (chips without edge events) and chip stay text-only: the Pi 5's header needs neither
+    if (section == "recording_indicator" || section == "trigger_output")
+        return {
+            {"enabled", "On", "bool", "false", "", 0, 0},
+            {"target", "Wired to", "choice", "gpio", "gpio,pcf8574", 0, 0},
+            {"line", "GPIO", "number", section == "trigger_output" ? "17" : "-1", "", -1, 27},
+            {"pcf_pin", "PCF8574 pin", "number", section == "trigger_output" ? "0" : "-1", "", -1, 7},
+            {"active_high", "Active", "bool", "false", "high,low", 0, 0},
+        };
     if (section == "cfexpress_hat")
         return {
             {"enabled", "On", "bool", "true", "", 0, 0},

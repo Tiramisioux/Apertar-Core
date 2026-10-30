@@ -37,6 +37,15 @@ struct StoreResult {
     std::vector<hwconf::Conflict> conflicts;
 };
 
+// One saved version in hardware-history: the text a save replaced. "adopted-<rev>.conf" is the file as Core first
+// found it ("Before Controls").
+struct HistoryEntry {
+    std::string name;       // the file name, the id a caller passes back
+    std::string savedAt;    // "2026-10-30 00:25", "" for the adopted one
+    std::string by;         // who replaced it: webui, api, imu, adopted
+    std::string revision;
+};
+
 struct StoreInfo {
     bool exists = false;
     std::string revision;
@@ -82,6 +91,9 @@ public:
 
     // Pins the file as found, once, in the history as adopted-<revision>.conf ("Before Controls"). True when it did.
     bool adopt();
+
+    std::vector<HistoryEntry> history() const;                          // newest first, the adopted version last
+    std::optional<std::string> historyText(const std::string &name) const;   // nothing for a name not in the list
 
 private:
     struct Stamp {

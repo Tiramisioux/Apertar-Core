@@ -454,6 +454,10 @@ void Pcf8574Input::run()
         for (int pin = 0; pin < 8; ++pin) {
             const auto &more = config_.gestureActions[pin];
             for (const auto event : gestures[pin].update((stablePressedMask & (1u << pin)) != 0, nowMs)) {
+                if (seenCallback_) {
+                    static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
+                    seenCallback_("pcf8574|pin" + std::to_string(pin) + suffixes[static_cast<size_t>(event)]);
+                }
                 switch (event) {
                 case hardware::ButtonGesture::Event::Press: emitAction(config_.actions[pin]); break;
                 case hardware::ButtonGesture::Event::Single: emitAction(more[0]); break;

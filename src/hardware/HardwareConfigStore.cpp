@@ -462,6 +462,40 @@ bool HardwareConfigStore::adopt()
     return settingsFile::atomicWrite(directory / ("adopted-" + revision_ + ".conf"), text_);
 }
 
+std::vector<HistoryEntry> HardwareConfigStore::history() const
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::filesystem::path directory = notes_ / "hardware-history";
+    std::vector<HistoryEntry> out;
+    const auto names = historyEntries(directory);
+    for (auto it = names.rbegin(); it != names.rend(); ++it) {
+        // <YYYYmmdd-HHMMSS>-h<16 hex>-<by>.conf
+        const std::string &name = *it;
+        HistoryEntry entry;
+        entry.name = name;
+        entry.savedAt = name.substr(0, 4) + "-" + name.substr(4, 2) + "-" + name.substr(6, 2) + " " + name.substr(9, 2) + ":" +
+                        name.substr(11, 2);
+        entry.revision = name.substr(16, 17);
+        entry.by = name.substr(34, name.size() - 34 - 5);
+        out.push_back(std::move(entry));
+    }
+    std::error_code error;
+    for (const auto &file : std::filesystem::directory_iterator(directory, error)) {
+        const std::string name = file.path().filename().string();
+        if (name.rfind("adopted-", 0) == 0 && name.size() > 13 && name.compare(name.size() - 5, 5, ".conf") == 0)
+            out.push_back({name, "", "adopted", name.substr(8, name.size() - 13)});
+    }
+    return out;
+}
+
+std::optional<std::string> HardwareConfigStore::historyText(const std::string &name) const
+{
+    for (const auto &entry : history())
+        if (entry.name == name)
+            return readTextFile(notes_ / "hardware-history" / name);
+    return std::nullopt;
+}
+
 HardwareConfigStore &configStore()
 {
     static HardwareConfigStore store(HardwareConfigStore::defaultPath(), HardwareConfigStore::defaultNotesDirectory());

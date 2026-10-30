@@ -452,6 +452,17 @@ void TriggerOutput::pulse(Event event)
     cv_.notify_one();
 }
 
+void TriggerOutput::testPulse()
+{
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (!enabled_ || !running_)
+            return;
+        pendingPulses_ = std::min<uint32_t>(kMaxQueuedPulses, pendingPulses_ + 1);
+    }
+    cv_.notify_one();
+}
+
 bool TriggerOutput::enabled() const
 {
     std::lock_guard<std::mutex> lock(stateMutex_);

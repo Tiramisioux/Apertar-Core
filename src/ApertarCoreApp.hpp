@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -139,6 +140,31 @@ private:
     std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
     std::atomic<size_t> controlsErrors_{0};        // T37: what the validator found in the hardware file, shown in state
     std::atomic<size_t> controlsWarnings_{0};
+
+    // T39: the controls worker applies a saved hardware file by restarting only the driver groups whose sections
+    // changed, on its own thread (never inside a command), and waits for a take to end first.
+    void runControlsWorker();
+    void wakeControlsWorker();
+    void applyHardwareText(const std::string &text);
+    bool recordingGateActive();
+    std::string controlsApplyJson();
+    std::thread controlsThread_;
+    std::mutex controlsWorkerMutex_;
+    std::condition_variable controlsWake_;
+    bool controlsWakeRequested_ = false;
+    std::atomic<bool> controlsWorkerRunning_{false};
+    std::string appliedHardwareText_;             // what the drivers were started from (controlsWorkerMutex_)
+    std::string controlsApplyState_ = "applied";  // applied, waiting (a take runs), applying
+    std::string controlsApplyDetail_;
+    std::map<std::string, uint64_t> pendingUnitSince_;   // unit -> CLOCK_MONOTONIC us of the change it has not seen
+    std::atomic<uint64_t> cfeHatGeneration_{0};
+
+    // T42: the last control that moved (Listen), as section|key.
+    void noteInputSeen(const std::string &sectionKey);
+    std::mutex lastInputMutex_;
+    std::string lastInput_;
+    uint64_t lastInputSeq_ = 0;
+    std::chrono::steady_clock::time_point lastInputAt_{};
     std::string soundRecordingFolder_;
 
     std::atomic<bool> running_{false};

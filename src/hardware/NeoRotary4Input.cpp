@@ -577,6 +577,8 @@ void NeoRotary4Input::run()
                 ? config_.encoders[encoder].clockwise
                 : config_.encoders[encoder].counterClockwise;
             const int count = std::min<int>(std::abs(delta), config_.maxEventsPerPoll);
+            if (count > 0 && seenCallback_)
+                seenCallback_("neorotary4|encoder" + std::to_string(encoder) + (delta > 0 ? "_cw" : "_ccw"));
             for (int i = 0; i < count; ++i)
                 if (!action.empty() && rotationCallback_)
                     rotationCallback_(action);
@@ -628,6 +630,10 @@ void NeoRotary4Input::run()
                 continue;
             const EncoderActions &actions = config_.encoders[encoder];
             for (const auto event : gestures[encoder].update((stablePressedMask & bit) != 0, nowMs)) {
+                if (seenCallback_) {
+                    static const char *const suffixes[] = {"_press", "_single", "_double", "_triple", "_hold"};
+                    seenCallback_("neorotary4|encoder" + std::to_string(encoder) + suffixes[static_cast<size_t>(event)]);
+                }
                 switch (event) {
                 case hardware::ButtonGesture::Event::Press: emitAction(actions.press); break;
                 case hardware::ButtonGesture::Event::Single: emitAction(actions.single); break;

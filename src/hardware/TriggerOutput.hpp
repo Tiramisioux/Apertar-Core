@@ -27,6 +27,7 @@ public:
     bool start();
     void stop();
     void pulse(Event event);
+    void testPulse();   // one pulse whatever events= says: the WebUI's Test button
 
     bool enabled() const;
     std::string configPath() const;

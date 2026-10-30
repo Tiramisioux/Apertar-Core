@@ -18,6 +18,8 @@ public:
 
     bool start();
     void stop();
+    // Called with "pcf8574|pinN..." each time a pin's press, click or hold fires (the WebUI's Listen).
+    void setSeenCallback(ActionCallback seenCallback) { seenCallback_ = std::move(seenCallback); }
 
     bool enabled() const;
     std::string configPath() const;
@@ -49,6 +51,7 @@ private:
     void setLastError(const std::string &error);
 
     ActionCallback actionCallback_;
+    ActionCallback seenCallback_;
     Config config_;
     std::atomic<bool> running_{false};
     std::thread thread_;

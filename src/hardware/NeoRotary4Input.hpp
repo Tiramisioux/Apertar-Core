@@ -20,6 +20,8 @@ public:
 
     bool start();
     void stop();
+    // Called with "neorotary4|encoderN_..." each time a knob turns or its push fires (the WebUI's Listen).
+    void setSeenCallback(ActionCallback seenCallback) { seenCallback_ = std::move(seenCallback); }
 
     bool enabled() const;
     std::string configPath() const;
@@ -66,6 +68,7 @@ private:
 
     ActionCallback actionCallback_;
     ActionCallback rotationCallback_;
+    ActionCallback seenCallback_;
     Config config_;
     std::atomic<bool> running_{false};
     std::thread thread_;

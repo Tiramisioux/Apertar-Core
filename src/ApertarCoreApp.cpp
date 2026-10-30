@@ -7557,6 +7557,10 @@ bool ApertarCoreApp::start()
                   << triggerOutput_.lastError() << "\n";
     }
 
+    appliedHardwareText_ = hardware::configStore().currentText();   // T39: what the drivers below start from
+    gpioInput_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });          // T42 Listen
+    neoRotary4Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
+    pcf8574Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
     pcf8574Input_.start();
     neoRotary4Input_.start();
     gpioInput_.start();
@@ -7591,6 +7595,9 @@ bool ApertarCoreApp::start()
             std::cerr << "ApertarCore controls: " << (issues[i].error ? "error: " : "warning: ") << issues[i].message << "\n";
     }
 
+    controlsWorkerRunning_ = true;
+    controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+
     publishEvent("{\"event\":\"camera_state\",\"state\":\"ready\"}");
     return true;
 }
@@ -7604,6 +7611,10 @@ void ApertarCoreApp::stop()
     }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"stopping\"}");
+    controlsWorkerRunning_ = false;            // T39: before the drivers, so it cannot start one again
+    wakeControlsWorker();
+    if (controlsThread_.joinable())
+        controlsThread_.join();
     pcf8574Input_.stop();
     standbyPowerButton_.stop();
     neoRotary4Input_.stop();
@@ -8080,6 +8091,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+            wakeControlsWorker();   // T39: the worker restarts what changed; this reply does not wait for it
         }
 
         const std::string backupPath = result.written && std::filesystem::exists(store.path().string() + ".bak")
@@ -10179,8 +10191,10 @@ void ApertarCoreApp::runMediaWatcher()
 {
     MediaSnapshot previous;
     bool havePrevious = false;
-    const CfeHatConfig hatConfig = loadCfeHatConfig();
-    CfeHatReader hat(hatConfig);
+    CfeHatConfig hatConfig = loadCfeHatConfig();
+    std::optional<CfeHatReader> hat;
+    hat.emplace(hatConfig);
+    uint64_t hatGeneration = cfeHatGeneration_.load();
     std::cerr << "ApertarCore media: cfexpress hat " << (hatConfig.enabled ? "on" : "off")
               << " bus=" << hatConfig.bus << " address=0x" << std::hex << hatConfig.address << std::dec << "\n";
     // A CFexpress card pulled and pushed back is not usable until the PCIe device
@@ -10188,7 +10202,15 @@ void ApertarCoreApp::runMediaWatcher()
     // the slot reads full again. Keep that mount "removed" until its id changes.
     int pulledMountId = -1;
     while (mediaWatcherRunning_.load(std::memory_order_acquire)) {
-        const CardPresence slot = hat.cardPresence();
+        if (const uint64_t generation = cfeHatGeneration_.load(); generation != hatGeneration) {
+            // T39: [cfexpress_hat] changed in a save; read the slot where the file now says.
+            hatGeneration = generation;
+            hatConfig = loadCfeHatConfig();
+            hat.emplace(hatConfig);
+            std::cerr << "ApertarCore media: cfexpress hat now " << (hatConfig.enabled ? "on" : "off") << " bus=" << hatConfig.bus
+                      << " address=0x" << std::hex << hatConfig.address << std::dec << "\n";
+        }
+        const CardPresence slot = hat->cardPresence();
         const int mountId = mountIdForPath(options_.mediaRoot);
         if (pulledMountId >= 0 && mountId != pulledMountId)
             pulledMountId = -1;
@@ -10407,8 +10429,8 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
         detail = "Switched off in the file.";
     } else if (fileOn != coreOn) {
         state = "restart";
-        detail = fileOn ? "Switched on in the file; Core starts the buttons when it restarts."
-                        : "Switched off in the file; Core stops the buttons when it restarts.";
+        detail = fileOn ? "Switched on in the file; Core starts the buttons in a moment."
+                        : "Switched off in the file; Core stops the buttons in a moment.";
     } else if (!error.empty()) {
         state = "error";
         detail = error;
@@ -10461,13 +10483,13 @@ std::string ApertarCoreApp::i2cPeripheralJson(const hwconf::Document &doc, const
         detail = error.empty() ? "Core reads it on " + where + "." : error;
         if (!fileOn) {
             state = "restart";
-            detail = "Switched off in the file; Core stops it when it restarts.";
+            detail = "Switched off in the file; Core stops it in a moment.";
         }
     } else {
         const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
         if (probe.found) {
             state = fileOn ? "restart" : "found";
-            detail = fileOn ? "Found on " + where + " and switched on in the file; Core starts it when it restarts."
+            detail = fileOn ? "Found on " + where + " and switched on in the file; Core starts it in a moment."
                             : "Found on " + where + ", switched off.";
             if (probe.kernelDriver)
                 detail += " A kernel driver holds this address.";
@@ -10552,6 +10574,26 @@ static std::string cfeHatPeripheralJson(const hwconf::Document &doc, const std::
     return out.str();
 }
 
+// T42: the tally LED and the trigger output on the Hardware card: their settings, whether Core drives them, and a
+// Test button (test_output).
+static std::string outputPeripheralJson(const hwconf::Document &doc, const std::string &section, const std::string &title,
+                                        bool coreOn, const std::string &error)
+{
+    const bool fileOn = hwconf::sectionOn(doc, section);
+    std::string state = coreOn ? (error.empty() ? "running" : "error") : "off";
+    std::string detail = !error.empty() ? error : coreOn ? "" : "Switched off in the file.";
+    if (coreOn != fileOn) {
+        state = "restart";
+        detail = fileOn ? "Switched on in the file; Core starts it in a moment." : "Switched off in the file; Core stops it in a moment.";
+    }
+    std::ostringstream out;
+    out << "{\"id\":\"" << section << "\",\"section\":\"" << section << "\",\"title\":\"" << escapeJson(title) << "\""
+        << ",\"in_file\":" << (hwconf::hasSection(doc, section) ? "true" : "false") << ",\"output\":true"
+        << ",\"settings\":" << hwconf::peripheralSettingsJson(doc, section)
+        << ",\"status\":{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\"}}";
+    return out.str();
+}
+
 // The I2C buses this Pi has, with the adapter's name (/sys/bus/i2c/devices: /sys/class/i2c-adapter is missing on
 // this kernel). /dev links such as i2c-6 -> i2c-10 are not listed twice.
 static std::string i2cBusesJson()
@@ -10571,6 +10613,231 @@ static std::string i2cBusesJson()
         out << (i ? "," : "") << "{\"bus\":" << buses[i].first << ",\"name\":\"" << escapeJson(buses[i].second) << "\"}";
     out << ']';
     return out.str();
+}
+
+namespace {
+
+// T39: the driver group a hardware section belongs to. A group stops as a whole before any of it starts again: its
+// members share GPIO lines or a chip (a tally on 21 and a button on 20 can swap).
+std::string hardwareGroupOf(const std::string &section)
+{
+    if (section == "gpio_buttons" || section == "gpio_encoders" || section == "gpio_switches" || section == "pcf8574" ||
+        section == "trigger_output" || section == "recording_indicator")
+        return "GPIO and PCF8574";
+    if (section == "neorotary4")
+        return "NeoRotary 4";
+    if (section == "grove_analog")
+        return "Grove ADC";
+    if (section == "cfexpress_hat" || section == "storage")
+        return "CFexpress hat";
+    return {};
+}
+
+// The service outside Core that reads a section when it starts.
+std::string unitReadingSection(const std::string &section)
+{
+    if (section == "ina219" || section == "display" || section == "imu" || section == "mpu6050" || section == "bmi160" ||
+        section == "bmi270" || section == "icm42688p" || section == "gyro")
+        return "apertar-ui-direct";
+    if (section == "cfexpress_hat" || section == "storage")
+        return "apertar-cfe-automounter";
+    if (section == "network")
+        return "apertar-network";
+    return {};
+}
+
+std::string unitWhat(const std::string &unit)
+{
+    if (unit == "apertar-ui-direct")
+        return "The camera screen (battery, display, gyro) reads the file again when it restarts.";
+    if (unit == "apertar-cfe-automounter")
+        return "Automount reads the CFexpress hat settings again when it restarts.";
+    return "The network settings apply when the network service restarts.";
+}
+
+// Each section's headers and keys as one string, to see which sections a save changed (comments do not count).
+std::map<std::string, std::string> sectionContents(const std::string &text)
+{
+    std::map<std::string, std::string> out;
+    for (const auto &line : hwconf::parse(text).lines) {
+        if (line.kind == hwconf::Kind::Section)
+            out[line.section] += "[]\n";
+        else if (line.kind == hwconf::Kind::Key)
+            out[line.section] += line.key + "=" + line.value + "\n";
+    }
+    return out;
+}
+
+uint64_t monotonicMicros()
+{
+    timespec now {};
+    ::clock_gettime(CLOCK_MONOTONIC, &now);
+    return static_cast<uint64_t>(now.tv_sec) * 1000000ull + static_cast<uint64_t>(now.tv_nsec) / 1000ull;
+}
+
+} // namespace
+
+void ApertarCoreApp::wakeControlsWorker()
+{
+    {
+        std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+        controlsWakeRequested_ = true;
+    }
+    controlsWake_.notify_one();
+}
+
+bool ApertarCoreApp::recordingGateActive()
+{
+    return camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.stillExposureStatus().active;
+}
+
+// T39: one thread applies the hardware file. It wakes on a save, and every 2 s looks for an edit made outside
+// (Config, ssh): no command handler waits for it, and it never applies during a take.
+void ApertarCoreApp::runControlsWorker()
+{
+    while (controlsWorkerRunning_.load()) {
+        std::string applied;
+        {
+            std::unique_lock<std::mutex> lock(controlsWorkerMutex_);
+            controlsWake_.wait_for(lock, std::chrono::seconds(2),
+                                   [this] { return controlsWakeRequested_ || !controlsWorkerRunning_.load(); });
+            controlsWakeRequested_ = false;
+            applied = appliedHardwareText_;
+        }
+        if (!controlsWorkerRunning_.load())
+            break;
+        const std::string text = hardware::configStore().currentText();
+        if (text == applied)
+            continue;
+        if (recordingGateActive()) {
+            std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+            controlsApplyState_ = "waiting";
+            controlsApplyDetail_ = "Saved. Core applies it when the take ends.";
+            continue;
+        }
+        applyHardwareText(text);
+    }
+}
+
+// Restart only the driver groups whose sections changed: stop every member first, then start in boot order.
+// Not under commandMutex_ (a driver's action may be waiting for it while stop() joins that driver's thread); the
+// tally re-sync after the joins takes it.
+void ApertarCoreApp::applyHardwareText(const std::string &text)
+{
+    std::string applied;
+    {
+        std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+        applied = appliedHardwareText_;
+        controlsApplyState_ = "applying";
+    }
+    const auto before = sectionContents(applied);
+    const auto after = sectionContents(text);
+    std::set<std::string> sections;
+    for (const auto &[name, body] : before) sections.insert(name);
+    for (const auto &[name, body] : after) sections.insert(name);
+    std::set<std::string> groups;
+    std::set<std::string> units;
+    for (const auto &name : sections) {
+        const auto was = before.find(name);
+        const auto now = after.find(name);
+        if ((was == before.end() ? std::string() : was->second) == (now == after.end() ? std::string() : now->second))
+            continue;
+        if (const std::string group = hardwareGroupOf(name); !group.empty())
+            groups.insert(group);
+        if (const std::string unit = unitReadingSection(name); !unit.empty())
+            units.insert(unit);
+    }
+    const auto started = std::chrono::steady_clock::now();
+    const bool gpio = groups.count("GPIO and PCF8574") > 0;
+    const bool neo = groups.count("NeoRotary 4") > 0;
+    const bool grove = groups.count("Grove ADC") > 0;
+    if (gpio) {
+        pcf8574Input_.stop();
+        gpioInput_.stop();
+        recordingIndicatorOutput_.stop();
+        triggerOutput_.stop();
+    }
+    if (neo)
+        neoRotary4Input_.stop();
+    if (grove)
+        groveAnalogInput_.stop();
+    if (gpio) {
+        triggerOutput_.start();
+        pcf8574Input_.start();
+    }
+    if (neo)
+        neoRotary4Input_.start();
+    if (gpio)
+        gpioInput_.start();
+    if (grove)
+        groveAnalogInput_.start();
+    if (gpio) {
+        recordingIndicatorOutput_.start();
+        std::lock_guard<std::mutex> commandLock(commandMutex_);   // a record_start publishes under this lock
+        recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive());
+        recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
+    }
+    if (groups.count("CFexpress hat"))
+        cfeHatGeneration_.fetch_add(1);
+    const std::vector<hwconf::Issue> issues = hwconf::validate(text, hardwareConfigFacts());
+    controlsErrors_ = controlsErrorCount(issues);
+    controlsWarnings_ = issues.size() - controlsErrors_.load();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    std::string names;
+    for (const auto &group : groups)
+        names += (names.empty() ? "" : ", ") + group;
+    {
+        std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+        appliedHardwareText_ = text;
+        controlsApplyState_ = "applied";
+        controlsApplyDetail_ = names.empty() ? "Applied: nothing in Core reads what changed." : "Applied: restarted " + names + " in " + std::to_string(ms) + " ms.";
+        for (const auto &unit : units)
+            pendingUnitSince_[unit] = monotonicMicros();
+    }
+    std::cerr << "ApertarCore controls: " << (names.empty() ? std::string("applied; no Core driver reads what changed") : "applied: restarted " + names + " in " + std::to_string(ms) + " ms") << "\n";
+    publishEvent("{\"event\":\"controls\",\"applied\":\"" + escapeJson(hardware::configStore().currentRevision()) + "\",\"groups\":\"" +
+                 escapeJson(names) + "\",\"errors\":" + std::to_string(controlsErrors_.load()) + ",\"warnings\":" +
+                 std::to_string(controlsWarnings_.load()) + "}");
+}
+
+// What the page shows after a save: applied, waiting for a take, and which other services still read the old file.
+// A pending service clears when systemd says it started after the change.
+std::string ApertarCoreApp::controlsApplyJson()
+{
+    std::map<std::string, uint64_t> pending;
+    std::string state;
+    std::string detail;
+    {
+        std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+        pending = pendingUnitSince_;
+        state = controlsApplyState_;
+        detail = controlsApplyDetail_;
+    }
+    std::ostringstream out;
+    out << "{\"state\":\"" << state << "\",\"detail\":\"" << escapeJson(detail) << "\",\"pending\":[";
+    bool first = true;
+    for (const auto &[unit, since] : pending) {
+        const auto started = runShellCommandCapture("systemctl show -p ActiveEnterTimestampMonotonic --value " + unit + " 2>/dev/null");
+        const std::string value = trimAscii(started.output);
+        if (!value.empty() && hwconf::allDigits(value) && std::stoull(value) > since) {
+            std::lock_guard<std::mutex> lock(controlsWorkerMutex_);
+            pendingUnitSince_.erase(unit);
+            continue;
+        }
+        out << (first ? "" : ",") << "{\"unit\":\"" << unit << "\",\"what\":\"" << escapeJson(unitWhat(unit))
+            << "\",\"command\":\"sudo systemctl restart " << unit << "\"}";
+        first = false;
+    }
+    out << "]}";
+    return out.str();
+}
+
+void ApertarCoreApp::noteInputSeen(const std::string &sectionKey)
+{
+    std::lock_guard<std::mutex> lock(lastInputMutex_);
+    lastInput_ = sectionKey;
+    ++lastInputSeq_;
+    lastInputAt_ = std::chrono::steady_clock::now();
 }
 
 // The hardware commands that only read: they run without the command lock.
@@ -10601,7 +10868,93 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
              << "," << i2cPeripheralJson(hwconf::parse(info.text), "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
              << "," << i2cPeripheralJson(hwconf::parse(info.text), "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
              << "," << cfeHatPeripheralJson(hwconf::parse(info.text), options_.mediaRoot)
-             << "],\"i2c_buses\":" << i2cBusesJson() << "}";
+             << "," << outputPeripheralJson(hwconf::parse(info.text), "recording_indicator", "Tally LED",
+                                            recordingIndicatorOutput_.enabled(), recordingIndicatorOutput_.lastError())
+             << "," << outputPeripheralJson(hwconf::parse(info.text), "trigger_output", "Trigger output",
+                                            triggerOutput_.enabled(), triggerOutput_.lastError())
+             << "],\"i2c_buses\":" << i2cBusesJson()
+             << ",\"apply\":" << controlsApplyJson()
+             << ",\"dpi_lines\":[";
+        const hwconf::Facts facts = hardwareConfigFacts();
+        for (size_t i = 0; i < facts.dpiLines.size(); ++i)
+            body << (i ? "," : "") << facts.dpiLines[i];
+        body << "]}";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "controls_history") {
+        // T42/T43: the saved versions, newest first; name= returns one version's text (Undo, the Config history).
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        if (const auto name = command.string("name"); name && !name->empty()) {
+            const auto text = store.historyText(*name);
+            if (!text)
+                return errorReply(command.id, "No saved version called " + *name + ".");
+            return okReply(command.id, "\"name\":\"" + escapeJson(*name) + "\",\"text\":\"" + escapeJson(*text) + "\"");
+        }
+        std::ostringstream body;
+        body << "\"revision\":\"" << escapeJson(store.currentRevision()) << "\",\"history\":[";
+        const auto entries = store.history();
+        for (size_t i = 0; i < entries.size(); ++i)
+            body << (i ? "," : "") << "{\"name\":\"" << escapeJson(entries[i].name) << "\",\"saved_at\":\"" << escapeJson(entries[i].savedAt)
+                 << "\",\"by\":\"" << escapeJson(entries[i].by) << "\",\"revision\":\"" << escapeJson(entries[i].revision) << "\"}";
+        body << "]";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "controls_last_input") {
+        // T42 Listen: the last control that fired, as section and key, and how long ago.
+        std::lock_guard<std::mutex> lock(lastInputMutex_);
+        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastInputAt_).count());
+        const auto bar = lastInput_.find('|');
+        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
+            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
+            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
+    }
+    if (command.name == "scan_i2c") {
+        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
+        // driver is reading (it is listed as Core's), never during a take.
+        if (recordingGateActive())
+            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
+        const auto busValue = command.number("bus");
+        if (!busValue || *busValue < 0 || *busValue > 255)
+            return errorReply(command.id, "scan_i2c needs bus= (a bus from Settings > Config > Hardware).");
+        const int bus = static_cast<int>(*busValue);
+        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
+        std::set<int> held;
+        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
+            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
+            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
+            if (running && b && *b == bus)
+                held.insert(a ? static_cast<int>(*a) : fallback);
+        };
+        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
+        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
+        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
+        static const std::map<int, const char *> known = {
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
+            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
+            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
+        std::ostringstream body;
+        body << "\"bus\":" << bus << ",\"found\":[";
+        bool first = true;
+        for (int address = 0x03; address <= 0x77; ++address) {
+            const auto guess = known.find(address);
+            std::string by;
+            if (held.count(address)) {
+                by = "core";
+            } else {
+                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
+                if (!probe.busExists)
+                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
+                if (!probe.found)
+                    continue;
+                by = probe.kernelDriver ? "kernel" : "";
+            }
+            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
+                 << (guess == known.end() ? "" : guess->second) << "\"}";
+            first = false;
+        }
+        body << "]";
         return okReply(command.id, body.str());
     }
     if (command.name == "list_actions") {
@@ -10797,6 +11150,24 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
+    if (command.name == "test_output") {
+        // T42: one blink of the tally or one trigger pulse, to see which one is wired where.
+        const std::string which = command.string("which").value_or("");
+        if (recordingGateActive())
+            return errorReply(command.id, "Not during a take.");
+        if (which == "recording_indicator") {
+            if (!recordingIndicatorOutput_.enabled())
+                return errorReply(command.id, "The tally LED is off: switch it on and save first.");
+            recordingIndicatorOutput_.pulseCapture();
+        } else if (which == "trigger_output") {
+            if (!triggerOutput_.enabled())
+                return errorReply(command.id, "The trigger output is off: switch it on and save first.");
+            triggerOutput_.testPulse();
+        } else {
+            return errorReply(command.id, "test_output needs which=recording_indicator or which=trigger_output.");
+        }
+        return okReply(command.id, "\"which\":\"" + which + "\"");
+    }
     if (command.name == "set_controls") {
         const auto base = command.string("base");
         std::optional<std::string> text = command.string("text");
@@ -10844,6 +11215,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+            wakeControlsWorker();   // T39: the worker restarts what changed; this reply does not wait for it
         }
         std::ostringstream body;
         body << "\"revision\":\"" << escapeJson(result.revision) << "\""
@@ -10852,14 +11224,15 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"needs_review\":" << (result.needsReview ? "true" : "false")
              << ",\"diff\":\"" << escapeJson(result.diff) << "\""
              << ",\"errors\":" << controlsErrorCount(result.issues)
-             << ",\"issues\":" << controlsIssuesJson(result.issues);
+             << ",\"issues\":" << controlsIssuesJson(result.issues)
+             << ",\"apply\":\"" << (!result.written ? "" : recordingGateActive() ? "after_take" : "now") << "\"";
         if (flags.dryRun || result.needsReview)
             body << ",\"text\":\"" << escapeJson(result.text) << "\"";
         return okReply(command.id, body.str());
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -12697,6 +13070,7 @@ void ApertarCoreApp::publishEvent(const std::string &eventJson)
         eventJson.find("\"event\":\"standby\"") != std::string::npos ||
         eventJson.find("\"event\":\"still_exposure\"") != std::string::npos ||
         eventJson.find("\"event\":\"media_write_state\"") != std::string::npos ||
+        eventJson.find("\"event\":\"controls\"") != std::string::npos ||
         eventJson.find("\"event\":\"photo_write_error\"") != std::string::npos ||
         eventJson.find("\"event\":\"timelapse_progress\"") != std::string::npos ||
         eventJson.find("\"action\":\"standby_power_wake\"") != std::string::npos ||
