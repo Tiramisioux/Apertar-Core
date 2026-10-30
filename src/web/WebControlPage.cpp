@@ -10638,6 +10638,15 @@ std::string_view webControlPageHtml()
       }
       state.pb.queue.push({ img, placeholder, url });
       pbPumpThumbs();
+      pbUpdateStatus();
+    }
+
+    // The line under the title, kept current while the list and the thumbnails load.
+    function pbUpdateStatus() {
+      const payload = state.pb.payload;
+      const filter = state.pb.filter;
+      const all = payload && Array.isArray(payload.items) ? payload.items : [];
+      setText("pbStatus", pbStatusText(payload, all.filter((item) => mediaItemCategory(item) === filter), filter));
     }
 
     function pbPumpThumbs() {
@@ -10660,6 +10669,7 @@ std::string_view webControlPageHtml()
           .finally(() => {
             state.pb.inFlight -= 1;
             pbPumpThumbs();
+            pbUpdateStatus();
           });
       }
     }
@@ -10836,7 +10846,9 @@ std::string_view webControlPageHtml()
         return "Removing…";
       if (state.pb.error)
         return state.pb.error;
-      if (!payload || !payload.mounted)
+      if (!payload)
+        return "Loading…";                                   // the media list has not come back yet
+      if (!payload.mounted)
         return root + " is not available.";
       const hold = state.pb.hold;
       if (hold)
@@ -10845,7 +10857,8 @@ std::string_view webControlPageHtml()
         return "Tap " + spec.noun.replace("(s)", "s") + " to add or remove them. Cancel ends the selection.";
       if (items.length === 0)
         return spec.none + root + ".";
-      return "Found " + items.length + " " + spec.noun + " in " + root + ".";
+      const thumbsLoading = state.pb.inFlight > 0 || state.pb.queue.some((job) => job.img.isConnected);
+      return "Found " + items.length + " " + spec.noun + " in " + root + "." + (thumbsLoading ? " Loading thumbnails…" : "");
     }
 
     function pbRender() {
