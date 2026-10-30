@@ -2828,6 +2828,147 @@ std::string_view webControlPageHtml()
       overflow: auto;
     }
 
+    .config-editor-wrap {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      border-radius: 18px;
+      overflow: hidden;
+    }
+
+    .config-gutter {
+      margin: 0;
+      padding: 17px 10px 16px 14px;
+      min-width: 3ch;
+      text-align: right;
+      color: var(--muted);
+      background: rgba(9, 9, 11, 0.6);
+      font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", "Consolas", monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .config-editor-wrap .config-editor {
+      border-radius: 0 18px 18px 0;
+    }
+
+    .config-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 320px);
+      margin: 0 0 12px;
+    }
+
+    .config-diff {
+      margin: 0 0 12px;
+      padding: 10px 14px;
+      border: 1px solid #3f3f46;
+      border-radius: 10px;
+      font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre;
+      overflow: auto;
+      max-height: 360px;
+    }
+
+    .config-diff[hidden] {
+      display: none;
+    }
+
+    .config-diff .diff-add { color: #86efac; }
+    .config-diff .diff-del { color: #fca5a5; }
+    .config-diff .diff-gap { color: var(--muted); }
+    .config-diff .diff-actions {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0 0;
+      font-family: inherit;
+      white-space: normal;
+    }
+
+    .controls-review {
+      margin: 14px 0 0;
+      padding: 10px 14px;
+      border: 1px solid #3f3f46;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .controls-review[hidden],
+    .controls-listen-note[hidden] {
+      display: none;
+    }
+
+    .controls-listen-note {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .controls-row.heard {
+      outline: 2px solid #86efac;
+      outline-offset: 2px;
+      border-radius: 12px;
+    }
+
+    .action-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .action-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid #3f3f46;
+      border-radius: 999px;
+      background: #18181b;
+      font-size: 13px;
+      cursor: grab;
+    }
+
+    .action-chip.dragging {
+      opacity: 0.4;
+    }
+
+    .action-chip button {
+      background: none;
+      border: 0;
+      padding: 0 2px;
+      color: var(--muted);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .action-chips .settings-select {
+      width: auto;
+      min-width: 140px;
+    }
+
+    .controls-scan {
+      margin: 2px 0 6px 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .controls-bus-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 2px 0;
+    }
+
+    .controls-bus-line .preset-action {
+      padding: 4px 10px;
+      min-height: 0;
+      font-size: 12px;
+    }
+
     .config-issues {
       margin: 0 0 12px;
       padding: 10px 14px;
@@ -5355,18 +5496,23 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Controls</h3>
-                  <p class="settings-card-copy">Choose what each button, switch, knob and pin does, for the GPIO and the I2C devices Core finds. A saved change takes effect when Apertar Core restarts.</p>
+                  <p class="settings-card-copy">Choose what each button, switch, knob and pin does, for the GPIO and the I2C devices Core finds. Core applies a saved change at once; during a take, when it ends.</p>
                 </div>
                 <div class="online-pill" id="controlsStatePill">Not Loaded</div>
               </div>
 
               <div class="config-issues" id="controlsMessage" hidden></div>
+              <div class="config-issues info" id="controlsPending" hidden></div>
+              <div class="controls-listen-note" id="controlsListenNote" hidden></div>
               <div id="controlsRows"></div>
+              <div class="controls-review" id="controlsReview" hidden></div>
 
               <div class="settings-action-row">
                 <button class="secondary-button" id="reloadControlsButton" type="button">Reload</button>
+                <button class="secondary-button" id="listenControlsButton" type="button">Listen</button>
+                <button class="secondary-button" id="undoControlsButton" type="button">Undo last save</button>
                 <button class="primary-button" id="saveControlsButton" type="button" disabled>Save Controls</button>
-                <span class="subtle-note">Saved changes are checked first and kept in the file's history. Restart Apertar Core to apply them.</span>
+                <span class="subtle-note">Saved changes are checked first, kept in the file's history, and applied at once.</span>
               </div>
             </div>
           </section>
@@ -5376,12 +5522,13 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Hardware</h3>
-                  <p class="settings-card-copy">The devices Apertar can use: whether each one is detected, and its settings. Saved settings take effect when Apertar Core restarts.</p>
+                  <p class="settings-card-copy">The devices Apertar can use: whether each one is detected, and its settings. Core applies saved settings at once; the camera screen and automount read theirs when they restart.</p>
                 </div>
                 <div class="online-pill" id="hardwareStatePill">Not Loaded</div>
               </div>
 
               <div class="config-issues" id="hardwareMessage" hidden></div>
+              <div class="config-issues info" id="hardwarePending" hidden></div>
               <div id="hardwareDevices"></div>
 
               <div class="settings-action-row">
@@ -5411,17 +5558,29 @@ std::string_view webControlPageHtml()
                 </div>
               </div>
 
-              <label class="field-stack">
+              <div class="config-tools">
+                <label class="field-stack">
+                  <span class="input-label">Saved versions</span>
+                  <select class="settings-select" id="configHistorySelect"><option value="">Load an earlier version…</option></select>
+                </label>
+              </div>
+
+              <div class="field-stack">
                 <span class="input-label">Config File</span>
-                <textarea class="settings-input config-editor" id="settingsConfigEditor" spellcheck="false" wrap="off" placeholder="Loading Apertar config..."></textarea>
-              </label>
+                <div class="config-editor-wrap">
+                  <pre class="config-gutter" id="settingsConfigGutter" aria-hidden="true">1</pre>
+                  <textarea class="settings-input config-editor" id="settingsConfigEditor" spellcheck="false" wrap="off" placeholder="Loading Apertar config..." aria-label="Config file"></textarea>
+                </div>
+              </div>
 
               <div class="config-issues" id="settingsConfigIssues" hidden></div>
+              <div class="config-diff" id="settingsConfigDiff" hidden></div>
 
               <div class="settings-action-row">
                 <button class="secondary-button" id="reloadConfigButton" type="button">Reload Config</button>
+                <button class="secondary-button" id="checkConfigButton" type="button">Check</button>
                 <button class="primary-button" id="saveConfigButton" type="button" disabled>Save Config</button>
-                <span class="subtle-note">Hardware, input, display, and sensor changes may need ApertarCore or the UI restarted before they fully apply.</span>
+                <span class="subtle-note">Save shows what changes first. Core applies the hardware sections at once; the camera screen reads display, battery and gyro settings when it restarts.</span>
               </div>
             </div>
           </section>
@@ -14396,6 +14555,11 @@ std::string_view webControlPageHtml()
       added: [],             // rows added here: { kind: button, switch2 or switch3, pins, lines: [{ suffix, value, ... }] }
       settingEdits: new Map(),  // "section|key" -> { section, key, value }: device settings changed on the Hardware card
       buses: [],             // the Pi's I2C buses: { bus, name }
+      scans: {},             // bus -> { loading } or { found } or { error }: the Hardware card's Scan
+      dpiLines: [],          // config.txt lines that load a DPI display
+      apply: null,           // get_controls apply: { state, detail, pending }
+      history: [],           // saved versions, newest first
+      listening: false,
     };
     const controlsGroups = [
       { source: "gpio_buttons", title: "GPIO buttons", kinds: ["button"] },
@@ -14420,11 +14584,11 @@ std::string_view webControlPageHtml()
     // The lines of a switch: two-way on and off; three-way one per position, the middle one with neither pin closed.
     function switchLineSpecs(kind, pins) {
       if (kind === "switch2")
-        return [{ suffix: "_on", label: "On" }, { suffix: "_off", label: "Off" }];
+        return [{ suffix: "_off", label: "Position 0 (open)" }, { suffix: "_on", label: "Position 1 (closed)" }];
       return [
-        { suffix: "_position0", label: "Position 1 (GPIO " + pins[0] + ")" },
-        { suffix: "_position1", label: "Position 2 (middle)" },
-        { suffix: "_position2", label: "Position 3 (GPIO " + pins[1] + ")" },
+        { suffix: "_position0", label: "Position 0 (GPIO " + pins[0] + ")" },
+        { suffix: "_position1", label: "Position 1 (middle)" },
+        { suffix: "_position2", label: "Position 2 (GPIO " + pins[1] + ")" },
       ];
     }
 
@@ -14534,6 +14698,94 @@ std::string_view webControlPageHtml()
       return select;
     }
 
+    // T41: an action line holding several actions ("iso200,fps24", run in order) shows them as chips you drag to
+    // reorder, each with an x, and a dropdown to add one more. "Several actions…" in a plain dropdown starts that.
+    // The chip box acts like a select for the caller: .value, .disabled and a bubbling "change" event.
+    const controlsChipLines = new Set();
+    function buildControlsActionEditor(section, line, value) {
+      const id = section + "|" + line.key;
+      const several = String(value || "").includes(",") || controlsChipLines.has(id);
+      if (!several) {
+        const select = buildControlsSelect(section, line, value);
+        const option = document.createElement("option");
+        option.value = "__several__";
+        option.textContent = "Several actions…";
+        select.appendChild(option);
+        select.addEventListener("change", (event) => {
+          if (select.value !== "__several__")
+            return;
+          event.stopImmediatePropagation();
+          controlsChipLines.add(id);
+          renderControls();
+        });
+        return select;
+      }
+      const box = document.createElement("div");
+      box.className = "action-chips";
+      let current = String(value || "").split(",").map((part) => part.trim()).filter((part) => part && part !== "none");
+      let disabled = false;
+      const labelOf = (actionId) => {
+        const found = ((controlsState.catalog && controlsState.catalog.actions) || []).find((action) => action.id === actionId);
+        return found ? found.label : actionId;
+      };
+      const commit = (next) => {
+        current = next;
+        if (current.length === 0)
+          controlsChipLines.delete(id);
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      Object.defineProperty(box, "value", { get: () => (current.length ? current.join(",") : "none") });
+      Object.defineProperty(box, "disabled", {
+        get: () => disabled,
+        set: (on) => { disabled = !!on; box.querySelectorAll("button, select").forEach((element) => { element.disabled = disabled; }); },
+      });
+      let dragFrom = -1;
+      current.forEach((actionId, index) => {
+        const chip = document.createElement("span");
+        chip.className = "action-chip";
+        chip.draggable = true;
+        chip.textContent = (index + 1) + ". " + labelOf(actionId);
+        chip.addEventListener("dragstart", () => { dragFrom = index; chip.classList.add("dragging"); });
+        chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+        chip.addEventListener("dragover", (event) => event.preventDefault());
+        chip.addEventListener("drop", (event) => {
+          event.preventDefault();
+          if (dragFrom < 0 || dragFrom === index)
+            return;
+          const next = current.slice();
+          const [moved] = next.splice(dragFrom, 1);
+          next.splice(index, 0, moved);
+          commit(next);
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "×";
+        remove.setAttribute("aria-label", "Take " + labelOf(actionId) + " out");
+        remove.addEventListener("click", () => commit(current.filter((_, at) => at !== index)));
+        chip.appendChild(remove);
+        box.appendChild(chip);
+      });
+      const add = buildControlsSelect(section, line, "none");
+      add.options[0].textContent = "+ action";
+      add.setAttribute("aria-label", "Add an action to this line");
+      add.addEventListener("change", (event) => {
+        event.stopPropagation();
+        if (add.value && add.value !== "none")
+          commit(current.concat([add.value]));
+      });
+      box.appendChild(add);
+      return box;
+    }
+
+    // T41: the turn pairs a knob can adjust: each stepping action that has an _up and a _down ("ISO" from iso_up/iso_down).
+    function controlsTurnPairs() {
+      const actions = ((controlsState.catalog && controlsState.catalog.actions) || []).filter((action) => action.rotation && action.stepping);
+      const ids = new Set(actions.map((action) => action.id));
+      return actions.filter((action) => /_up$/.test(action.id) && ids.has(action.id.replace(/_up$/, "_down")))
+        .map((action) => ({ up: action.id, down: action.id.replace(/_up$/, "_down"), label: action.label.replace(/ up$/i, "").replace(/ [+-].*$/, "") }));
+    }
+    const controlsSeparateTurns = new Set();
+
     function setControlsValue(section, line, value) {
       const id = section + "|" + line.key;
       if (value === (line.raw === "" ? "none" : line.raw))
@@ -14617,7 +14869,7 @@ std::string_view webControlPageHtml()
           line.suffix = name.value;
           renderControls();
         });
-        const select = buildControlsSelect(section, { key: base + line.suffix }, line.value);
+        const select = buildControlsActionEditor(section, { key: base + line.suffix }, line.value);
         select.disabled = line.removed || controlsState.saving;
         select.addEventListener("change", () => {
           line.value = select.value;
@@ -14669,13 +14921,64 @@ std::string_view webControlPageHtml()
       const removed = wholeRow ? controlsState.removed.has(rowId)
         : !!push && push.lines.length > 0 && push.lines.every((line) => line.removed);
       let changed = removed || (!!push && buttonLinesChanged(row.base, push.lines));
-      row.lines.filter((line) => !pushKeys.has(line.key)).forEach((line, index) => {
+      element.dataset.index = String(((controlsState.model && controlsState.model.rows) || []).indexOf(row));
+      let fixedLines = row.lines.filter((line) => !pushKeys.has(line.key));
+      // T41 Turn adjusts: a knob whose two turns step one setting up and down shows one line, the pair.
+      const cwLine = fixedLines.find((line) => /_cw$/.test(line.key));
+      const ccwLine = fixedLines.find((line) => /_ccw$/.test(line.key));
+      if (cwLine && ccwLine && !controlsSeparateTurns.has(rowId)) {
+        const valueOf = (line) => { const edit = controlsState.edits.get(section + "|" + line.key); return edit ? edit.value : (line.raw || "none"); };
+        const cw = valueOf(cwLine);
+        const ccw = valueOf(ccwLine);
+        const pairs = controlsTurnPairs();
+        const match = pairs.find((pair) => (cw === pair.up && ccw === pair.down) || (cw === pair.down && ccw === pair.up));
+        if (match || (cw === "none" && ccw === "none")) {
+          changed = changed || controlsState.edits.has(section + "|" + cwLine.key) || controlsState.edits.has(section + "|" + ccwLine.key);
+          const turn = document.createElement("select");
+          turn.className = "settings-select controls-turn";
+          turn.setAttribute("aria-label", "What turning " + row.title + " adjusts");
+          const add = (value, text) => { const option = document.createElement("option"); option.value = value; option.textContent = text; turn.appendChild(option); };
+          add("none", "Nothing");
+          pairs.forEach((pair) => {
+            add(pair.up + "|" + pair.down, pair.label + " (clockwise up)");
+            add(pair.down + "|" + pair.up, pair.label + " (clockwise down)");
+          });
+          add("__separate__", "Separate actions for each direction…");
+          turn.value = cw === "none" && ccw === "none" ? "none" : cw + "|" + ccw;
+          turn.disabled = removed || controlsState.saving;
+          turn.addEventListener("change", () => {
+            if (turn.value === "__separate__") {
+              controlsSeparateTurns.add(rowId);
+              renderControls();
+              return;
+            }
+            const [up, down] = turn.value === "none" ? ["none", "none"] : turn.value.split("|");
+            [[cwLine, up], [ccwLine, down]].forEach(([line, value]) => {
+              if (value === (line.raw === "" ? "none" : line.raw))
+                controlsState.edits.delete(section + "|" + line.key);
+              else
+                controlsState.edits.set(section + "|" + line.key, { section: section, key: line.key, value: value });
+            });
+            renderControls();
+          });
+          const remove = wholeRow ? buildControlsRemove(row.title, removed, () => {
+            if (removed)
+              controlsState.removed.delete(rowId);
+            else
+              controlsState.removed.add(rowId);
+            renderControls();
+          }) : null;
+          lines.appendChild(buildControlsLine("Turn adjusts", turn, remove, false));
+          fixedLines = fixedLines.filter((line) => line !== cwLine && line !== ccwLine);
+        }
+      }
+      fixedLines.forEach((line, index) => {
         const edit = controlsState.edits.get(section + "|" + line.key);
         changed = changed || !!edit;
-        const select = buildControlsSelect(section, line, edit ? edit.value : line.raw);
+        const select = buildControlsActionEditor(section, line, edit ? edit.value : line.raw);
         select.disabled = removed || controlsState.saving;
         select.addEventListener("change", () => setControlsValue(section, line, select.value));
-        const remove = wholeRow && index === 0 ? buildControlsRemove(row.title, removed, () => {
+        const remove = wholeRow && index === 0 && !lines.firstChild ? buildControlsRemove(row.title, removed, () => {
           if (removed) {
             controlsState.removed.delete(rowId);
           } else {
@@ -14737,6 +15040,13 @@ std::string_view webControlPageHtml()
           entry.pins[index] = select.value === "" ? null : parseInt(select.value, 10);
           renderControls();
         });
+        if (entry.kind === "switch3" && index === 1) {        // pin 2 sits on its position's line, below the middle
+          const spacer = select.cloneNode(true);
+          spacer.className = "settings-select";
+          spacer.style.visibility = "hidden";
+          spacer.setAttribute("aria-hidden", "true");
+          head.appendChild(spacer);
+        }
         head.appendChild(select);
       });
       if (kindName) {
@@ -14753,7 +15063,7 @@ std::string_view webControlPageHtml()
         appendButtonLines(lines, controlsNewTitles.button, "gpio_buttons", "d" + entry.pins[0], entry.lines, controlsPushGestures(""), drop);
       } else if (entry.kind === "encoder") {
         [{ suffix: "_cw", label: "Turn clockwise" }, { suffix: "_ccw", label: "Turn counter-clockwise" }].forEach((spec, index) => {
-          const select = buildControlsSelect("gpio_encoders", { key: spec.suffix }, entry.turns[spec.suffix]);
+          const select = buildControlsActionEditor("gpio_encoders", { key: spec.suffix }, entry.turns[spec.suffix]);
           select.disabled = controlsState.saving;
           select.addEventListener("change", () => {
             entry.turns[spec.suffix] = select.value;
@@ -14770,7 +15080,7 @@ std::string_view webControlPageHtml()
       } else {
         switchLineSpecs(entry.kind, entry.pins).forEach((spec, index) => {
           const line = entry.lines[index];
-          const select = buildControlsSelect("gpio_switches", { key: spec.suffix }, line.value);
+          const select = buildControlsActionEditor("gpio_switches", { key: spec.suffix }, line.value);
           select.disabled = controlsState.saving;
           select.addEventListener("change", () => {
             line.value = select.value;
@@ -14859,7 +15169,25 @@ std::string_view webControlPageHtml()
       const pill = document.createElement("div");
       pill.className = "online-pill";
       pill.textContent = controlsStateNames[status.state] || status.state || "";
-      head.appendChild(pill);
+      if (withSettings && peripheral.output) {
+        // T42: one blink or one pulse, to see which output is which.
+        const side = document.createElement("div");
+        side.className = "controls-bus-line";
+        const test = document.createElement("button");
+        test.className = "secondary-button preset-action";
+        test.type = "button";
+        test.textContent = "Test";
+        test.disabled = status.state !== "running";
+        test.addEventListener("click", async () => {
+          const result = await controlsCall({ cmd: "test_output", which: peripheral.id });
+          showToast(result.ok ? peripheral.title + ": test sent." : (result.error || "Could not test it."), !result.ok);
+        });
+        side.appendChild(test);
+        side.appendChild(pill);
+        head.appendChild(side);
+      } else {
+        head.appendChild(pill);
+      }
       card.appendChild(head);
       if (!withSettings)
         return card;
@@ -14964,6 +15292,7 @@ std::string_view webControlPageHtml()
           card.appendChild(buildControlsAddBar());
         host.appendChild(card);
       });
+      renderControlsReview();
       updateControlsButtons();
     }
 
@@ -15022,13 +15351,49 @@ std::string_view webControlPageHtml()
         title.textContent = "I2C buses";
         buses.appendChild(title);
         controlsState.buses.forEach((entry) => {
+          const row = document.createElement("div");
+          row.className = "controls-bus-line";
           const line = document.createElement("div");
           line.className = "controls-row-detail";
           const users = controlsState.peripherals.filter((peripheral) => peripheral.status && peripheral.status.bus === entry.bus
             && controlsDetectedStates.includes(peripheral.status.state)).map((peripheral) => peripheral.title);
           line.textContent = "Bus " + entry.bus + (entry.name ? " (" + entry.name + ")" : "") + (users.length > 0 ? ": " + users.join(", ") : "");
-          buses.appendChild(line);
+          // T40: which addresses answer on this bus (one read each; never during a take, never an address Core reads).
+          const scan = document.createElement("button");
+          scan.className = "secondary-button preset-action";
+          scan.type = "button";
+          scan.textContent = "Scan";
+          const result = controlsState.scans[entry.bus];
+          scan.disabled = !!(result && result.loading);
+          scan.addEventListener("click", async () => {
+            controlsState.scans[entry.bus] = { loading: true };
+            renderHardware();
+            const reply = await controlsCall({ cmd: "scan_i2c", bus: entry.bus });
+            controlsState.scans[entry.bus] = reply.ok ? { found: reply.found || [] } : { error: reply.error || "Could not scan." };
+            renderHardware();
+          });
+          row.appendChild(line);
+          row.appendChild(scan);
+          buses.appendChild(row);
+          if (result && !result.loading) {
+            const found = document.createElement("div");
+            found.className = "controls-scan";
+            found.textContent = result.error ? result.error : result.found.length === 0 ? "Nothing answers on this bus."
+              : result.found.map((item) => item.address + (item.guess ? " " + item.guess : "") + (item.by === "core" ? " (Core reads it)" : item.by === "kernel" ? " (a kernel driver)" : "")).join(" · ");
+            buses.appendChild(found);
+          } else if (result && result.loading) {
+            const found = document.createElement("div");
+            found.className = "controls-scan";
+            found.textContent = "Scanning…";
+            buses.appendChild(found);
+          }
         });
+        if (controlsState.dpiLines.length > 0) {
+          const dpi = document.createElement("div");
+          dpi.className = "controls-scan";
+          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Only you edit config.txt.";
+          buses.appendChild(dpi);
+        }
         host.appendChild(buses);
       }
       controlsState.peripherals.forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral, true)));
@@ -15056,7 +15421,8 @@ std::string_view webControlPageHtml()
         await loadControls(true);
         if (!state.configDirty)
           await fetchConfigFile(true);     // the text editor below shows the same file
-        showHardwareMessage("Saved. Restart Apertar Core to apply the change.", result.issues, true);
+        showHardwareMessage(controlsAppliedText(result), result.issues, true);
+        controlsRecheckSoon();
         showToast("Hardware settings saved.", false);
       } catch (error) {
         showHardwareMessage(error.message || "Could not save the settings.", [], false);
@@ -15090,6 +15456,10 @@ std::string_view webControlPageHtml()
         controlsState.model = controls.controls.model || null;
         controlsState.peripherals = controls.controls.peripherals || [];
         controlsState.buses = controls.controls.i2c_buses || [];
+        controlsState.dpiLines = controls.controls.dpi_lines || [];
+        controlsState.apply = controls.controls.apply || null;
+        controlsChipLines.clear();
+        controlsSeparateTurns.clear();
         controlsState.settingEdits = new Map();
         controlsState.edits = new Map();
         controlsState.added = [];
@@ -15116,6 +15486,8 @@ std::string_view webControlPageHtml()
           throw new Error("This Apertar Core does not describe its controls yet. Restart it after the update.");
         renderControls();
         renderHardware();
+        renderControlsPending();
+        void loadControlsHistory();
         if (!silent)
           showToast("Controls loaded.", false);
       } catch (error) {
@@ -15129,9 +15501,8 @@ std::string_view webControlPageHtml()
       }
     }
 
-    async function saveControls() {
-      if (!controlsDirty() || controlsState.saving)
-        return;
+    // Everything changed on the page as one set_controls request: set.<section>.<key> and unset.<section>.<key>.
+    function controlsPayload() {
       const payload = { cmd: "set_controls", base: controlsState.revision, by: "webui" };
       const rows = (controlsState.model && controlsState.model.rows) || [];
       const sections = new Map((controlsState.model.sections || []).map((entry) => [entry.name, entry]));
@@ -15194,6 +15565,220 @@ std::string_view webControlPageHtml()
         payload["set." + id] = value;
       });
       unsets.forEach((id) => { payload["unset." + id] = "true"; });
+      return payload;
+    }
+
+    // T42 Review: the unsaved changes in plain words, kept under the rows while you edit.
+    function controlsDescribe(section, key) {
+      const rows = (controlsState.model && controlsState.model.rows) || [];
+      for (const row of rows) {
+        if (row.source !== section)
+          continue;
+        const line = row.lines.find((candidate) => candidate.key === key);
+        if (line)
+          return row.title + " · " + line.label;
+        if (row.base && key.startsWith(row.base)) {
+          const gesture = (row.gestures || []).find((candidate) => row.base + candidate.suffix === key);
+          if (gesture)
+            return row.title + " · " + gesture.label;
+        }
+        if ((row.keys || []).includes(key))
+          return row.title;
+      }
+      let match = /^d(\d+)(.*)$/.exec(key);
+      if (section === "gpio_buttons" && match) {
+        const gesture = controlsPushGestures("").find((candidate) => candidate.suffix === match[2]);
+        return "GPIO " + match[1] + " · " + (gesture ? gesture.label : match[2]);
+      }
+      if (key === "enabled")
+        return ({ gpio_buttons: "GPIO buttons", gpio_switches: "GPIO switches", gpio_encoders: "GPIO rotary encoders" }[section] || section) + " · switched on";
+      match = /^(switch|encoder)(\d+)_(.*)$/.exec(key);
+      if (match)
+        return (match[1] === "switch" ? "Switch " : "Encoder ") + match[2] + " · " + match[3].replace(/_/g, " ");
+      return "[" + section + "] " + key;
+    }
+
+    function controlsActionWords(value) {
+      return String(value).split(",").map((part) => {
+        const found = ((controlsState.catalog && controlsState.catalog.actions) || []).find((action) => action.id === part.trim());
+        return part.trim() === "none" ? "Nothing" : found ? found.label : part.trim();
+      }).join(", then ");
+    }
+
+    function renderControlsReview() {
+      const box = document.getElementById("controlsReview");
+      if (!box)
+        return;
+      box.textContent = "";
+      if (!controlsDirty()) {
+        box.hidden = true;
+        return;
+      }
+      const payload = controlsPayload();
+      const head = document.createElement("div");
+      head.textContent = "Not saved yet:";
+      box.appendChild(head);
+      const list = document.createElement("ul");
+      Object.keys(payload).filter((key) => /^(set|unset)\./.test(key)).forEach((key) => {
+        const [op, section, ...rest] = key.split(".");
+        const name = rest.join(".");
+        if (op === "unset" && /_(pins|a|b|press_gpio)$/.test(name))
+          return;
+        const item = document.createElement("li");
+        item.textContent = controlsDescribe(section, name) + (op === "unset" ? ": removed" : /_(pins|a|b|press_gpio)$/.test(name) ? ": GPIO " + payload[key]
+          : name === "enabled" ? "" : " → " + controlsActionWords(payload[key]));
+        list.appendChild(item);
+      });
+      box.appendChild(list);
+      box.hidden = false;
+    }
+
+    function controlsAppliedText(result) {
+      if (result.apply === "after_take")
+        return "Saved. Core applies it when the take ends.";
+      return "Saved. Core applies it now.";
+    }
+
+    // A moment after a save, read the file's state again: what Core restarted, and what still needs a restart.
+    function controlsRecheckSoon() {
+      window.setTimeout(async () => {
+        const reply = await controlsCall({ cmd: "get_controls" });
+        if (!reply.ok)
+          return;
+        controlsState.apply = reply.controls.apply || null;
+        if (!controlsDirty() && !hardwareDirty()) {
+          controlsState.peripherals = reply.controls.peripherals || controlsState.peripherals;
+          renderControls();
+          renderHardware();
+        }
+        renderControlsPending();
+      }, 2500);
+    }
+
+    // T39: a save that waits for the take, and services outside Core that still read the old file.
+    function renderControlsPending() {
+      ["controlsPending", "hardwarePending"].forEach((id) => {
+        const box = document.getElementById(id);
+        if (!box)
+          return;
+        const apply = controlsState.apply || {};
+        const lines = [];
+        if (apply.state === "waiting")
+          lines.push(apply.detail || "Saved. Core applies it when the take ends.");
+        else if (apply.detail && id === "hardwarePending")
+          lines.push(apply.detail);
+        (apply.pending || []).forEach((item) => lines.push(item.what + " To do it now: " + item.command));
+        box.textContent = "";
+        lines.forEach((text) => {
+          const line = document.createElement("div");
+          line.textContent = text;
+          box.appendChild(line);
+        });
+        box.hidden = lines.length === 0;
+      });
+    }
+
+    // T42 Undo last save: put back the version the last save replaced (it is in the file's history).
+    async function loadControlsHistory() {
+      const reply = await controlsCall({ cmd: "controls_history" });
+      controlsState.history = reply.ok ? reply.history || [] : [];
+      const undo = document.getElementById("undoControlsButton");
+      if (undo)
+        undo.disabled = !controlsState.history.some((entry) => entry.by !== "adopted");
+      const select = document.getElementById("configHistorySelect");
+      if (select) {
+        select.textContent = "";
+        const first = document.createElement("option");
+        first.value = "";
+        first.textContent = controlsState.history.length ? "Load an earlier version…" : "No earlier versions yet";
+        select.appendChild(first);
+        controlsState.history.forEach((entry) => {
+          const option = document.createElement("option");
+          option.value = entry.name;
+          option.textContent = entry.by === "adopted" ? "Before Controls (as Core first found it)" : entry.saved_at + " · replaced by a " + entry.by + " save";
+          select.appendChild(option);
+        });
+      }
+    }
+
+    async function undoLastControlsSave() {
+      const last = controlsState.history.find((entry) => entry.by !== "adopted");
+      if (!last || controlsState.saving)
+        return;
+      if (!window.confirm("Put back the file as it was before the save at " + last.saved_at + "? Unsaved changes on this page are dropped."))
+        return;
+      const version = await controlsCall({ cmd: "controls_history", name: last.name });
+      if (!version.ok) {
+        showToast(version.error || "Could not read that version.", true);
+        return;
+      }
+      const result = await controlsCall({ cmd: "set_controls", base: controlsState.revision, text: version.text, by: "webui_undo" });
+      if (!result.ok) {
+        showControlsMessage(result.error || "Could not undo.", result.issues, false);
+        return;
+      }
+      await loadControls(true);
+      if (!state.configDirty)
+        await fetchConfigFile(true);
+      showControlsMessage("Undone: the file is as it was before " + last.saved_at + ". " + controlsAppliedText(result).replace("Saved. ", ""), [], true);
+      controlsRecheckSoon();
+    }
+
+    // T42 Listen: press a button or turn a knob and its row lights up.
+    let controlsListenTimer = 0;
+    let controlsListenSeq = -1;
+    function controlsRowForKey(section, key) {
+      const rows = (controlsState.model && controlsState.model.rows) || [];
+      return rows.findIndex((row) => row.source === section && (row.lines.some((line) => line.key === key) || (row.keys || []).includes(key) ||
+        (row.base && key.startsWith(row.base) && /^(_[a-z]+[0-9]?)?$/.test(key.slice(row.base.length))) ||
+        (/^switch\d+_/.test(key) && (row.keys || []).some((own) => own.split("_")[0] === key.split("_")[0]))));
+    }
+    function setControlsListening(on) {
+      controlsState.listening = on;
+      const button = document.getElementById("listenControlsButton");
+      const note = document.getElementById("controlsListenNote");
+      if (button)
+        button.textContent = on ? "Stop listening" : "Listen";
+      if (note) {
+        note.textContent = "Listening: press a button, flip a switch or turn a knob, and its row lights up.";
+        note.hidden = !on;
+      }
+      window.clearInterval(controlsListenTimer);
+      if (!on)
+        return;
+      controlsListenSeq = -1;
+      const started = Date.now();
+      controlsListenTimer = window.setInterval(async () => {
+        if (Date.now() - started > 120000 || !document.getElementById("controlsRows").offsetParent) {
+          setControlsListening(false);
+          return;
+        }
+        const reply = await controlsCall({ cmd: "controls_last_input" });
+        if (!reply.ok)
+          return;
+        if (controlsListenSeq < 0) {
+          controlsListenSeq = reply.seq;
+          return;
+        }
+        if (reply.seq === controlsListenSeq)
+          return;
+        controlsListenSeq = reply.seq;
+        const index = controlsRowForKey(reply.section, reply.key);
+        if (note)
+          note.textContent = "Heard: " + controlsDescribe(reply.section, reply.key) + ". Press another, or Stop listening.";
+        const element = index < 0 ? null : document.querySelector('#controlsRows .controls-row[data-index="' + index + '"]');
+        if (element) {
+          element.classList.add("heard");
+          element.scrollIntoView({ block: "center", behavior: "smooth" });
+          window.setTimeout(() => element.classList.remove("heard"), 2000);
+        }
+      }, 300);
+    }
+
+    async function saveControls() {
+      if (!controlsDirty() || controlsState.saving)
+        return;
+      const payload = controlsPayload();
       controlsState.saving = true;
       renderControls();
       try {
@@ -15210,7 +15795,8 @@ std::string_view webControlPageHtml()
         await loadControls(true);
         if (!state.configDirty)
           await fetchConfigFile(true);     // Config shows the same file
-        showControlsMessage("Saved. Restart Apertar Core to apply the change.", result.issues, true);
+        showControlsMessage(controlsAppliedText(result), result.issues, true);
+        controlsRecheckSoon();
         showToast("Controls saved.", false);
       } catch (error) {
         showControlsMessage(error.message || "Could not save the controls.", [], false);
@@ -15254,6 +15840,9 @@ std::string_view webControlPageHtml()
       const text = String(payload && payload.text || "");
       if (editor)
         editor.value = text;
+      state.configLoadedText = text;
+      hideConfigDiff();
+      updateConfigGutter();
       state.configDirty = false;
       state.configRevision = String(payload && payload.revision || "");
       showConfigIssues("", []);
@@ -15291,6 +15880,136 @@ std::string_view webControlPageHtml()
         state.configFetchInFlight = false;
         updateConfigEditorControls();
       }
+    }
+
+    // T43: line numbers beside the editor, scrolled with it.
+    function updateConfigGutter() {
+      const editor = document.getElementById("settingsConfigEditor");
+      const gutter = document.getElementById("settingsConfigGutter");
+      if (!editor || !gutter)
+        return;
+      const count = editor.value.split("\n").length;
+      if (gutter.dataset.count !== String(count)) {
+        gutter.textContent = Array.from({ length: count }, (_, index) => String(index + 1)).join("\n");
+        gutter.dataset.count = String(count);
+      }
+      gutter.scrollTop = editor.scrollTop;
+    }
+
+    // T43 Check: Core reads the text without saving it and says what it finds, with line numbers.
+    async function checkConfigFile() {
+      const editor = document.getElementById("settingsConfigEditor");
+      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision || "h", text: editor ? editor.value : "", dry_run: "true", by: "webui" });
+      const found = Array.isArray(result.issues) ? result.issues : [];
+      if (!result.ok && found.length === 0) {
+        showConfigIssues(result.error || "Could not check the text.", result.new_errors || []);
+        return;
+      }
+      if (found.length === 0) {
+        showConfigIssues("", []);
+        showToast("Checked: Core finds nothing to fix.", false);
+        return;
+      }
+      const errors = found.filter((issue) => issue.error).length;
+      showConfigIssues("Checked: " + errors + (errors === 1 ? " error" : " errors") + ", " + (found.length - errors) +
+        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save is refused until the errors are fixed." : "."), found);
+    }
+
+    // T43: the lines that differ between the loaded file and the editor (a longest-common-subsequence line diff),
+    // with two lines around each change.
+    function configDiffLines(before, after) {
+      const a = before.split("\n");
+      const b = after.split("\n");
+      const n = a.length;
+      const m = b.length;
+      const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+      for (let i = n - 1; i >= 0; --i)
+        for (let j = m - 1; j >= 0; --j)
+          lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      const ops = [];
+      let i = 0;
+      let j = 0;
+      while (i < n || j < m) {
+        if (i < n && j < m && a[i] === b[j]) { ops.push({ kind: " ", text: a[i], line: j + 1 }); ++i; ++j; }
+        else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) { ops.push({ kind: "+", text: b[j], line: j + 1 }); ++j; }
+        else { ops.push({ kind: "-", text: a[i], line: j + 1 }); ++i; }
+      }
+      const keep = new Set();
+      ops.forEach((op, at) => { if (op.kind !== " ") for (let k = Math.max(0, at - 2); k <= Math.min(ops.length - 1, at + 2); ++k) keep.add(k); });
+      const out = [];
+      let last = -1;
+      ops.forEach((op, at) => {
+        if (!keep.has(at))
+          return;
+        if (last >= 0 && at !== last + 1)
+          out.push({ kind: "gap", text: "…" });
+        out.push(op);
+        last = at;
+      });
+      return out;
+    }
+
+    function hideConfigDiff() {
+      const box = document.getElementById("settingsConfigDiff");
+      if (box) {
+        box.hidden = true;
+        box.textContent = "";
+      }
+    }
+
+    // Save shows what changes first; "Save these changes" saves.
+    function showConfigDiff() {
+      const editor = document.getElementById("settingsConfigEditor");
+      const box = document.getElementById("settingsConfigDiff");
+      if (!editor || !box)
+        return;
+      const lines = configDiffLines(state.configLoadedText || "", editor.value);
+      box.textContent = "";
+      const head = document.createElement("div");
+      head.textContent = lines.length === 0 ? "Nothing changed." : "What Save changes (line numbers of the new text):";
+      box.appendChild(head);
+      lines.forEach((op) => {
+        const line = document.createElement("div");
+        line.className = op.kind === "+" ? "diff-add" : op.kind === "-" ? "diff-del" : op.kind === "gap" ? "diff-gap" : "";
+        line.textContent = op.kind === "gap" ? "    …" : String(op.line).padStart(4, " ") + " " + op.kind + " " + op.text;
+        box.appendChild(line);
+      });
+      const actions = document.createElement("div");
+      actions.className = "diff-actions";
+      const confirm = document.createElement("button");
+      confirm.className = "primary-button";
+      confirm.type = "button";
+      confirm.textContent = "Save these changes";
+      confirm.disabled = lines.length === 0;
+      confirm.addEventListener("click", () => { hideConfigDiff(); void saveConfigFile(); });
+      const back = document.createElement("button");
+      back.className = "secondary-button";
+      back.type = "button";
+      back.textContent = "Back to editing";
+      back.addEventListener("click", hideConfigDiff);
+      actions.appendChild(confirm);
+      actions.appendChild(back);
+      box.appendChild(actions);
+      box.hidden = false;
+    }
+
+    // T43 history: put an earlier version into the editor, unsaved, to look at and Save if wanted.
+    async function loadConfigVersion(name) {
+      if (!name)
+        return;
+      if (state.configDirty && !window.confirm("Replace the unsaved text in the editor with that version?"))
+        return;
+      const reply = await controlsCall({ cmd: "controls_history", name: name });
+      if (!reply.ok) {
+        showToast(reply.error || "Could not read that version.", true);
+        return;
+      }
+      const editor = document.getElementById("settingsConfigEditor");
+      editor.value = reply.text;
+      state.configDirty = editor.value !== state.configLoadedText;
+      updateConfigGutter();
+      updateConfigEditorControls();
+      showToast("That version is in the editor, not saved. Save puts it back.", false);
     }
 
     async function saveConfigFile() {
@@ -16491,11 +17210,22 @@ std::string_view webControlPageHtml()
       document.getElementById("saveHardwareButton").addEventListener("click", saveHardware);
       document.getElementById("saveControlsButton").addEventListener("click", saveControls);
       document.getElementById("reloadConfigButton").addEventListener("click", () => fetchConfigFile(false, true));
-      document.getElementById("saveConfigButton").addEventListener("click", saveConfigFile);
+      document.getElementById("saveConfigButton").addEventListener("click", showConfigDiff);
+      document.getElementById("checkConfigButton").addEventListener("click", checkConfigFile);
+      document.getElementById("configHistorySelect").addEventListener("change", (event) => {
+        const name = event.target.value;
+        event.target.value = "";
+        void loadConfigVersion(name);
+      });
+      document.getElementById("listenControlsButton").addEventListener("click", () => setControlsListening(!controlsState.listening));
+      document.getElementById("undoControlsButton").addEventListener("click", undoLastControlsSave);
       document.getElementById("settingsConfigEditor").addEventListener("input", () => {
         state.configDirty = true;
+        hideConfigDiff();
+        updateConfigGutter();
         updateConfigEditorControls();
       });
+      document.getElementById("settingsConfigEditor").addEventListener("scroll", updateConfigGutter);
       updateConfigEditorControls();
 
       document.getElementById("settingsOverlay").addEventListener("click", (event) => {
