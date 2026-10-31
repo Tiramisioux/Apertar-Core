@@ -14176,7 +14176,7 @@ std::string_view webControlPageHtml()
       setText("networkTransport", snapshot.network_transport || "Wi-Fi / Ethernet");
       setText("webDateTimePill", formatWebDateTimePill(localDateTimeValue));
       const prerollShown = snapshot.storage_preroll_active === true && !isRecording && !isTimelapse;
-      setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
+      setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true ? "WRITING" : "READY"))));
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
@@ -14550,7 +14550,8 @@ std::string_view webControlPageHtml()
       statusDot.classList.toggle("recording", (isRecording || isTimelapse) && hasMedia);
       statusDot.classList.toggle("timelapse", isTimelapse && hasMedia);
       statusDot.classList.toggle("no-media", !hasMedia);
-      statusDot.classList.toggle("writing", !!snapshot.media_writes_pending && !isRecording && !isTimelapse);
+      // A safety stop is not a take any more: the pill is READY green while the buffer empties.
+      statusDot.classList.toggle("writing", !!snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true && !isRecording && !isTimelapse);
 
       const recordButton = document.getElementById("recordButton");
       recordButton.disabled = !(isRecording || isTimelapse || isSoundRecording) &&
