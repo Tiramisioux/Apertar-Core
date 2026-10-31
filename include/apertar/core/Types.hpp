@@ -56,6 +56,13 @@ enum class CdngCompression {
     LosslessJpeg
 };
 
+// CineMate Log: store the sensor data at a lower depth through a log curve. Runs beside every
+// cDNG compression; On (Auto) is always one step below the source depth.
+enum class CdngLog {
+    Off,
+    Auto
+};
+
 enum class LossyDngRatio {
     R3,
     R5
@@ -138,6 +145,9 @@ struct CaptureSettings {
     // Experimental: after a ramped take also write <clip>_stretched.wav, the WAV conformed to
     // the clip's timeline with its pitch kept (Rubber Band). The real-time WAV is always kept.
     bool fpsSpeedRampStretchAudio = true;
+    // After a ramped take: false = the FPS stays at the value the ramp ended on (it becomes the
+    // operator's FPS); true = it returns to the rate the take started with.
+    bool fpsSpeedRampReturn = false;
     uint32_t iso = 800;
     bool isoAuto = false;
     bool isoAutoAfterClearHdr = false; // Clear HDR stopped auto ISO; SDR turns it back on.
@@ -158,6 +168,7 @@ struct CaptureSettings {
     bool whiteBalanceAvailable = false; // Runtime capability of the active tuning, not persisted.
     WhiteBalanceMeasurement whiteBalanceMeasured;
     uint32_t isoMeasured = 0; // Runtime: the analogue gain in use x 100, not persisted.
+    bool cdngLogApplied = false; // Runtime: Log is on and the configured raw stream can carry it (cdngLogApplicable).
     uint32_t isoMax = 0;      // Runtime: the current mode's ISO ceiling (Clear HDR, lossless), 0 = none.
     double fpsMax = 0.0;      // Runtime: the current mode's FPS ceiling (sensor, lossless); with the mode ladder, the ladder's.
     double fpsTakeMax = 0.0;  // Runtime (T34): the highest FPS a take in the current mode reaches (its rung's ceiling).
@@ -165,11 +176,13 @@ struct CaptureSettings {
     uint32_t ladderRung = 0;       // Runtime (T34): the running rung, 1-based, 0 = the mode is not a rung.
     bool ladderRampReady = false;  // Runtime (T34): Ramp-ready is choosing (with Speed Ramp on).
     bool ladderEnabled = false;    // Runtime (T34): the ladder is switched on (it may be idle, e.g. in H.264).
+    bool ladderOverride = false;   // Runtime: an explicit Clear HDR choice holds the mode; the ladder waits for the next fps/mode change.
     uint32_t ladderCount = 0;      // Runtime (T34): resolutions in the ladder.
     std::vector<double> ladderTops; // Runtime (T34): each resolution's top FPS, in order (for the FPS pill labels).
     std::string ladderText;        // Runtime (T34): the running line, e.g. "Resolution 1 · 3840×2160 · ClearHDR16 · ≤25 · Uncompressed".
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
+    CdngLog cdngLog = CdngLog::Off;
     LossyDngRatio lossyDngRatio = LossyDngRatio::R3;
     ProresProfile proresProfile = ProresProfile::Standard;
     ProresColorProfile proresColorProfile = ProresColorProfile::Standard;
@@ -301,6 +314,53 @@ inline const char *toString(RecordingFormat format)
 inline const char *toString(CdngCompression compression)
 {
     return compression == CdngCompression::LosslessJpeg ? "lossless_jpeg" : "none";
+}
+
+inline const char *toString(CdngLog log)
+{
+    switch (log) {
+    case CdngLog::Off: return "off";
+    case CdngLog::Auto: return "auto";
+    }
+    return "off";
+}
+
+// False for an unknown value (out is then left alone). "off" is Off; "auto", "on" and the legacy explicit
+// targets "12", "10", "8" (old settings, presets, scripts) all mean Auto. The ladder words log, log10, log8
+// are mapped by the ladder parser.
+inline bool cdngLogFromString(const std::string &value, CdngLog &out)
+{
+    if (value == "off") out = CdngLog::Off;
+    else if (value == "auto" || value == "on" || value == "12" || value == "10" || value == "8") out = CdngLog::Auto;
+    else return false;
+    return true;
+}
+
+// The depth the file really stores: 0 = records linear (log off, or an 8-bit source), else one step down:
+// 16 -> 12, 12 -> 10, 10 -> 8.
+inline unsigned cdngLogStoredBits(CdngLog log, unsigned sourceBits)
+{
+    if (log == CdngLog::Off)
+        return 0;
+    return sourceBits == 16 ? 12 : sourceBits == 12 ? 10 : sourceBits == 10 ? 8 : 0;
+}
+
+// CineMate Log works in cDNG and Lossy DNG; H.264, ProRes and (for now) MLV cannot carry it.
+inline bool cdngLogAvailable(RecordingFormat format)
+{
+    return format == RecordingFormat::Cdng || format == RecordingFormat::LossyDng;
+}
+
+// The stored depth for these settings (0 = linear). The source depth is rawBitDepth (16 in Clear HDR 16-bit).
+// Clear HDR 12-bit cDNG is the exception: its samples are already 12-bit CCMP codes, so only the composed
+// 16->12 curve exists for it, so On stores 12 there.
+inline unsigned cdngLogBits(const CaptureSettings &settings)
+{
+    if (!cdngLogAvailable(settings.recordingFormat))
+        return 0;
+    if (settings.clearHdr && settings.rawBitDepth == 12 && settings.recordingFormat == RecordingFormat::Cdng)
+        return settings.cdngLog == CdngLog::Auto ? 12 : 0;
+    return cdngLogStoredBits(settings.cdngLog, settings.rawBitDepth);
 }
 
 inline const char *toWireValue(LossyDngRatio ratio)

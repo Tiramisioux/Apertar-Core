@@ -1,0 +1,4 @@
+# /etc/sudoers.d/apertar-media-trim  (install with: sudo install -m 0440 config/apertar-media-trim.sudoers /etc/sudoers.d/apertar-media-trim)
+# Lets the user apertar-core runs as trim the recording drive without a password.
+# The rule pins the path only; the script itself validates its argument.
+pi ALL=(root) NOPASSWD: /usr/local/libexec/apertar-media-trim

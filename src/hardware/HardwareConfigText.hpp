@@ -2,6 +2,8 @@
 // The text of ~/apertar-hardware.conf as lines, the canonical names Core writes, key-level edits that
 // keep every other byte, the per-key merge check, a line diff, and the validator. Pure: no I/O.
 #include "hardware/ActionCatalog.hpp"
+#include "util/BufferBudget.hpp"
+#include "util/StoragePreroll.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -62,6 +64,7 @@ inline constexpr SectionInfo kSections[] = {
     {"gyro", "gyro", true, ValueRule::FirstMark, -1, true, false, true},
     {"cfexpress_hat", "cfexpress_hat", true, ValueRule::IntegerStrict, 10, true, false, true},
     {"storage", "storage", false, ValueRule::Raw, -1, false, false, false},
+    {"media", "media", false, ValueRule::Raw, -1, false, false, false},
     {"display", "display", false, ValueRule::Other, -1, false, false, false},
 };
 
@@ -792,6 +795,20 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
                 (strict ? ": Core's " + line.section + " reader then ignores " + line.key + "=" + line.value +
                               " and keeps its default. Put the comment on its own line."
                         : ": Apertar's readers handle this differently. Put the comment on its own line."));
+        }
+        if (line.section == "storage") {
+            // The write-buffer keys (CameraController reads them at each take); mount_path and pcie_controller stay Raw.
+            const std::string problem = bufferbudget::bufferConfProblem(line.key, line.value);
+            if (!problem.empty())
+                add(line.number, true, "buffer_value", line.section, line.key, line.value, line.key + "=" + line.value + " on line " +
+                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "buffer" ? " (frames)." : "."));
+        }
+        if (line.section == "media") {
+            // The storage pre-roll's keys (Core reads them at each request).
+            const std::string problem = storagepreroll::prerollConfProblem(line.key, line.value);
+            if (!problem.empty())
+                add(line.number, true, "preroll_value", line.section, line.key, line.value, line.key + "=" + line.value + " on line " +
+                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "preroll" ? " (on)." : " (2)."));
         }
         if (line.key == "bus") {
             const auto bus = integer(line.value);

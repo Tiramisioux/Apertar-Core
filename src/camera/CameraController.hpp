@@ -5,6 +5,7 @@
 #include <apertar/core/Types.hpp>
 #include "util/RecordingDropWarning.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -71,6 +72,7 @@ public:
     bool setWhiteBalanceAuto();
     bool setRecordingFormat(RecordingFormat format);
     bool setCdngCompression(CdngCompression compression);
+    bool setCdngLog(CdngLog log);
     bool setLossyDngRatio(LossyDngRatio ratio);
     bool setProresProfile(ProresProfile profile);
     bool setProresColorProfile(ProresColorProfile profile);
@@ -86,7 +88,7 @@ public:
     bool setTimecodeMode(TimecodeMode mode);
     bool setConformFps(double fps);
     bool setFpsPhaseLock(bool enabled);
-    bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio);
+    bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
     // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors).
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
@@ -105,6 +107,19 @@ public:
     std::string recordingFaultName() const;
     bool mediaWritesPending() const;
     MediaWriteStatus mediaWriteStatus() const;
+    // The write queue's live level for the buffer bar. Lock-free for the numbers; never waits for the command
+    // path (the controller mutex is held while a stopped take drains). `used`/`capacity` are in the unit the
+    // mode names: "frames" = queued frames; "none" = no bar (H.264, ProRes, stills, time-lapse).
+    struct FrameBufferStatus {
+        uint64_t used = 0;
+        uint64_t capacity = 0;
+        std::string mode = "none";
+        bool recording = false;  // frames are being accepted (false as soon as the take stops, while it drains)
+    };
+    FrameBufferStatus frameBufferStatus() const;
+    // True when CineMate Log is on and the CURRENT configured raw stream can really carry it (same test as
+    // the take: buildCdngLogTake). cdng_log_bits keeps meaning what the setting asks for.
+    bool cdngLogApplicable() const;
     StillExposureStatus stillExposureStatus() const;
     std::string photoWriteError() const;
 
@@ -117,6 +132,20 @@ public:
     bool startRecording(const AudioRecordingOptions &audioOptions = {},
                         const GyroRecordingOptions &gyroOptions = {});
     bool stopRecording();
+    // Storage pre-roll: a short raw take at the mode's maximum fps through the real write path, then deleted. Not a take
+    // (no REC, no recording event, no audio, no gyro, no safety stop). Core's pre-roll thread calls these two only.
+    struct StoragePrerollResult {
+        std::string error;       // "" = the writes and the delete went well
+        double fps = 0;
+        double measuredFps = 0;  // from the sensor timestamps of the first and last enqueued frame; 0 = not measurable
+        uint64_t frames = 0;     // frames written
+        uint64_t dropped = 0;    // frames the queue dropped (not shown as a warning)
+        uint64_t bytes = 0;      // size of the clip before it was deleted
+        bool mediumGone = false;
+    };
+    bool startStoragePreroll(std::string *error, double *fpsOut);
+    std::string storagePrerollError() const;   // lock-free: the write error latched so far
+    StoragePrerollResult finishStoragePreroll();
 
     CameraState state() const;
     CaptureSettings settings() const;
@@ -151,6 +180,8 @@ private:
     bool validateResolution(Resolution resolution);
     void setErrorLocked(std::string error);
     void emitSettingsEventLocked();
+    bool cdngLogApplicableLocked() const;
+    void emitLogAppliedIfChangedLocked();   // re-send the settings event when only cdng_log_applied moved
     void emitRecordingEventLocked();
     bool queuePhotoCaptureLocked(PhotoCaptureFormat format, const std::string &basePath,
                                  std::function<void()> onSaved = {}, unsigned count = 1);
@@ -175,6 +206,11 @@ private:
     std::string lastError_;
     bool simulateCamera_ = false;
     bool recording_ = false;
+    std::optional<bool> lastEmittedLogApplied_;             // cdng_log_applied as the last settings event carried it (mutex_)
+    std::atomic<bool> prerollTake_{false};                  // a storage pre-roll's take runs (recording_ stays false)
+    std::optional<CaptureSettings> prerollSaved_;
+    std::string prerollFolder_;
+    double prerollFps_ = 0;
     bool recordingFailureReported_ = false;
     std::string recordingFailureMessage_;
     std::string externalFailureMessage_;
@@ -194,6 +230,7 @@ private:
     double rampTakeBaseFps_ = 0.0;
     bool rampTakeChanged_ = false;
     ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
+    bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
     std::unique_ptr<CameraSession> session_;
 };
 

@@ -1,6 +1,7 @@
 #include "ApertarCoreApp.hpp"
 #include "util/CfeHat.hpp"
 #include "util/MediaIntent.hpp"
+#include "util/StoragePreroll.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
@@ -21,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +50,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -203,6 +206,59 @@ std::string sensorBinningBody(const CameraController::SensorBinning &binning)
 
 std::string jsonNumberArray(const std::vector<double> &values);
 
+// The write buffer as flat JSON members (state, GET /api/buffer, the "buffer" event). The unit of used and
+// capacity is what buffer_mode names: frames in "frames" mode, bytes in "ram" mode (buffer_unit); "none" = no bar.
+std::string bufferFillText(uint64_t used, uint64_t capacity)
+{
+    const double fill = capacity > 0 ? std::min(1.0, static_cast<double>(used) / static_cast<double>(capacity)) : 0.0;
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << fill;
+    return out.str();
+}
+
+// buffer_setting = what the file (or APERTAR_CDNG_BUFFER) asks for at the next take; buffer_note = the last take's
+// plan line when ram was asked for ("" otherwise). buffer_mode above stays the active mode. Both are in the "buffer"
+// event, GET /api/buffer, the web state and (settingsBody) get_state. buffer_stop_percent = the safety stop threshold of
+// the active/last take (0 = off); buffer_safety_stop = true from the safety stop until the queue has drained or the
+// next take starts. Both are atomics: no lock. storage_preroll_active / storage_preroll_fps (the fps the pre-roll applied, 0 when none) / storage_preroll_last: the storage pre-roll's
+// state (see runStoragePreroll), an atomic and a short string under a tiny mutex: no controller lock either.
+std::string bufferSettingMembers()
+{
+    const bufferbudget::BufferSettingSnapshot snapshot = bufferbudget::bufferSettingSnapshot();
+    const bufferbudget::SafetyStopState &stop = bufferbudget::safetyStopState();
+    return "\"buffer_setting\":\"" + escapeJson(snapshot.setting) + "\",\"buffer_note\":\"" + escapeJson(snapshot.note) + "\""
+        + ",\"buffer_safety_stop\":" + (stop.active.load(std::memory_order_acquire) ? "true" : "false")
+        + ",\"buffer_stop_percent\":" + std::to_string(stop.stopPercent.load(std::memory_order_acquire))
+        + ",\"storage_preroll_active\":" + (storagepreroll::prerollActive() ? "true" : "false")
+        + ",\"storage_preroll_auto\":" + (storagepreroll::prerollAutomatic() ? "true" : "false")
+        + ",\"storage_preroll_auto_env\":" + (storagepreroll::prerollAutomaticFromEnv() ? "true" : "false")
+        + ",\"storage_preroll_fps\":" + storagepreroll::prerollFpsText(storagepreroll::prerollFps())
+        + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\"";
+}
+
+// Re-read the request after the hardware file changed (a save, or set_buffer_mode). The camera republishes it, with
+// the note, at the next take's start.
+void refreshBufferRequest()
+{
+    bufferbudget::publishBufferRequest(bufferbudget::requestedBufferMode(
+        std::getenv("APERTAR_CDNG_BUFFER"), bufferbudget::parseBufferConf(hardware::configStore().currentText())));
+    // The automatic pre-roll switch rides on the same refresh: published as atomics, so no reader parses the file.
+    storagepreroll::publishAutomatic(std::getenv("APERTAR_STORAGE_PREROLL"),
+        storagepreroll::parsePrerollConf(hardware::configStore().currentText()));
+}
+
+std::string bufferMembers(uint64_t used, uint64_t capacity, const std::string &mode)
+{
+    std::ostringstream out;
+    out << "\"buffer_used\":" << used
+        << ",\"buffer_capacity\":" << capacity
+        << ",\"buffer_fill\":" << bufferFillText(used, capacity)
+        << ",\"buffer_mode\":\"" << escapeJson(mode) << "\""
+        << ",\"buffer_unit\":\"" << (mode == "ram" ? "bytes" : "frames") << "\""
+        << "," << bufferSettingMembers();
+    return out.str();
+}
+
 std::string settingsBody(const CaptureSettings &settings)
 {
     std::ostringstream out;
@@ -221,6 +277,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
@@ -245,6 +302,10 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"recording_capabilities\":" << recordingCapabilitiesJson()
         << ",\"recording_format\":\"" << toString(settings.recordingFormat) << "\""
         << ",\"cdng_compression\":\"" << toString(settings.cdngCompression) << "\""
+        << ",\"cdng_log\":\"" << toString(settings.cdngLog) << "\""
+        << ",\"cdng_log_bits\":" << cdngLogBits(settings)
+        << ",\"cdng_log_available\":" << (cdngLogAvailable(settings.recordingFormat) ? "true" : "false")
+        << ",\"cdng_log_applied\":" << (settings.cdngLogApplied ? "true" : "false")
         << ",\"lossy_dng_ratio\":\"" << toWireValue(settings.lossyDngRatio) << "\""
         << ",\"prores_profile\":\"" << toString(settings.proresProfile) << "\""
         << ",\"prores_color_profile\":\"" << toString(settings.proresColorProfile) << "\""
@@ -256,6 +317,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
+        << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -273,7 +335,8 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"af_window_x\":" << std::fixed << std::setprecision(3) << settings.autofocusWindowX
         << ",\"af_window_y\":" << std::fixed << std::setprecision(3) << settings.autofocusWindowY
         << ",\"af_window_w\":" << std::fixed << std::setprecision(3) << settings.autofocusWindowWidth
-        << ",\"af_window_h\":" << std::fixed << std::setprecision(3) << settings.autofocusWindowHeight;
+        << ",\"af_window_h\":" << std::fixed << std::setprecision(3) << settings.autofocusWindowHeight
+        << "," << bufferSettingMembers();
     return out.str();
 }
 
@@ -1759,6 +1822,7 @@ struct SharedUiSettingsSnapshot
     bool dateTimeOverlayEnabled = false;
     // Recording indicators next to REC (touch screen, HDMI, WebUI).
     bool recordingFrameEnabled = false;
+    bool frameBufferBarEnabled = false;
     bool recordingRedTimecodeEnabled = true;
     bool recordAudioEnabled = false;
     bool soundRecorderEnabled = false;
@@ -1948,6 +2012,8 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.dateTimeOverlayEnabled = parseUiSettingsBool(value, snapshot.dateTimeOverlayEnabled);
         else if (key == "recordingFrameEnabled")
             snapshot.recordingFrameEnabled = parseUiSettingsBool(value, snapshot.recordingFrameEnabled);
+        else if (key == "frameBufferBarEnabled")
+            snapshot.frameBufferBarEnabled = parseUiSettingsBool(value, snapshot.frameBufferBarEnabled);
         else if (key == "recordingRedTimecodeEnabled")
             snapshot.recordingRedTimecodeEnabled = parseUiSettingsBool(value, snapshot.recordingRedTimecodeEnabled);
         else if (key == "recordAudioEnabled")
@@ -4619,6 +4685,22 @@ address=0x34
 [storage]
 mount_path=/media/RAW
 pcie_controller=1000110000.pcie
+# Write buffer: frames = the original queue (12 frames; a frame is dropped when it is full), ram = a large RAM queue
+# sized from the free memory at the start of a take (CineMate style). ram refuses itself when it would be smaller
+# than the original queue. Takes effect at the next take.
+buffer=frames
+buffer_ram_fraction=0.6
+buffer_ram_floor_mb=512
+buffer_ram_max_fraction=0.5
+# Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
+# buffer_stop_percent=90
+
+[media]
+# Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
+# preroll=on runs it when Core starts, when a card is inserted and after a format; the command storage_preroll always works. Read at each request.
+# preroll=on
+# Length in seconds, 1 to 10.
+# preroll_seconds=2
 
 [camera]
 # Highest ISO in Clear HDR, per sensor mode; 0 = no cap. SDR is never capped. Restart Core after a change.
@@ -5154,7 +5236,11 @@ uint64_t estimatedRawBytesPerSecond(const CaptureSettings &settings)
         return static_cast<uint64_t>(mbps * 1e6 / 8.0);
     }
 
-    const unsigned bits = settings.rawBitDepth ? settings.rawBitDepth : 12;
+    unsigned bits = settings.rawBitDepth ? settings.rawBitDepth : 12;
+    if (settings.cdngLogApplied) {  // Log stores fewer bits per sample, but only where it is really applied
+        if (const unsigned logBits = cdngLogBits(settings))
+            bits = logBits;
+    }
     const double rawMiB = width * height * bits / 8.0 / MiB;
     double frameMiB = 0;
     if (settings.recordingFormat == RecordingFormat::Mlv)
@@ -5933,6 +6019,66 @@ struct MediaLibraryItem
     std::string token;
     std::string timecodeStart;      // the recorded start timecode of the first frame (R1)
 };
+
+// Media trim helpers (see ApertarCoreApp::trimMedia).
+int64_t trimNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+bool mediaTrimEnabled()
+{
+    const char *env = std::getenv("APERTAR_MEDIA_TRIM");
+    return !(env && env[0] == '0');
+}
+
+uint64_t mediaFreeBytesNow(const std::string &path)
+{
+    struct statvfs vfs {};
+    if (::statvfs(path.c_str(), &vfs) != 0)
+        return 0;
+    return static_cast<uint64_t>(vfs.f_bavail) * static_cast<uint64_t>(vfs.f_frsize);
+}
+
+// Runs "sudo -n helper mountpoint"; the pid is published so another thread can end it. Returns the exit code or -1.
+int runTrimHelperProcess(const std::string &helper, const std::string &mountPoint, std::atomic<pid_t> &pidOut,
+                         std::string &output)
+{
+    int fds[2];
+    if (::pipe(fds) != 0)
+        return -1;
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        ::dup2(fds[1], STDOUT_FILENO);
+        ::dup2(fds[1], STDERR_FILENO);
+        ::close(fds[0]);
+        ::close(fds[1]);
+        ::execl("/usr/bin/sudo", "sudo", "-n", helper.c_str(), mountPoint.c_str(), static_cast<char *>(nullptr));
+        ::_exit(127);
+    }
+    ::close(fds[1]);
+    pidOut.store(pid);
+    std::array<char, 1024> buffer{};
+    while (true) {
+        const ssize_t n = ::read(fds[0], buffer.data(), buffer.size());
+        if (n > 0)
+            output.append(buffer.data(), static_cast<size_t>(n));
+        else if (n < 0 && errno == EINTR)
+            continue;
+        else
+            break;
+    }
+    ::close(fds[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    pidOut.store(0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
 
 // Q23: a delete in progress is visible to handleCommand, which refuses a take until it is done.
 struct MediaDeleteScope
@@ -7265,6 +7411,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
                   : uiSnapshot.cameraControlsMode);
     addBoolFromMap("dateTimeOverlayEnabled", uiSnapshot.dateTimeOverlayEnabled);
     addBoolFromMap("recordingFrameEnabled", uiSnapshot.recordingFrameEnabled);
+    addBoolFromMap("frameBufferBarEnabled", uiSnapshot.frameBufferBarEnabled);
     addBoolFromMap("recordingRedTimecodeEnabled", uiSnapshot.recordingRedTimecodeEnabled);
     addBoolFromMap("externalMonitorEnabled", false);
     if (const auto it = uiValues.find("externalMonitorMode"); it != uiValues.end())
@@ -7323,6 +7470,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addBool("cameraFpsSpeedRamp", settings.fpsSpeedRamp);
     addString("cameraFpsSpeedRampShutter", settings.fpsSpeedRampKeepExposure ? "exposure" : "angle");
     addString("cameraFpsSpeedRampAudio", settings.fpsSpeedRampStretchAudio ? "stretch" : "real");
+    addString("cameraFpsSpeedRampAfter", settings.fpsSpeedRampReturn ? "return" : "stay");
     addBool("cameraFpsPhaseLock", settings.fpsPhaseLock);
     addString("cameraTimecodeMode", toString(settings.timecodeMode));
     addNumberString("cameraConformFps", jsonNumber(settings.conformFps, 3));
@@ -7342,6 +7490,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addNumberString("cameraResolutionHeight", std::to_string(settings.resolution.height));
     addString("cameraRecordingFormat", toString(settings.recordingFormat));
     addString("cameraCdngCompression", toString(settings.cdngCompression));
+    addString("cameraCdngLog", toString(settings.cdngLog));
     addString("cameraLossyDngRatio", toWireValue(settings.lossyDngRatio));
     addString("cameraProresProfile", toString(settings.proresProfile));
     addString("cameraProresColorProfile", toString(settings.proresColorProfile));
@@ -7460,6 +7609,14 @@ ApertarCoreApp::ApertarCoreApp(Options options)
                        [this](const std::string &action) { handleHardwareInputAction(action, false); })
     , pcf8574Input_([this](const std::string &action) { handleHardwareInputAction(action); })
 {
+    // The write queue's safety stop (see runBufferSafetyStop): lock-free, runs under the queue's mutex. Set before any take.
+    bufferbudget::safetyStopHook() = [this](const bufferbudget::SafetyStopHit &hit) {
+        bufferSafetyStopUsed_.store(hit.used, std::memory_order_relaxed);
+        bufferSafetyStopCapacity_.store(hit.capacity, std::memory_order_relaxed);
+        bufferSafetyStopRam_.store(hit.ram, std::memory_order_relaxed);
+        bufferSafetyStopPending_.store(true, std::memory_order_release);
+        bufferSafetyStopCv_.notify_one();
+    };
 }
 
 ApertarCoreApp::~ApertarCoreApp()
@@ -7492,8 +7649,24 @@ bool ApertarCoreApp::start()
         previewPublisherRunning_ = true;
     }
     previewThread_ = std::thread(&ApertarCoreApp::runPreviewPublisher, this);
+    if (!mediaTrimWorkerRunning_.load() && !mediaTrimThread_.joinable()) {
+        mediaTrimWorkerRunning_.store(true);
+        mediaTrimThread_ = std::thread(&ApertarCoreApp::runMediaTrim, this);
+    }
+    if (!storagePrerollThread_.joinable()) {
+        storagePrerollRunning_.store(true, std::memory_order_release);
+        storagePrerollThread_ = std::thread(&ApertarCoreApp::runStoragePreroll, this);
+    }
     mediaWatcherRunning_.store(true, std::memory_order_release);
     mediaWatcherThread_ = std::thread(&ApertarCoreApp::runMediaWatcher, this);
+    if (!bufferEventThread_.joinable()) {
+        bufferEventsRunning_.store(true, std::memory_order_release);
+        bufferEventThread_ = std::thread(&ApertarCoreApp::runBufferEvents, this);
+    }
+    if (!bufferSafetyStopThread_.joinable()) {
+        bufferSafetyStopRunning_.store(true, std::memory_order_release);
+        bufferSafetyStopThread_ = std::thread(&ApertarCoreApp::runBufferSafetyStop, this);
+    }
 
 #if APERTARCORE_HAS_JPEG
     if (options_.webPort != 0) {
@@ -7585,6 +7758,7 @@ bool ApertarCoreApp::start()
         controlsErrors_ = errors;
         controlsWarnings_ = issues.size() - errors;
         const bool adopted = store.adopt();
+        refreshBufferRequest();
         std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
                   << errors << " errors, " << issues.size() - errors << " warnings"
                   << (adopted ? "; adopted, nothing changed" : "") << "\n";
@@ -7624,6 +7798,7 @@ void ApertarCoreApp::stop()
     recordingIndicatorOutput_.stop();
     triggerOutput_.stop();
     stopSoundRecording();
+    stopStoragePreroll();   // before the camera goes: a running pre-roll ends and deletes its clip
     camera_.stop();
     stopMjpegEncoder();
     stopPreviewPublisher();
@@ -7853,6 +8028,16 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.status = 404;
         response.contentType = "application/json; charset=utf-8";
         response.body = errorReply(-1, "Icon not found.");
+        return response;
+    }
+
+    // The write buffer, polled at about 4 Hz by the WebUI. Lock-free: no commandMutex_, no controller mutex.
+    if (request.method == "GET" && request.path == "/api/buffer") {
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        const auto buffer = camera_.frameBufferStatus();
+        response.body = "{" + bufferMembers(buffer.used, buffer.capacity, buffer.mode) +
+            ",\"recording\":" + (buffer.recording ? "true" : "false") + "}";
         return response;
     }
 
@@ -8092,6 +8277,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
             wakeControlsWorker();   // T39: the worker restarts what changed; this reply does not wait for it
+            refreshBufferRequest();
         }
 
         const std::string backupPath = result.written && std::filesystem::exists(store.path().string() + ".bak")
@@ -8457,6 +8643,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
         const MediaDeleteScope deleteScope(mediaDeleteActive_);
+        const uint64_t freeBeforeDelete = mediaFreeBytesNow(options_.mediaRoot);
 
         const std::string kind = *requestedKind;
         const std::string id = *requestedId;
@@ -8507,6 +8694,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
 
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
+        trimMediaAfterDelete(freeBeforeDelete);   // a request only; the worker waits until the delete scope has ended
         response.body = okReply(-1, "\"removed_count\":" + std::to_string(static_cast<uint64_t>(removedCount)));
         return response;
     }
@@ -8537,6 +8725,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
         const MediaDeleteScope deleteScope(mediaDeleteActive_);
+        const uint64_t freeBeforeDelete = mediaFreeBytesNow(options_.mediaRoot);
 
         const std::filesystem::path mediaRoot(options_.mediaRoot);
         const auto targets = mediaSelectionDeletionTargets(mediaRoot, selections, &errorMessage);
@@ -8574,6 +8763,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
 
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
+        trimMediaAfterDelete(freeBeforeDelete);
         response.body = okReply(
             -1,
             "\"removed_count\":" + std::to_string(static_cast<uint64_t>(removedCount)) +
@@ -8669,6 +8859,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
 {
     const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
     const auto mediaWrite = camera_.mediaWriteStatus();
+    const auto bufferStatus = camera_.frameBufferStatus();
     const CameraState cameraState = camera_.state();
     const CaptureSettings settings = camera_.settings();
     const bool soundRecording = soundRecordingActive();
@@ -8859,6 +9050,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
@@ -8880,6 +9072,10 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording_capabilities\":" << recordingCapabilitiesJson()
         << ",\"recording_format\":\"" << toString(settings.recordingFormat) << "\""
         << ",\"cdng_compression\":\"" << toString(settings.cdngCompression) << "\""
+        << ",\"cdng_log\":\"" << toString(settings.cdngLog) << "\""
+        << ",\"cdng_log_bits\":" << cdngLogBits(settings)
+        << ",\"cdng_log_available\":" << (cdngLogAvailable(settings.recordingFormat) ? "true" : "false")
+        << ",\"cdng_log_applied\":" << (settings.cdngLogApplied ? "true" : "false")
         << ",\"lossy_dng_ratio\":\"" << toWireValue(settings.lossyDngRatio) << "\""
         << ",\"prores_profile\":\"" << toString(settings.proresProfile) << "\""
         << ",\"prores_color_profile\":\"" << toString(settings.proresColorProfile) << "\""
@@ -8891,6 +9087,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
+        << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -8937,6 +9134,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"power_sensor_available\":"
         << ((power.voltageV.has_value() || power.powerW.has_value() || power.capacityPercent.has_value() || power.currentA.has_value()) ? "true" : "false")
         << ",\"media_free_bytes\":" << mediaFreeBytes
+        << mediaTrimStateJson()
+        << "," << bufferMembers(bufferStatus.used, bufferStatus.capacity, bufferStatus.mode)
         << ",\"media_total_bytes\":" << mediaTotalBytes
         << ",\"media_used_percent\":" << jsonNumberOrNull(mediaUsedPercent, 1)
         << ",\"media_label\":\"" << escapeJson(mediaMounted ? options_.mediaRoot : "Mount /media/RAW to manage media") << "\""
@@ -9013,6 +9212,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"camera_controls_mode\":\"" << escapeJson(uiSettings.cameraControlsMode) << "\""
         << ",\"date_time_overlay_enabled\":" << (uiSettings.dateTimeOverlayEnabled ? "true" : "false")
         << ",\"recording_frame_enabled\":" << (uiSettings.recordingFrameEnabled ? "true" : "false")
+        << ",\"frame_buffer_bar_enabled\":" << (uiSettings.frameBufferBarEnabled ? "true" : "false")
         << ",\"recording_red_timecode_enabled\":" << (uiSettings.recordingRedTimecodeEnabled ? "true" : "false")
         << ",\"photo_mode_enabled\":" << (uiSettings.photoModeEnabled ? "true" : "false")
         << ",\"photo_long_exposure_enabled\":" << (uiSettings.photoLongExposureEnabled ? "true" : "false")
@@ -10178,6 +10378,12 @@ std::string mediaEventJson(const MediaSnapshot &snapshot)
         << ",\"errno\":" << snapshot.statvfsErrno << "}";
     return out.str();
 }
+
+// {"event":"buffer",...}: small and rare, because every socket client receives every event.
+std::string bufferEventJson(uint64_t used, uint64_t capacity, const std::string &mode)
+{
+    return "{\"event\":\"buffer\"," + bufferMembers(used, capacity, mode) + "}";
+}
 } // namespace
 
 // The media watcher. Two independent questions every cycle, as Cinemate asks
@@ -10201,6 +10407,7 @@ void ApertarCoreApp::runMediaWatcher()
     // is removed and rescanned (the automounter's remount, or a reboot), although
     // the slot reads full again. Keep that mount "removed" until its id changes.
     int pulledMountId = -1;
+    bool prerollStartRequested = false;   // the start-up pre-roll is requested once per Core run
     while (mediaWatcherRunning_.load(std::memory_order_acquire)) {
         if (const uint64_t generation = cfeHatGeneration_.load(); generation != hatGeneration) {
             // T39: [cfexpress_hat] changed in a save; read the slot where the file now says.
@@ -10267,8 +10474,26 @@ void ApertarCoreApp::runMediaWatcher()
                 previousProfile = mediaProfile_;
                 mediaProfile_ = profile;
             }
-            if (current.mounted())
+            if (current.mounted()) {
                 applyMediaTuning(profile, true);
+                trimMedia("mount");   // once per mount; the worker waits for an idle medium
+                // The trim above is requested first; the pre-roll thread waits for it, then settles, then runs.
+                storagepreroll::MountChange change;
+                change.havePrevious = havePrevious;
+                change.previousMounted = previous.mounted();
+                change.previousDevice = previous.device;
+                change.currentMounted = true;
+                change.currentDevice = current.device;
+                change.startDone = prerollStartRequested;
+                change.formatRunning = storagePrerollFormatRunning_.load();
+                const int64_t formatDone = storagePrerollFormatDoneMs_.load();
+                change.msSinceFormat = formatDone > 0 ? trimNowMs() - formatDone : -1;
+                if (const auto trigger = storagepreroll::triggerForMountChange(change)) {
+                    if (*trigger == storagepreroll::Trigger::Start)
+                        prerollStartRequested = true;
+                    requestStoragePreroll(*trigger, std::nullopt);
+                }
+            }
             else if (previousProfile.known())
                 applyMediaTuning(previousProfile, false);
         }
@@ -10293,8 +10518,70 @@ void ApertarCoreApp::runMediaWatcher()
     }
 }
 
+// The "buffer" event for the touch UI and HDMI. Its own thread because the media watcher also calls things that
+// wait for the controller mutex, which a stopping take holds for the whole drain, exactly when the bar must fall.
+// This thread touches only camera_.frameBufferStatus() (atomics and one try_lock that never waits) and publishEvent
+// (no controller lock). Sent when the level changed while a take runs or the queue holds frames: once at the start,
+// on every change (the loop turns every 250 ms, so at most 4 a second), and once with 0 when drained. Never in mode
+// "none". 1 s sleep while idle.
+void ApertarCoreApp::runBufferEvents()
+{
+    uint64_t sentUsed = 0;
+    uint64_t sentCapacity = 0;
+    std::string sentMode;
+    bool open = false;
+    auto sentSetting = bufferbudget::bufferSettingSnapshot();
+    bool sentSafety = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
+    unsigned sentStopPercent = bufferbudget::safetyStopState().stopPercent.load(std::memory_order_acquire);
+    bool sentPrerollActive = storagepreroll::prerollActive();
+    bool sentPrerollAuto = storagepreroll::prerollAutomatic();
+    std::string sentPrerollLast = storagepreroll::prerollLast();
+    double sentPrerollFps = storagepreroll::prerollFps();
+    while (bufferEventsRunning_.load(std::memory_order_acquire)) {
+        const auto buffer = camera_.frameBufferStatus();
+        // The request, the plan note, the safety stop flag or its threshold changed (a button, a save, a take's plan,
+        // the safety stop, the drain): one event, also when idle.
+        const auto setting = bufferbudget::bufferSettingSnapshot();
+        const bool safety = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
+        const unsigned stopPercent = bufferbudget::safetyStopState().stopPercent.load(std::memory_order_acquire);
+        const bool prerollActive = storagepreroll::prerollActive();
+        const bool prerollAuto = storagepreroll::prerollAutomatic();
+        std::string prerollLast = storagepreroll::prerollLast();
+        const double prerollFps = storagepreroll::prerollFps();
+        if (!(setting == sentSetting) || safety != sentSafety || stopPercent != sentStopPercent ||
+            prerollActive != sentPrerollActive || prerollAuto != sentPrerollAuto || prerollLast != sentPrerollLast || prerollFps != sentPrerollFps) {
+            sentSetting = setting;
+            sentSafety = safety;
+            sentStopPercent = stopPercent;
+            sentPrerollActive = prerollActive;
+            sentPrerollAuto = prerollAuto;
+            sentPrerollFps = prerollFps;
+            sentPrerollLast = std::move(prerollLast);
+            publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode));
+        }
+        const bool busy = buffer.mode != "none" && (buffer.recording || buffer.used > 0);
+        if (busy) {
+            if (!open || buffer.used != sentUsed || buffer.capacity != sentCapacity) {
+                publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode));
+                sentUsed = buffer.used;
+                sentCapacity = buffer.capacity;
+                sentMode = buffer.mode;
+            }
+            open = true;
+        } else if (open) {
+            publishEvent(bufferEventJson(0, sentCapacity, sentMode));   // drained (or the format left the queue)
+            open = false;
+        }
+        std::unique_lock<std::mutex> lock(bufferEventMutex_);
+        bufferEventCv_.wait_for(lock, std::chrono::milliseconds(busy || open || sentPrerollActive ? 250 : 1000),
+                                [this] { return !bufferEventsRunning_.load(std::memory_order_acquire); });
+    }
+}
+
 void ApertarCoreApp::stopMediaWatcher()
 {
+    stopStoragePreroll();
+    stopMediaTrim();
     mediaWatcherRunning_.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(mediaStateMutex_);
@@ -10302,6 +10589,253 @@ void ApertarCoreApp::stopMediaWatcher()
     mediaWatcherCv_.notify_all();
     if (mediaWatcherThread_.joinable())
         mediaWatcherThread_.join();
+    bufferEventsRunning_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(bufferEventMutex_);
+    }
+    bufferEventCv_.notify_all();
+    if (bufferEventThread_.joinable())
+        bufferEventThread_.join();
+    bufferSafetyStopRunning_.store(false, std::memory_order_release);
+    bufferSafetyStopCv_.notify_all();
+    if (bufferSafetyStopThread_.joinable())
+        bufferSafetyStopThread_.join();
+}
+
+// The buffer safety stop (CineMate's "RAM pool exhausted" stop): the write queue flags it, under its own mutex, with
+// the lock-free hook set in the constructor; this thread then does the same as the record_stop button (GPIO, WebUI,
+// touch UI): dispatchHardwareInputCommand -> handleCommand("record_stop") takes commandMutex_, stops audio and camera,
+// syncs the tracking and publishes the events. It is a clean stop: no failRecording, no fault. Not lock-free by design.
+void ApertarCoreApp::runBufferSafetyStop()
+{
+    while (bufferSafetyStopRunning_.load(std::memory_order_acquire)) {
+        {
+            std::unique_lock<std::mutex> lock(bufferSafetyStopMutex_);
+            // The hook sets the flag without this mutex, so a wake-up can slip between the check and the wait: 100 ms backstop.
+            bufferSafetyStopCv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
+                return !bufferSafetyStopRunning_.load(std::memory_order_acquire) ||
+                    bufferSafetyStopPending_.load(std::memory_order_acquire);
+            });
+        }
+        if (!bufferSafetyStopRunning_.load(std::memory_order_acquire))
+            return;
+        if (!bufferSafetyStopPending_.exchange(false, std::memory_order_acq_rel))
+            continue;
+        if (!camera_.isRecording())
+            continue;   // already stopping (or stopped): ignore
+        const uint64_t used = bufferSafetyStopUsed_.load(std::memory_order_relaxed);
+        const uint64_t capacity = bufferSafetyStopCapacity_.load(std::memory_order_relaxed);
+        const bool ram = bufferSafetyStopRam_.load(std::memory_order_relaxed);
+        const uint64_t percent = capacity > 0 ? used * 100 / capacity : 0;
+        std::cerr << "ApertarCore buffer: safety stop at " << percent << " % ("
+                  << (ram ? used / bufferbudget::kMiB : used) << "/" << (ram ? capacity / bufferbudget::kMiB : capacity)
+                  << (ram ? " MiB" : " frames") << ")\n";
+        ControlCommand command;
+        command.name = "record_stop";
+        dispatchHardwareInputCommand(std::move(command));
+    }
+}
+
+// ---- Storage pre-roll ---------------------------------------------------------------------------------------------
+// CineMate's storage warm-up: a short raw take at the mode's maximum fps through the real write path, deleted at
+// once (see CameraController::startStoragePreroll for what it keeps out of). Triggers: the storage_preroll command
+// (always), and with [media] preroll=on (default; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
+// inserted and a format. The automatic ones wait 3 s, and for the mount's trim, so the order is trim, then pre-roll.
+// One thread, a cv, coalesced requests; never on the HTTP or watcher thread.
+
+// The guard of storagepreroll::decideGuard, filled from the live state. Takes no lock the command path holds.
+storagepreroll::GuardDecision ApertarCoreApp::storagePrerollGuard(storagepreroll::Trigger trigger) const
+{
+    storagepreroll::GuardInputs in;
+    const CaptureSettings settings = camera_.settings();
+    const CameraState state = camera_.state();
+    in.prerollActive = storagepreroll::prerollActive();
+    in.recording = camera_.isRecording();
+    in.soundRecording = soundRecordingActive();
+    in.timelapse = camera_.timelapseActive();
+    in.standby = state == CameraState::Standby;
+    in.cameraReady = state == CameraState::Ready;
+    in.deleteActive = mediaDeleteActive_.load();
+    in.formatActive = storagePrerollFormatRunning_.load();
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        in.speedTest = mediaSpeedTestRunning_;
+    }
+    in.noMedia = !mediaGateBypassed() && !mediaSnapshot().mounted();
+    in.mediaUsable = mediaGateError().empty();
+    in.stillMode = settings.photoModeEnabled;
+    in.rawFormat = settings.recordingFormat == RecordingFormat::Cdng || settings.recordingFormat == RecordingFormat::LossyDng ||
+        settings.recordingFormat == RecordingFormat::Mlv;
+    return storagepreroll::decideGuard(in, trigger);
+}
+
+// Only requests; repeated requests coalesce (a manual one is not replaced by an automatic one). The file and the
+// environment are read here, at the moment of the request.
+void ApertarCoreApp::requestStoragePreroll(storagepreroll::Trigger trigger, std::optional<unsigned> seconds)
+{
+    if (!storagePrerollRunning_.load())
+        return;
+    const storagepreroll::PrerollConf conf = storagepreroll::parsePrerollConf(hardware::configStore().currentText());
+    const bool manual = trigger == storagepreroll::Trigger::Manual;
+    if (!manual && !storagepreroll::automaticEnabled(std::getenv("APERTAR_STORAGE_PREROLL"), conf)) {
+        std::cerr << "ApertarCore storage preroll: reason=" << storagepreroll::triggerName(trigger)
+                  << " not requested (preroll is off in [media] or APERTAR_STORAGE_PREROLL=0)\n";
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(storagePrerollMutex_);
+        if (storagePrerollPending_ && storagePrerollManual_ && !manual)
+            return;
+        storagePrerollPending_ = true;
+        storagePrerollManual_ = manual;
+        storagePrerollTrigger_ = trigger;
+        storagePrerollSeconds_ = storagepreroll::effectiveSeconds(seconds, conf);
+        storagePrerollDelayMs_ = manual ? 0 : 3000;
+    }
+    storagePrerollCv_.notify_all();
+}
+
+void ApertarCoreApp::stopStoragePreroll()
+{
+    storagePrerollRunning_.store(false, std::memory_order_release);
+    storagePrerollStop_.store(true);
+    {
+        std::lock_guard<std::mutex> lock(storagePrerollMutex_);
+    }
+    storagePrerollCv_.notify_all();
+    if (storagePrerollThread_.joinable() && storagePrerollThread_.get_id() != std::this_thread::get_id())
+        storagePrerollThread_.join();
+}
+
+void ApertarCoreApp::runStoragePreroll()
+{
+    std::unique_lock<std::mutex> lock(storagePrerollMutex_);
+    while (storagePrerollRunning_.load()) {
+        storagePrerollCv_.wait(lock, [this] { return storagePrerollPending_ || !storagePrerollRunning_.load(); });
+        if (!storagePrerollRunning_.load())
+            break;
+        const storagepreroll::Trigger trigger = storagePrerollTrigger_;
+        const unsigned seconds = storagePrerollSeconds_;
+        const int delayMs = storagePrerollDelayMs_;
+        storagePrerollPending_ = false;
+        storagePrerollStop_.store(false);
+        if (delayMs > 0 && storagePrerollCv_.wait_for(lock, std::chrono::milliseconds(delayMs),
+                                                      [this] { return !storagePrerollRunning_.load(); }))
+            break;
+        storagePrerollPending_ = false;   // requests that came during the settle delay are the same request
+        lock.unlock();
+        runStoragePrerollOnce(trigger, seconds);
+        lock.lock();
+        if (!storagePrerollManual_)
+            storagePrerollPending_ = false;
+    }
+}
+
+void ApertarCoreApp::runStoragePrerollOnce(storagepreroll::Trigger trigger, unsigned seconds)
+{
+    const bool manual = trigger == storagepreroll::Trigger::Manual;
+    const int64_t startedMs = trimNowMs();
+    const auto sleepMs = [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+    const auto logLine = [&](const char *result, double fps, uint64_t frames, uint64_t bytes, const std::string &note, uint64_t dropped = 0,
+                             double measured = 0) {
+        std::cerr << "ApertarCore storage preroll: reason=" << storagepreroll::triggerName(trigger) << " fps=" << fps
+                  << " measured_fps=" << measured
+                  << " seconds=" << seconds << " frames=" << frames << " bytes=" << bytes << " result=" << result
+                  << " ms=" << (trimNowMs() - startedMs);
+        if (dropped > 0)
+            std::cerr << " dropped=" << dropped;
+        if (!note.empty())
+            std::cerr << " note=\"" << note << "\"";
+        std::cerr << "\n";
+    };
+    const auto skip = [&](const std::string &why) {
+        if (manual)
+            storagepreroll::setPrerollLast("skipped: " + why);
+        logLine("skipped", 0, 0, 0, why);
+    };
+
+    if (!manual) {
+        // Trim first: the mount's trim is requested before this, so wait until the worker has served it (at most 2 min).
+        for (int waited = 0; storagePrerollRunning_.load() && waited < 120000; waited += 200) {
+            bool trimBusy;
+            {
+                std::lock_guard<std::mutex> lock(mediaTrimMutex_);
+                trimBusy = mediaTrimPending_ || mediaTrimWorking_;
+            }
+            if (!trimBusy)
+                break;
+            sleepMs(200);
+        }
+        // At Core start the camera may still be coming up: wait for it (at most 30 s).
+        for (int waited = 0; storagePrerollRunning_.load() && waited < 30000 && camera_.state() != CameraState::Ready &&
+                             camera_.state() != CameraState::Standby; waited += 200)
+            sleepMs(200);
+    }
+    if (!storagePrerollRunning_.load() || storagePrerollStop_.load())
+        return;
+
+    double fps = 0;
+    {
+        // The same lock a take starts under; the guards and the start are one step, so no take slips in between.
+        std::lock_guard<std::mutex> commandLock(commandMutex_);
+        if (!storagePrerollRunning_.load())
+            return;
+        if (camera_.checkRecordingFailure())
+            syncRecordingTracking(false);
+        const storagepreroll::GuardDecision decision = storagePrerollGuard(trigger);
+        if (!decision.run) {
+            skip(decision.reason);
+            return;
+        }
+        playbackYield().yieldFor(playback::Hold::Recording, playbackNowMs());   // a decode in flight stops first
+        waitForMediaTrim("storage_preroll", 5000);
+        storagepreroll::prerollState().active.store(true, std::memory_order_release);
+        std::string error;
+        if (!camera_.startStoragePreroll(&error, &fps)) {
+            storagepreroll::setPrerollLast("failed: " + error);
+            storagepreroll::prerollState().active.store(false, std::memory_order_release);
+            logLine("failed", 0, 0, 0, error);
+            return;
+        }
+        storagepreroll::prerollState().fps.store(fps, std::memory_order_release);
+    }
+
+    // The take runs on its own; this thread only watches the clock and the medium. No commandMutex_ here.
+    const auto began = std::chrono::steady_clock::now();
+    std::string abort;
+    while (true) {
+        if (!storagePrerollRunning_.load() || storagePrerollStop_.load())
+            break;
+        if (std::chrono::steady_clock::now() - began >= std::chrono::seconds(seconds))
+            break;
+        if (const std::string error = camera_.storagePrerollError(); !error.empty()) {
+            abort = error;
+            break;
+        }
+        if (!mediaGateBypassed() && !mediaSnapshot().mounted()) {
+            abort = "Media was removed during the pre-roll.";
+            break;
+        }
+        sleepMs(25);
+    }
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+    // Every queued frame is written and synced, the clip folder is deleted, the settings come back.
+    const CameraController::StoragePrerollResult result = camera_.finishStoragePreroll();
+    const std::string error = !result.error.empty() ? result.error : abort;
+    if (error.empty()) {
+        std::string text = storagepreroll::lastOk(took, result.fps, result.frames, result.bytes, result.measuredFps);
+        if (result.dropped > 0)
+            text += " (" + std::to_string(result.dropped) + " dropped)";
+        storagepreroll::setPrerollLast(text);
+        logLine("ok", result.fps, result.frames, result.bytes, "", result.dropped, result.measuredFps);
+    } else {
+        storagepreroll::setPrerollLast("failed: " + error);
+        logLine("failed", result.fps, result.frames, result.bytes, error, result.dropped, result.measuredFps);
+    }
+    storagepreroll::prerollState().fps.store(0.0, std::memory_order_release);
+    storagepreroll::prerollState().active.store(false, std::memory_order_release);
+    if (result.bytes >= (1ULL << 30))
+        trimMedia("delete");   // the delete freed 1 GiB or more: the usual trim, now that the medium is free again
 }
 
 MediaSnapshot ApertarCoreApp::mediaSnapshot() const
@@ -10413,6 +10947,220 @@ void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
     else
         std::cerr << "ApertarCore media: tuning " << (apply ? "applied" : "restored") << " for "
                   << profile.rootDisk << " (" << mediaClassName(profile.mediaClass) << ")\n";
+}
+
+// ---- Media trim -------------------------------------------------------------------------------------------------
+// The exFAT NVMe stalls after about 0.9 TB of writing since the last discard (hardware log). Core asks the root
+// helper /usr/local/libexec/apertar-media-trim (sudo -n, like apertar-media-tune) to trim the recording drive after
+// a delete batch that freed at least 1 GiB and when the drive is mounted. The trim takes a lock the writers also
+// need, so it only runs while nothing uses the medium and never overlaps a take (see waitForMediaTrim).
+// APERTAR_MEDIA_TRIM=0 switches the whole feature off.
+
+// Only requests a trim; the worker thread does it. Repeated requests coalesce into one.
+void ApertarCoreApp::trimMedia(const std::string &reason)
+{
+    if (!mediaTrimEnabled() || !mediaTrimWorkerRunning_.load())
+        return;
+    {
+        std::lock_guard<std::mutex> lock(mediaTrimMutex_);
+        if (reason == "mount") {
+            // A new mount is a new device state: forget "unsupported" and the failure back-off.
+            mediaTrimUnsupported_ = false;
+            mediaTrimFailures_ = 0;
+            mediaTrimBackoffRounds_ = 0;
+            mediaTrimBackoffUntilMs_ = 0;
+        }
+        mediaTrimPending_ = true;
+        mediaTrimReason_ = reason;
+    }
+    mediaTrimCv_.notify_all();
+}
+
+// Called in the delete handlers with the free space measured before the batch.
+void ApertarCoreApp::trimMediaAfterDelete(uint64_t freeBefore)
+{
+    if (!mediaTrimEnabled())
+        return;
+    const uint64_t freeAfter = mediaFreeBytesNow(options_.mediaRoot);
+    if (freeAfter > freeBefore && freeAfter - freeBefore >= (1ULL << 30))
+        trimMedia("delete");
+}
+
+// True when nothing uses the medium. Takes no lock the command path holds.
+bool ApertarCoreApp::mediaTrimMayRun() const
+{
+    if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.mediaWritesPending() ||
+        mediaDeleteActive_.load() || storagepreroll::prerollActive() || camera_.state() == CameraState::Standby)
+        return false;
+    if (trimNowMs() < mediaTrimBlockUntilMs_.load())
+        return false;
+    std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+    return !mediaSpeedTestRunning_;
+}
+
+void ApertarCoreApp::runMediaTrim()
+{
+    static const char *const helper = "/usr/local/libexec/apertar-media-trim";
+    static bool warned = false;
+    std::unique_lock<std::mutex> lock(mediaTrimMutex_);
+    while (mediaTrimWorkerRunning_.load()) {
+        mediaTrimWorking_ = false;
+        mediaTrimCv_.wait(lock, [this] { return mediaTrimPending_ || !mediaTrimWorkerRunning_.load(); });
+        if (!mediaTrimWorkerRunning_.load())
+            break;
+        const std::string reason = mediaTrimReason_;
+        mediaTrimPending_ = false;
+        mediaTrimWorking_ = true;   // from here to the next wait: a request is being served (the storage pre-roll waits for it)
+        const std::string path = options_.mediaRoot;
+        auto finish = [&](const char *result, uint64_t bytes, uint64_t ms) {
+            mediaTrimLastResult_ = result;
+            mediaTrimLastBytes_ = bytes;
+            mediaTrimLastMs_ = ms;
+            mediaTrimLastUnix_ = static_cast<int64_t>(std::time(nullptr));
+            std::cerr << "ApertarCore media: trim " << path << " reason=" << reason << " result=" << result
+                      << " bytes=" << bytes << " ms=" << ms << "\n";
+        };
+
+        std::error_code ec;
+        if (!std::filesystem::exists(helper, ec)) {
+            if (!warned) {
+                warned = true;
+                std::cerr << "ApertarCore media: " << helper << " not installed; trim of the recording drive skipped.\n"
+                          << "  Install: sudo install -m 0755 -o root -g root ~/ApertarCore/scripts/apertar-media-trim "
+                          << helper << "\n"
+                          << "  and the sudoers rule: config/apertar-media-trim.sudoers in /etc/sudoers.d/\n";
+            }
+            continue;
+        }
+        if (mediaTrimUnsupported_ && mediaTrimUnsupportedMountId_ == mountIdForPath(path))
+            continue;   // logged once when exit 3 came
+        if (trimNowMs() < mediaTrimBackoffUntilMs_) {
+            finish("skipped", 0, 0);
+            continue;
+        }
+
+        // Wait for an idle medium. A take may run for a long time; the request stays pending and runs after it.
+        bool idle = false;
+        while (mediaTrimWorkerRunning_.load()) {
+            lock.unlock();
+            const bool ok = mediaTrimMayRun();
+            lock.lock();
+            // Checked under the mutex: waitForMediaTrim sets the block first, then takes this mutex, so either it
+            // sees busy (and waits) or this sees the block.
+            if (ok && trimNowMs() >= mediaTrimBlockUntilMs_.load()) {
+                idle = true;
+                break;
+            }
+            mediaTrimCv_.wait_for(lock, std::chrono::milliseconds(500), [this] { return !mediaTrimWorkerRunning_.load(); });
+        }
+        if (!mediaTrimWorkerRunning_.load())
+            break;
+        if (!idle) {
+            finish("skipped", 0, 0);
+            continue;
+        }
+        if (!isMountedPath(path)) {
+            finish("skipped", 0, 0);
+            continue;
+        }
+
+        mediaTrimBusy_ = true;
+        mediaTrimKilled_.store(false);
+        const int mountId = mountIdForPath(path);
+        const int64_t startedMs = trimNowMs();
+        lock.unlock();
+        std::string output;
+        const int code = runTrimHelperProcess(helper, path, mediaTrimPid_, output);
+        lock.lock();
+        const uint64_t ms = static_cast<uint64_t>(trimNowMs() - startedMs);
+        mediaTrimBusy_ = false;
+
+        uint64_t bytes = 0;
+        if (code == 0) {
+            const size_t open = output.find('(');
+            if (open != std::string::npos)
+                bytes = std::strtoull(output.c_str() + open + 1, nullptr, 10);
+        }
+        const bool killed = mediaTrimKilled_.load();
+        if (code == 0) {
+            mediaTrimFailures_ = 0;
+            mediaTrimBackoffRounds_ = 0;
+            finish("trimmed", bytes, ms);
+        } else if (code == 3) {
+            mediaTrimUnsupported_ = true;
+            mediaTrimUnsupportedMountId_ = mountId;
+            finish("unsupported", 0, ms);
+        } else if (killed || code == 4) {
+            finish("timeout", 0, ms);
+            if (!killed && ++mediaTrimFailures_ >= 3) {
+                mediaTrimFailures_ = 0;
+                mediaTrimBackoffUntilMs_ = trimNowMs() + (mediaTrimBackoffRounds_++ == 0 ? 60000 : 600000);
+            }
+        } else {
+            finish("failed", 0, ms);
+            if (!output.empty())
+                std::cerr << "ApertarCore media: trim helper said: " << output << "\n";
+            if (++mediaTrimFailures_ >= 3) {
+                mediaTrimFailures_ = 0;
+                mediaTrimBackoffUntilMs_ = trimNowMs() + (mediaTrimBackoffRounds_++ == 0 ? 60000 : 600000);
+            }
+        }
+        mediaTrimCv_.notify_all();
+    }
+}
+
+// The trim fields of the state JSON, with a leading comma.
+std::string ApertarCoreApp::mediaTrimStateJson() const
+{
+    std::lock_guard<std::mutex> lock(mediaTrimMutex_);
+    return ",\"media_trim_last_result\":\"" + escapeJson(mediaTrimLastResult_) + "\"" +
+        ",\"media_trim_last_bytes\":" + std::to_string(mediaTrimLastBytes_) +
+        ",\"media_trim_last_ms\":" + std::to_string(mediaTrimLastMs_) +
+        ",\"media_trim_last_unix\":" + std::to_string(mediaTrimLastUnix_) +
+        ",\"media_trim_running\":" + (mediaTrimBusy_ ? "true" : "false");
+}
+
+void ApertarCoreApp::stopMediaTrim()
+{
+    mediaTrimWorkerRunning_.store(false);
+    if (const pid_t pid = mediaTrimPid_.load(); pid > 0) {
+        mediaTrimKilled_.store(true);
+        ::kill(pid, SIGTERM);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mediaTrimMutex_);
+    }
+    mediaTrimCv_.notify_all();
+    if (mediaTrimThread_.joinable())
+        mediaTrimThread_.join();
+}
+
+// A take, a still, a time-lapse or a media action (format, eject, mount, speed test) must not overlap a trim.
+// Blocks new trims for blockMs, waits at most 2 s for a running one, then ends the helper and goes on.
+// handleCommand holds commandMutex_ here; the worker never takes it, and mediaTrimMutex_ is released while waiting.
+void ApertarCoreApp::waitForMediaTrim(const std::string &commandName, int blockMs)
+{
+    if (!mediaTrimEnabled() || !mediaTrimWorkerRunning_.load())
+        return;
+    mediaTrimBlockUntilMs_.store(trimNowMs() + blockMs);
+    std::unique_lock<std::mutex> lock(mediaTrimMutex_);
+    if (!mediaTrimBusy_)
+        return;
+    const int64_t startMs = trimNowMs();
+    if (mediaTrimCv_.wait_for(lock, std::chrono::seconds(2), [this] { return !mediaTrimBusy_; })) {
+        std::cerr << "ApertarCore media: " << commandName << " waited " << (trimNowMs() - startMs)
+                  << " ms for a running trim to finish\n";
+        return;
+    }
+    mediaTrimKilled_.store(true);
+    if (const pid_t pid = mediaTrimPid_.load(); pid > 0)
+        ::kill(pid, SIGTERM);
+    if (!mediaTrimCv_.wait_for(lock, std::chrono::milliseconds(1000), [this] { return !mediaTrimBusy_; })) {
+        if (const pid_t pid = mediaTrimPid_.load(); pid > 0)
+            ::kill(pid, SIGKILL);
+        mediaTrimCv_.wait_for(lock, std::chrono::milliseconds(500), [this] { return !mediaTrimBusy_; });
+    }
+    std::cerr << "ApertarCore media: " << commandName << " ended a trim that ran longer than 2 s\n";
 }
 
 // The Raspberry Pi GPIO buttons as the Controls page shows them: the file's settings, and what is really there: the
@@ -11004,6 +11752,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (mediaDeleteActive_.load() && (command.name == "capture_photo" || command.name == "record_start" ||
                                       (command.name == "timelapse_start" && !camera_.timelapseActive())))
         return errorReply(command.id, "Deleting media. One moment.");
+    if (storagepreroll::prerollActive() &&
+        (command.name == "capture_photo" || command.name == "record_start" || command.name == "timelapse_start" ||
+         command.name == "format_media" || command.name == "eject_media" || command.name == "mount_media" ||
+         command.name == "run_media_speed_test" || command.name == "enter_standby" || command.name == "storage_preroll"))
+        return errorReply(command.id, "Storage pre-roll is running. One moment.");
     if ((command.name == "capture_photo" || command.name == "record_start" ||
          (command.name == "timelapse_start" && !camera_.timelapseActive())) && camera_.mediaWritesPending())
         return errorReply(command.id, "Wait for the current capture to finish writing to media.");
@@ -11025,6 +11778,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (speedTestActive && (command.name == "record_start" || command.name == "capture_photo" ||
                             command.name == "timelapse_start" || command.name == "enter_standby"))
         return errorReply(command.id, "Wait for the media speed test to finish first.");
+    // A trim never overlaps a take or a media action: wait at most 2 s for a running one, then end it.
+    if (command.name == "record_start" || command.name == "capture_photo" ||
+        (command.name == "timelapse_start" && !camera_.timelapseActive()) || mediaAction)
+        waitForMediaTrim(command.name, 5000);
     if (command.name == "user_activity" || command.name == "wake" ||
         command.name.rfind("set_", 0) == 0 || command.name == "capture_photo" ||
         command.name == "record_start" || command.name == "record_stop" ||
@@ -11216,6 +11973,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
             wakeControlsWorker();   // T39: the worker restarts what changed; this reply does not wait for it
+            refreshBufferRequest();
         }
         std::ostringstream body;
         body << "\"revision\":\"" << escapeJson(result.revision) << "\""
@@ -11231,8 +11989,67 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
+    // The WebUI and touch buttons for the write buffer: buffer=<value> in [storage], through the store like set_controls
+    // (revision, history, stale and lock refusals). Allowed while recording: it only affects the next take.
+    if (command.name == "set_buffer_mode") {
+        const auto value = command.string("value");
+        if (!value || (*value != "frames" && *value != "ram"))
+            return errorReply(command.id, "set_buffer_mode needs value=frames or value=ram.");
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::string base = command.string("base").value_or("");
+        hardware::StoreFlags flags;
+        flags.backup = true;
+        flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
+        const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
+            { { hwconf::Edit::Op::Set, "storage", "buffer", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        if (!result.ok) {
+            return errorReplyBody(command.id, result.error,
+                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
+                ",\"issues\":" + controlsIssuesJson(result.issues));
+        }
+        if (result.written) {
+            controlsErrors_ = controlsErrorCount(result.issues);
+            controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+            wakeControlsWorker();
+        }
+        refreshBufferRequest();
+        return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
+            (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
+    }
+
+    // The automatic storage pre-roll switch: preroll=on|off in [media], through the store like set_buffer_mode. The manual
+    // storage_preroll command always works; this only decides Core start, card insert and format.
+    if (command.name == "set_storage_preroll") {
+        std::string value = command.string("value").value_or("");
+        for (char &c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const char *text = (value == "on" || value == "true" || value == "1") ? "on"
+            : (value == "off" || value == "false" || value == "0") ? "off" : nullptr;
+        if (!text)
+            return errorReply(command.id, "set_storage_preroll needs value=on or value=off.");
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::string base = command.string("base").value_or("");
+        hardware::StoreFlags flags;
+        flags.backup = true;
+        flags.trusted = true;   // [media] is text-mode only for set_controls; the value is checked above
+        const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
+            { { hwconf::Edit::Op::Set, "media", "preroll", text } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        if (!result.ok) {
+            return errorReplyBody(command.id, result.error,
+                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
+                ",\"issues\":" + controlsIssuesJson(result.issues));
+        }
+        if (result.written) {
+            controlsErrors_ = controlsErrorCount(result.issues);
+            controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+            wakeControlsWorker();
+        }
+        refreshBufferRequest();
+        return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
+            (result.written ? "true" : "false") + "," + bufferSettingMembers());
+    }
+
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -11378,6 +12195,16 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             : errorReply(command.id, camera_.lastError());
     }
 
+    if (command.name == "set_cdng_log") {
+        const auto value = command.string("value");
+        CdngLog log = CdngLog::Off;
+        if (!value || !cdngLogFromString(*value, log))
+            return errorReply(command.id, "Log must be off or on.");
+        return camera_.setCdngLog(log)
+            ? okReply(command.id, settingsBody(camera_.settings()))
+            : errorReply(command.id, camera_.lastError());
+    }
+
     if (command.name == "set_lossy_dng_ratio") {
         const auto value = command.string("value");
         if (!value)
@@ -11502,7 +12329,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         // audio: "real" (the WAV only) or "stretch" (experimental: also the WAV conformed to the clip).
         const auto audio = command.string("audio");
         const bool stretchAudio = audio ? (*audio == "stretch") : camera_.settings().fpsSpeedRampStretchAudio;
-        return camera_.setFpsSpeedRamp(*enabled == "true" || *enabled == "1", keepExposure, stretchAudio)
+        // after: "stay" (the ramped FPS stays when the take stops) or "return" (back to the start FPS).
+        const auto after = command.string("after");
+        const bool returnAfter = after ? (*after == "return") : camera_.settings().fpsSpeedRampReturn;
+        return camera_.setFpsSpeedRamp(*enabled == "true" || *enabled == "1", keepExposure, stretchAudio, returnAfter)
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
     }
@@ -11743,6 +12573,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (const auto reply = handleUiToggle("set_date_time_overlay_enabled", "dateTimeOverlayEnabled"))
         return *reply;
     if (const auto reply = handleUiToggle("set_recording_frame_enabled", "recordingFrameEnabled"))
+        return *reply;
+    if (const auto reply = handleUiToggle("set_frame_buffer_bar_enabled", "frameBufferBarEnabled"))
         return *reply;
     if (const auto reply = handleUiToggle("set_recording_red_timecode_enabled", "recordingRedTimecodeEnabled"))
         return *reply;
@@ -12509,6 +13341,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                     ? CdngCompression::LosslessJpeg : CdngCompression::Uncompressed;
             }
         }
+        if (const auto value = command.string("cameraCdngLog")) {
+            if (!cdngLogFromString(*value, presetSettings.cdngLog))
+                return errorReply(command.id, "Invalid preset Log.");
+        }
         if (const auto value = command.string("cameraLossyDngRatio")) {
             if (*value != "3to1" && *value != "5to1")
                 return errorReply(command.id, "Invalid preset lossy cDNG ratio.");
@@ -12563,6 +13399,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             if (*value != "real" && *value != "stretch")
                 return errorReply(command.id, "Invalid preset speed-ramp audio.");
             presetSettings.fpsSpeedRampStretchAudio = *value == "stretch";
+        }
+        if (const auto value = command.string("cameraFpsSpeedRampAfter")) {
+            if (*value != "stay" && *value != "return")
+                return errorReply(command.id, "Invalid preset speed-ramp after-take option.");
+            presetSettings.fpsSpeedRampReturn = *value == "return";
         }
         if (const auto value = command.string("cameraFpsPhaseLock"))
             presetSettings.fpsPhaseLock = parseUiSettingsBool(*value, presetSettings.fpsPhaseLock);
@@ -12672,6 +13513,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             !addBoolUpdate("photoModeEnabled") ||
             !addBoolUpdate("dateTimeOverlayEnabled") ||
             !addBoolUpdate("recordingFrameEnabled") ||
+            !addBoolUpdate("frameBufferBarEnabled") ||
             !addBoolUpdate("recordingRedTimecodeEnabled") ||
             !addBoolUpdate("soundRecorderEnabled") ||
             !addBoolUpdate("recordAudioEnabled") ||
@@ -12813,11 +13655,35 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, "\"fan_mode\":\"" + escapeJson(*value) + "\"");
     }
 
+    if (command.name == "storage_preroll") {
+        std::optional<unsigned> seconds;
+        if (const auto text = command.string("seconds")) {
+            seconds = storagepreroll::parseSecondsArgument(*text);
+            if (!seconds)
+                return errorReply(command.id, "seconds must be a whole number from 1 to 10.");
+        }
+        const storagepreroll::GuardDecision decision = storagePrerollGuard(storagepreroll::Trigger::Manual);
+        if (!decision.run) {
+            storagepreroll::setPrerollLast("skipped: " + decision.reason);
+            return errorReply(command.id, "Storage pre-roll cannot run now: " + decision.reason + ".");
+        }
+        requestStoragePreroll(storagepreroll::Trigger::Manual, seconds);
+        return okReply(command.id, "\"storage_preroll_started\":true");
+    }
+
     if (command.name == "format_media") {
         const std::string filesystemType = command.string("filesystem").value_or("exfat");
         std::string errorMessage;
+        // The format asks for its own pre-roll when it is done; the watcher's mount change it causes is not an insert.
+        struct FormatScope {
+            std::atomic<bool> &running;
+            std::atomic<int64_t> &doneMs;
+            ~FormatScope() { doneMs.store(trimNowMs()); running.store(false); }
+        } formatScope{storagePrerollFormatRunning_, storagePrerollFormatDoneMs_};
+        storagePrerollFormatRunning_.store(true);
         if (!formatMediaAtPath(options_.mediaRoot, filesystemType, &errorMessage))
             return errorReply(command.id, errorMessage);
+        requestStoragePreroll(storagepreroll::Trigger::Format, std::nullopt);
         return okReply(command.id,
                        "\"media_formatted\":true,\"filesystem\":\""
                            + escapeJson(formatFilesystemDisplayName(filesystemType)) + "\"");
@@ -13018,6 +13884,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "record_stop") {
+        if (storagepreroll::prerollActive()) {   // a pre-roll ends early (its clip is still deleted)
+            storagePrerollStop_.store(true);
+            return okReply(command.id, "\"recording\":false,\"storage_preroll_stopped\":true");
+        }
         if (soundRecordingActive()) {
             stopSoundRecording();
             return okReply(command.id, "\"recording\":false,\"sound_recording\":false");
@@ -13070,6 +13940,7 @@ void ApertarCoreApp::publishEvent(const std::string &eventJson)
         eventJson.find("\"event\":\"standby\"") != std::string::npos ||
         eventJson.find("\"event\":\"still_exposure\"") != std::string::npos ||
         eventJson.find("\"event\":\"media_write_state\"") != std::string::npos ||
+        eventJson.find("\"event\":\"buffer\"") != std::string::npos ||
         eventJson.find("\"event\":\"controls\"") != std::string::npos ||
         eventJson.find("\"event\":\"photo_write_error\"") != std::string::npos ||
         eventJson.find("\"event\":\"timelapse_progress\"") != std::string::npos ||

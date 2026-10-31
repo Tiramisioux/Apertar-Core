@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <apertar/core/Types.hpp>
+
 namespace apertar::ladder {
 
 struct Rung {
@@ -21,11 +23,18 @@ struct Rung {
     // The raw format of this resolution: "none" (uncompressed cDNG), "lossless_jpeg", "lossy_3to1" or
     // "lossy_5to1" (lossy DNG, no Clear HDR). Empty = the default: Clear HDR uncompressed, SDR lossless.
     std::string compression;
+    CdngLog cdngLog = CdngLog::Off;  // CineMate Log for this resolution: off, or on (one step below the source depth)
 };
 
 inline bool knownCompression(const std::string &c)
 {
     return c.empty() || c == "none" || c == "lossless_jpeg" || c == "lossy_3to1" || c == "lossy_5to1";
+}
+
+// The depth this resolution stores through CineMate Log, 0 = linear.
+inline unsigned logBits(const Rung &r)
+{
+    return cdngLogStoredBits(r.cdngLog, r.bits);
 }
 
 // What this resolution records with: the named compression, else the default for its class.
@@ -107,8 +116,9 @@ inline int chooseRung(const Ladder &l, const std::vector<RungState> &s, double t
     return best;
 }
 
-// Resolution text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
-// Example: 3840x2160:16:hdr:25:none,3840x2160:12:sdr::lossless_jpeg
+// Resolution text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]], joined by ",".
+// log = CineMate Log on (one step down); log10 and log8 are old spellings that still parse as log; absent = off.
+// Example: 3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::lossless_jpeg
 inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::string &error)
 {
     out.clear();
@@ -125,8 +135,8 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
         Rung r;
         char *end = nullptr;
         const auto x = f.empty() ? std::string::npos : f[0].find('x');
-        if (f.size() < 3 || f.size() > 5 || x == std::string::npos) {
-            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]].";
+        if (f.size() < 3 || f.size() > 6 || x == std::string::npos) {
+            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]].";
             return false;
         }
         r.width = static_cast<uint32_t>(std::strtoul(f[0].c_str(), &end, 10));
@@ -145,10 +155,17 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
                 return false;
             }
         }
-        if (f.size() == 5) {
+        if (f.size() >= 5) {
             r.compression = f[4];
             if (!knownCompression(r.compression)) {
                 error = "\"" + item + "\": compression must be none, lossless_jpeg, lossy_3to1 or lossy_5to1.";
+                return false;
+            }
+        }
+        if (f.size() == 6) {
+            if (f[5] == "log" || f[5] == "log10" || f[5] == "log8") r.cdngLog = CdngLog::Auto;
+            else {
+                error = "\"" + item + "\": the last field must be log.";
                 return false;
             }
         }
@@ -176,8 +193,9 @@ inline std::string rungsText(const std::vector<Rung> &rungs)
             text += ",";
         text += std::to_string(r.width) + "x" + std::to_string(r.height) + ":" + std::to_string(r.bits) + ":" +
                 (r.clearHdr ? "hdr" : "sdr") +
-                (r.threshold > 0.0 || !r.compression.empty() ? ":" + (r.threshold > 0.0 ? number(r.threshold) : "") : "") +
-                (!r.compression.empty() ? ":" + r.compression : "");
+                (r.threshold > 0.0 || !r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + (r.threshold > 0.0 ? number(r.threshold) : "") : "") +
+                (!r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + r.compression : "") +
+                (r.cdngLog == CdngLog::Auto ? ":log" : "");
     }
     return text;
 }
@@ -267,6 +285,7 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"label\":" + quote(label(r)) + ",\"class\":" + quote(classLabel(r)) +
                ",\"compression\":" + quote(effectiveCompression(r)) +
                ",\"compression_set\":" + (r.compression.empty() ? "false" : "true") +
+               ",\"log_bits\":" + std::to_string(logBits(r)) +
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling) +
                ",\"window_w\":" + std::to_string(st.windowWidth) + ",\"window_h\":" + std::to_string(st.windowHeight) +
                ",\"binning\":" + std::to_string(st.binning) + ",\"ceilings\":{\"none\":" + number(st.ceilingBy[0]) +

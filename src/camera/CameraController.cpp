@@ -1,4 +1,5 @@
 #include "camera/FramePhaseLock.hpp"
+#include "camera/FpsCeiling.hpp"
 #include <optional>
 #include "camera/CameraController.hpp"
 #include <apertar/core/RecordingCapabilities.hpp>
@@ -16,6 +17,7 @@
 #include "cdng/CdngEncoder.hpp"
 #include "cdng/BlackLevel.hpp"
 #include "cdng/ClearHdrCcmp.hpp"
+#include "cdng/LogCurve.hpp"
 #include "color/ColorProfileConfig.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
 #include "ipc/ControlProtocol.hpp"
@@ -26,11 +28,14 @@
 #include "util/RecordingFailure.hpp"
 #include "util/MediaFault.hpp"
 #include "util/MediaProfile.hpp"
+#include "util/BufferBudget.hpp"
+#include "util/StoragePreroll.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -50,6 +55,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <shared_mutex>
 #include <stdexcept>
@@ -168,6 +174,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"ladder_resolution\":" << settings.ladderRung
         << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
+        << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << ladderTopsJson(settings.ladderTops)
@@ -191,6 +198,10 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"wb_actual_blue_gain\":" << settings.whiteBalanceMeasured.blue
         << ",\"recording_format\":\"" << toString(settings.recordingFormat) << "\""
         << ",\"cdng_compression\":\"" << toString(settings.cdngCompression) << "\""
+        << ",\"cdng_log\":\"" << toString(settings.cdngLog) << "\""
+        << ",\"cdng_log_bits\":" << cdngLogBits(settings)
+        << ",\"cdng_log_available\":" << (cdngLogAvailable(settings.recordingFormat) ? "true" : "false")
+        << ",\"cdng_log_applied\":" << (settings.cdngLogApplied ? "true" : "false")
         << ",\"lossy_dng_ratio\":\"" << toWireValue(settings.lossyDngRatio) << "\""
         << ",\"prores_profile\":\"" << toString(settings.proresProfile) << "\""
         << ",\"prores_color_profile\":\"" << toString(settings.proresColorProfile) << "\""
@@ -213,6 +224,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
+        << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -748,6 +760,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
             else if (key == "cdng_compression")
                 settings.cdngCompression = value == "lossless_jpeg"
                     ? CdngCompression::LosslessJpeg : CdngCompression::Uncompressed;
+            else if (key == "cdng_log")
+                cdngLogFromString(value, settings.cdngLog);
             else if (key == "lossy_dng_ratio")
                 settings.lossyDngRatio = lossyDngRatioFromString(value);
             else if (key == "prores_color_profile")
@@ -785,6 +799,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.fpsSpeedRampKeepExposure = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_stretch_audio")
                 settings.fpsSpeedRampStretchAudio = (value == "true" || value == "1");
+            else if (key == "fps_speed_ramp_after")
+                settings.fpsSpeedRampReturn = (value == "return");
             else if (key == "af_mode")
                 settings.autofocusMode = autofocusModeFromString(value);
             else if (key == "af_range")
@@ -843,6 +859,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "wb_auto_after_clear_hdr=" << s.whiteBalanceAutoAfterClearHdr << '\n';
     output << prefix << "recording_format=" << toString(s.recordingFormat) << '\n';
     output << prefix << "cdng_compression=" << toString(s.cdngCompression) << '\n';
+    output << prefix << "cdng_log=" << toString(s.cdngLog) << '\n';
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
     output << prefix << "prores_profile=" << toString(s.proresProfile) << '\n';
     output << prefix << "prores_color_profile=" << toString(s.proresColorProfile) << '\n';
@@ -861,6 +878,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
+    output << prefix << "fps_speed_ramp_after=" << (s.fpsSpeedRampReturn ? "return" : "stay") << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
     output << prefix << "af_range=" << toString(s.autofocusRange) << '\n';
     output << prefix << "af_speed=" << toString(s.autofocusSpeed) << '\n';
@@ -1426,6 +1444,28 @@ void compressClearHdrFrame(uint8_t *data, size_t size, uint32_t width, uint32_t 
         auto *row = reinterpret_cast<uint16_t *>(data + offset);
         for (uint32_t x = 0; x < width; ++x)
             row[x] = lut[row[x]];
+    }
+}
+
+// One take's CineMate Log, built once when the take starts (buildCdngLogTake) and then only read: by the
+// copy workers for cDNG, by the Lossy encoders for Lossy DNG.
+struct CdngLogTake {
+    cdnglog::Params params;           // the linear domain: source depth, black and white; targetBits is the stored depth
+    cdnglog::Tables tables;           // forward (2^source) and inverse (2^target, the LinearizationTable)
+    std::vector<uint16_t> copyTable;  // cDNG only: containerTable() for the copy worker; empty for Lossy DNG
+    RawBitDepth viewDepth = RawBitDepth::Bits12;  // the frame view's bitDepth that copyTable expects
+    bool codes12 = false;             // Clear HDR 12-bit: the stream is mapped through the CCMP codes
+};
+
+// Applies the take's table to a frame copy in place, row by row (the stride can pad past the width).
+void applyCdngLogFrame(uint8_t *data, size_t size, uint32_t width, uint32_t height, uint32_t stride,
+                       const uint16_t *table)
+{
+    for (uint32_t y = 0; y < height; ++y) {
+        const size_t offset = static_cast<size_t>(y) * stride;
+        if (offset + static_cast<size_t>(width) * 2u > size)
+            break;
+        cdnglog::applyTable(reinterpret_cast<uint16_t *>(data + offset), width, table);
     }
 }
 
@@ -2701,6 +2741,27 @@ CameraSection loadCameraSection()
     return limits;
 }
 
+// The write-buffer keys of [storage], read from the hardware file at the start of each take, so a save in the
+// Config pane applies to the next take. Bad or missing keys are unset (see bufferbudget::bufferConfProblem).
+bufferbudget::BufferConf loadBufferConf()
+{
+    std::vector<std::filesystem::path> candidates;
+    if (const char *envPath = std::getenv("APERTAR_HARDWARE_CONFIG"); envPath && *envPath)
+        candidates.emplace_back(envPath);
+    candidates.emplace_back("/home/pi/apertar-hardware.conf");
+    candidates.emplace_back("/boot/firmware/apertar-hardware.conf");
+    candidates.emplace_back("/boot/apertar-hardware.conf");
+    for (const auto &path : candidates) {
+        std::ifstream input(path);
+        if (!input.is_open())
+            continue;
+        std::ostringstream text;
+        text << input.rdbuf();
+        return bufferbudget::parseBufferConf(text.str());
+    }
+    return {};
+}
+
 // Read once: a change in the file takes effect at the next Core start.
 const CameraSection &cameraSection()
 {
@@ -2805,7 +2866,27 @@ bool losslessCaptureLimited(const CaptureSettings &settings, SensorFamily sensor
     return imx585 || isLosslessFourKCapture(settings, sensorFamily) || isLosslessTwoKCapture(settings, sensorFamily);
 }
 
-// The lossless cDNG FPS limit; 0 when the lossless limits do not apply.
+double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily);
+
+// APERTAR_LOSSLESS_FPS_LIMIT=<n> (read once): n > 0 caps the IMX585 lossless cDNG fps at min(n, mode max);
+// =30 is the old fixed cap. Unset: the IMX585 lossless ceiling is the mode's own maximum.
+std::optional<double> losslessFpsOverride()
+{
+    static const std::optional<double> limit = [] {
+        const char *value = std::getenv("APERTAR_LOSSLESS_FPS_LIMIT");
+        const auto parsed = fpsceiling::parseLosslessFpsLimit(value);
+        if (parsed)
+            std::cerr << "ApertarCore lossless fps limit: APERTAR_LOSSLESS_FPS_LIMIT=" << *parsed
+                      << " (IMX585 lossless cDNG, within the sensor mode's maximum)\n";
+        else if (value && *value)
+            std::cerr << "ApertarCore lossless fps limit: ignoring APERTAR_LOSSLESS_FPS_LIMIT=" << value << "\n";
+        return parsed;
+    }();
+    return limit;
+}
+
+// The lossless cDNG FPS limit; 0 when the lossless limits do not apply. The IMX585's is the mode's maximum
+// (the measured lossless encoder capacity at 4K 12-bit is ~69 fps, so 30 was a policy, not a limit).
 double losslessMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
     if (!losslessCaptureLimited(settings, sensorFamily))
@@ -2813,7 +2894,7 @@ double losslessMaximumFps(const CaptureSettings &settings, SensorFamily sensorFa
     const bool imx585 = sensorFamily == SensorFamily::Imx585 &&
                         settings.recordingFormat == RecordingFormat::Cdng &&
                         settings.cdngCompression == CdngCompression::LosslessJpeg;
-    return imx585 ? 30.0
+    return imx585 ? fpsceiling::losslessImx585Fps(modeMaximumFps(settings, sensorFamily), losslessFpsOverride())
         : (isLosslessTwoKCapture(settings, sensorFamily) ? 60.0
         : (isApproximatelyFourThree(settings.resolution) ? 24.0 : 30.0));
 }
@@ -3039,11 +3120,8 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
         break;
     case SensorFamily::Imx585:
         if (normalized.width == 3840 && normalized.height == 2160) {
-            // Clear HDR 16-bit: 25 fps is the accepted ceiling. At 30 the back end
-            // delivers about 28 and drops frames (KB working/research-30fps-answer.md).
-            if (clearHdr && normalizeRawBitDepth(rawBitDepth) == 16)
-                return 25.0;
             // Clear HDR doubles VMAX: 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
+            // This is the fallback / APERTAR_FPS_LIMIT=table value; the 16-bit 25 is backendMaximumFps().
             return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
         }
         if (isImx585Raw12CropResolution(normalized))
@@ -3059,13 +3137,41 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     return 120.0;
 }
 
+// APERTAR_FPS_LIMIT=table: the old behaviour, min(table, probed). Default: the probe is the limit.
+bool fpsLimitTableOnly()
+{
+    static const bool tableOnly = [] {
+        const char *value = std::getenv("APERTAR_FPS_LIMIT");
+        const bool table = value && std::string(value) == "table";
+        if (table)
+            std::cerr << "ApertarCore fps limit: APERTAR_FPS_LIMIT=table, using min(table, probed)\n";
+        return table;
+    }();
+    return tableOnly;
+}
+
+// The sensor's maximum fps for the mode: the startup probe when it has a value, else the table.
 double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
                                         bool clearHdr = false)
 {
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    return probed ? std::min(table, *probed) : table;
+    return fpsceiling::resolveSensorMaxFps(probed, table, fpsLimitTableOnly());
+}
+
+// Back-end limits that are not the sensor's, applied after the sensor value; nullopt = none.
+std::optional<double> backendMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
+{
+    // IMX585 Clear HDR 16-bit at 4K: 25 fps is the accepted ceiling. At 30 the back end
+    // delivers about 28 and drops frames (KB working/research-30fps-answer.md).
+    if (sensorFamily == SensorFamily::Imx585 && settings.clearHdr &&
+        normalizeRawBitDepth(settings.rawBitDepth) == 16) {
+        const Resolution normalized = normalizedResolutionForSensor(sensorFamily, settings.resolution);
+        if (normalized.width == 3840 && normalized.height == 2160)
+            return 25.0;
+    }
+    return std::nullopt;
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -3101,6 +3207,7 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 {
     double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
                                                      settings.clearHdr);
+    maxFps = fpsceiling::applyBackendCap(maxFps, backendMaximumFps(settings, sensorFamily));
     if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
         settings.recordingFormat == RecordingFormat::Cdng &&
         settings.cdngCompression == CdngCompression::Uncompressed) {
@@ -3109,6 +3216,18 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
             imx477MaximumUncompressedCdngFpsForResolution(settings.resolution, settings.rawBitDepth));
     }
     return maxFps;
+}
+
+// The storage pre-roll's target: the highest fps the SENSOR delivers for the running mode (resolution, bit depth, Clear
+// HDR: the startup probe, else the table), with only the named back-end cap kept (IMX585 Clear HDR 16-bit at 4K: the
+// back end delivers ~28 at 30 and drops frames, so the pipeline, not a policy, is the limit). Not applied: the
+// lossless-JPEG cap, the mode ladder's rung ceilings and user thresholds, the speed-ramp limits and the IMX477
+// uncompressed-cDNG table (modeMaximumFps has the last one).
+double prerollMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
+{
+    return fpsceiling::applyBackendCap(
+        maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth, settings.clearHdr),
+        backendMaximumFps(settings, sensorFamily));
 }
 
 // The highest FPS the current mode takes; published as fps_max so the UIs cut their FPS
@@ -3563,6 +3682,89 @@ const char *pixelPackingName(PixelPacking packing)
     return "unknown";
 }
 
+// What a take's CineMate Log would be, from the settings and the configured raw stream. Empty when Log is off or
+// the stream cannot carry it (the cDNG copy worker can only map unpacked 16-bit containers). One test for
+// buildCdngLogTake (talkative: it logs why) and CameraController::cdngLogApplicable (quiet).
+struct CdngLogPlan {
+    cdnglog::Params params;
+    unsigned source = 0;
+    unsigned target = 0;
+    bool lossy = false;
+    bool codes12 = false;
+};
+
+std::optional<CdngLogPlan> planCdngLog(const CaptureSettings &settings, SensorFamily sensorFamily,
+                                       PixelPacking packing, RawBitDepth streamDepth,
+                                       uint8_t unpackedBytesPerSample, bool verbose)
+{
+    const unsigned target = cdngLogBits(settings);
+    if (target == 0)
+        return std::nullopt;
+    const bool lossy = settings.recordingFormat == RecordingFormat::LossyDng;
+    const bool codes12 = !lossy && clearHdrStoresCodes12(settings);
+    if (!lossy && (packing != PixelPacking::Unpacked || unpackedBytesPerSample != 2u)) {
+        if (verbose)
+            std::cerr << "ApertarCore CineMate Log: " << pixelPackingName(packing)
+                      << " raw stream cannot be mapped on the copy worker, recording linear\n";
+        return std::nullopt;
+    }
+    // The depth the samples really have: the Lossy encoder reads sampleBits (rawBitDepth); a cDNG copy reads the
+    // stream's own storage depth, and the CCMP stream is linear 16-bit (libcamera expands the codes).
+    const unsigned source = codes12 ? 16u : lossy ? settings.rawBitDepth : static_cast<unsigned>(streamDepth);
+    if (!codes12 && !lossy && source != settings.rawBitDepth)
+        return std::nullopt;
+    int black;
+    int white;
+    if (settings.clearHdr && source == 16u) {
+        black = ccmp::kBlack16;  // libcamera's Clear HDR expansion: black 3200, white 65520
+        white = 65520;
+    } else {
+        // Same source and scaling as the black level the DNG carries today (tuning first, else the sensor table).
+        const float base = activeTuningBlackLevels().value_or(blackLevelsForSensor(sensorFamily))[0];
+        black = static_cast<int>(std::lround(blackLevelForSampleBits(base, source)));
+        white = source >= 16u ? 65535 : static_cast<int>((1u << source) - 1u);
+    }
+    const auto params = cdnglog::makeParams(static_cast<int>(source), static_cast<int>(target), black, white);
+    if (!params) {
+        if (verbose)
+            std::cerr << "ApertarCore CineMate Log: no curve for " << source << "->" << target
+                      << " bit, recording linear\n";
+        return std::nullopt;
+    }
+    return CdngLogPlan{*params, source, target, lossy, codes12};
+}
+
+// Null when Log is off, or when this stream cannot carry it; the take then records linear, as without Log.
+std::shared_ptr<const CdngLogTake> buildCdngLogTake(const CaptureSettings &settings, SensorFamily sensorFamily,
+                                                    PixelPacking packing, RawBitDepth streamDepth,
+                                                    uint8_t unpackedBytesPerSample)
+{
+    const auto plan = planCdngLog(settings, sensorFamily, packing, streamDepth, unpackedBytesPerSample, true);
+    if (!plan)
+        return nullptr;
+    const unsigned target = plan->target;
+    const bool lossy = plan->lossy;
+    const bool codes12 = plan->codes12;
+    const auto params = std::optional<cdnglog::Params>(plan->params);
+    auto take = std::make_shared<CdngLogTake>();
+    take->params = *params;
+    take->codes12 = codes12;
+    take->viewDepth = codes12 ? RawBitDepth::Bits12 : streamDepth;
+    if (codes12) {
+        take->tables = cdnglog::buildComposed(*params, ccmp::expansionTable());
+        take->copyTable = cdnglog::containerTable(take->tables.forward, 0, ccmp::compressionLut());
+    } else {
+        take->tables = cdnglog::buildTables(*params);
+        if (!lossy)
+            take->copyTable = cdnglog::containerTable(take->tables.forward, target == 8u ? 8u : 0u);
+    }
+    if (take->tables.forward.empty() || (!lossy && take->copyTable.empty()))
+        return nullptr;
+    std::cerr << "ApertarCore " << params->describe() << (codes12 ? " composed with the CCMP expansion" : "")
+              << (lossy ? " (Lossy DNG)" : "") << "\n";
+    return take;
+}
+
 CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
                                           const libcamera::ControlList &metadata,
                                           uint64_t frameIndex,
@@ -3685,6 +3887,25 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
     return out;
 }
 
+// The write queue's live level, readable without any lock: the controller's main mutex is held for the whole
+// drain after a take stops, which is exactly when the buffer bar is needed. Written by DngRecordingQueue under
+// its own mutex; read by CameraController::frameBufferStatus().
+struct FrameBufferGauge {
+    // used/capacity are FRAMES in "frames" mode and BYTES in "ram" mode (`ram`). Every consumer (WebUI, touch
+    // UI, /api/buffer) only uses used/capacity as a fraction, so the unit change is harmless.
+    std::atomic<uint64_t> used{0};      // the number hasCapacityForFrame/enqueue compare: queue_.size() or queuedBytes_
+    std::atomic<uint64_t> capacity{0};  // maxQueuedFrames_ or the byte budget of the last take
+    std::atomic<bool> ram{false};       // the last take ran the byte-budgeted queue; kept until the next take starts
+    std::atomic<bool> active{false};    // the queue accepts frames (a take is running)
+    std::atomic<bool> framesMode{false};  // last answer of "is the configured format queue-backed"
+};
+
+FrameBufferGauge &frameBufferGauge()
+{
+    static FrameBufferGauge gauge;
+    return gauge;
+}
+
 class DngRecordingQueue {
 public:
     explicit DngRecordingQueue(RecordingDropWarning *warning = nullptr) : dropWarning_(warning) {}
@@ -3698,6 +3919,9 @@ public:
         uint64_t skippedAfterFailure = 0;  // frames the camera offered after the failure latched
         uint64_t currentQueueDepth = 0;
         uint64_t peakQueueDepth = 0;
+        bool ramMode = false;
+        uint64_t peakQueueBytes = 0;
+        uint64_t queueBudgetBytes = 0;
         uint64_t maxQueueDepth = 0;
     };
 
@@ -3730,6 +3954,7 @@ public:
         }
 
         settings_ = settings;
+        cdngLog_ = std::move(nextCdngLog_);  // set by the session just before; null = Log off
         recordingFormat_ = settings.recordingFormat;
         frameIndex_ = 0;
         firstFrameTimestampUs_ = 0;
@@ -3760,6 +3985,7 @@ public:
         discardedOnStopFrames_ = 0;
         maxObservedQueueDepth_ = 0;
         active_.store(false, std::memory_order_release);
+        frameBufferGauge().active.store(false, std::memory_order_release);
         stopping_ = false;
 
         try {
@@ -3789,6 +4015,10 @@ public:
             : (mediaProfile_.known() ? mediaProfile_.writer.queueFrames : 12u);
         maxQueuedFrames_ = unsignedEnvValue(
             "APERTAR_CDNG_QUEUE_FRAMES", defaultQueueFrames, 4, 64);
+        planQueueBuffer();
+        frameBufferGauge().capacity.store(ramMode_ ? queueBudgetBytes_ : maxQueuedFrames_, std::memory_order_relaxed);
+        frameBufferGauge().ram.store(ramMode_, std::memory_order_relaxed);
+        frameBufferGauge().used.store(0, std::memory_order_relaxed);
         // One extra lossless worker overlaps tile-write and scheduling stalls
         // while the other workers remain CPU-active.
         const unsigned int defaultLosslessWorkers = hardwareThreads >= 4
@@ -3834,6 +4064,7 @@ public:
         for (unsigned int i = 0; i < copyWorkers; ++i)
             copyThreads_.emplace_back(&DngRecordingQueue::copyLoop, this);
         active_.store(true, std::memory_order_release);
+        frameBufferGauge().active.store(true, std::memory_order_release);
 
         std::cerr << "ApertarCore recording clip: " << folderPath_.string()
                   << " format=" << toString(recordingFormat_)
@@ -3887,6 +4118,7 @@ public:
             mediumGone_.store(true, std::memory_order_release);
         const auto stopStarted = std::chrono::steady_clock::now();
         active_.store(false, std::memory_order_release);
+        frameBufferGauge().active.store(false, std::memory_order_release);
         stopCopyWorkers();
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -3962,8 +4194,11 @@ public:
                       << " discarded_on_failure=" << summary.discardedOnFailure
                       << " skipped_after_failure=" << summary.skippedAfterFailure
                       << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
-                      << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth
-                      << "\n";
+                      << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth;
+            if (summary.ramMode)
+                std::cerr << " queue_bytes_peak=" << summary.peakQueueBytes
+                          << " queue_budget=" << summary.queueBudgetBytes;
+            std::cerr << "\n";
         }
         const uint64_t timedJobs = losslessTimedJobs_.load(std::memory_order_relaxed);
         if (timedJobs > 0) {
@@ -4026,7 +4261,11 @@ public:
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
+        assert(!queue_.empty() || queuedBytes_ == 0);
         queue_.clear();
+        queuedBytes_ = 0;
+        frameBufferGauge().used.store(0, std::memory_order_relaxed);
+        bufferbudget::safetyStopState().active.store(false, std::memory_order_release);   // drained (or discarded)
         // The raw copy pool survives the take: the next take's first frames would
         // otherwise allocate and page in 16.6 MB each on libcamera's completion thread.
         workerCount_ = 0;
@@ -4053,15 +4292,21 @@ public:
             out.discardedOnFailure = discardedOnFailureFrames_;
             out.currentQueueDepth = queue_.size();
             out.peakQueueDepth = maxObservedQueueDepth_;
+            out.ramMode = ramMode_;
+            out.peakQueueBytes = maxObservedQueueBytes_;
+            out.queueBudgetBytes = queueBudgetBytes_;
         }
         return out;
     }
 
     std::string error() const { return failure_.message(); }
     MediaFault fault() const { return fault_.load(std::memory_order_acquire); }
+    void setPrerollTake(bool preroll) { prerollTake_.store(preroll, std::memory_order_release); }
     // The medium the next take writes to; set before start so workers, queue depth
     // and direct I/O follow it. Logged in the clip line.
     void setMediaProfile(const MediaProfile &profile) { mediaProfile_ = profile; }
+    // Bytes of one copied frame of the configured stream; sizes the "ram" budget (0 = unknown: frames mode).
+    void setFrameBytesHint(uint64_t bytes) { frameBytesHint_ = bytes; }
     const MediaProfile &mediaProfile() const { return mediaProfile_; }
     // Clip folder of the take; read after stop() for the ramp log (T31).
     const std::string &folderPathString() const { return folderPathString_; }
@@ -4186,7 +4431,7 @@ public:
                 skippedAfterFailure_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        if (queue_.size() < maxQueuedFrames_)
+        if (ramMode_ ? queueHasRoomForBytes(frameBytesHint_) : queue_.size() < maxQueuedFrames_)
             return true;
 
         ++droppedFrames_;
@@ -4195,7 +4440,7 @@ public:
             std::cerr << "ApertarCore drop[queue-full]: frame="
                       << frameIndex
                       << " dropped_total=" << droppedFrames_
-                      << " queue=" << queue_.size() << "/" << maxQueuedFrames_
+                      << " queue=" << queue_.size() << "/" << maxQueuedFrames_ << ramQueueText()
                       << "\n";
         }
         // A full queue and no frame written for the stall time: the writers are
@@ -4270,14 +4515,14 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_ || workers_.empty())
             return false;
-        if (queue_.size() >= maxQueuedFrames_) {
+        if (ramMode_ ? !queueHasRoomForBytes(rawBytes.size()) : queue_.size() >= maxQueuedFrames_) {
             ++droppedFrames_;
             if (dropWarning_) dropWarning_->markDropped();
             if (droppedFrames_ == 1 || (droppedFrames_ % 30) == 0) {
                 std::cerr << "ApertarCore drop[queue-full]: frame="
                           << metadata.frameIndex
                           << " dropped_total=" << droppedFrames_
-                          << " queue=" << queue_.size() << "/" << maxQueuedFrames_
+                          << " queue=" << queue_.size() << "/" << maxQueuedFrames_ << ramQueueText()
                           << "\n";
             }
             return false;
@@ -4291,6 +4536,7 @@ public:
         metadata.frameFileName = frameName;
         metadata.reelName = clipName_;
         metadata.compression = mlv ? CdngCompression::Uncompressed : settings_.cdngCompression;
+        queuedBytes_ += rawBytes.size();
         queue_.push_back(FrameJob{
             std::move(rawBytes),
             frame,
@@ -4299,7 +4545,18 @@ public:
         });
         ++enqueuedFrames_;
         maxObservedQueueDepth_ = std::max<uint64_t>(maxObservedQueueDepth_, queue_.size());
+        maxObservedQueueBytes_ = std::max<uint64_t>(maxObservedQueueBytes_, queuedBytes_);
+        publishQueueLevel();
         cv_.notify_one();
+        // Safety stop (mutex_ held, so only a lock-free hook runs here): the buffer is stopPercent_ full, end the
+        // take cleanly from ApertarCoreApp's own thread, once per take. Nothing is dropped; every queued frame is written.
+        if (!safetyStopFired_ && bufferbudget::safetyStopReached(ramMode_ ? queuedBytes_ : queue_.size(),
+                                                                 ramMode_ ? queueBudgetBytes_ : maxQueuedFrames_, stopPercent_)) {
+            safetyStopFired_ = true;
+            bufferbudget::safetyStopState().active.store(true, std::memory_order_release);
+            if (const auto &hook = bufferbudget::safetyStopHook())
+                hook({ramMode_ ? queuedBytes_ : queue_.size(), ramMode_ ? queueBudgetBytes_ : maxQueuedFrames_, stopPercent_, ramMode_});
+        }
         return true;
     }
 
@@ -4321,6 +4578,13 @@ public:
         RawFrameView view;               // data/size are filled by the worker
         CdngEncoder::Metadata metadata;
     };
+
+    // The next take's CineMate Log tables (null = off), adopted by startAtFolder. The tables live until the
+    // following take starts: queued frames hold spans into them.
+    void setCdngLog(std::shared_ptr<const CdngLogTake> log)
+    {
+        nextCdngLog_ = std::move(log);
+    }
 
     void setRequestRelease(std::function<void(libcamera::Request *)> release, size_t maxHeldRequests)
     {
@@ -4362,6 +4626,7 @@ public:
 private:
     void copyLoop()
     {
+        const CdngLogTake *const log = cdngLog_.get();
         while (true) {
             PendingCopy copy;
             {
@@ -4391,8 +4656,23 @@ private:
                 if (dropWarning_) dropWarning_->markDropped();
                 continue;
             }
-            if (copy.mapCodes12)
+            if (log && !log->copyTable.empty() && copy.view.packing == PixelPacking::Unpacked &&
+                copy.view.unpackedBytesPerSample == 2u && copy.view.bitDepth == log->viewDepth &&
+                copy.mapCodes12 == log->codes12) {
+                // On the copy, never the camera buffer. One table lookup per sample replaces
+                // compressClearHdrFrame for Clear HDR 12-bit, and the packers then store the stored depth.
+                applyCdngLogFrame(rawData, copy.size, copy.view.width, copy.view.height, copy.view.stride,
+                                  log->copyTable.data());
+                copy.view.bitDepth = static_cast<RawBitDepth>(log->params.targetBits);
+                // The tags are in the linearised domain: the table decodes to it, black stays linear.
+                copy.metadata.linearizationTable = std::span<const uint16_t>(log->tables.inverse);
+                copy.metadata.hasBlackLevels = true;
+                std::fill(std::begin(copy.metadata.blackLevels), std::end(copy.metadata.blackLevels),
+                          static_cast<float>(log->params.blackLevel));
+                copy.metadata.blackLevelsOnContainerScale = true;
+            } else if (copy.mapCodes12) {
                 compressClearHdrFrame(rawData, copy.size, copy.view.width, copy.view.height, copy.view.stride);
+            }
             copy.view.data = rawData;
             copy.view.size = copy.size;
             if (!enqueue(std::move(rawCopy), copy.view, std::move(copy.metadata)))
@@ -4539,6 +4819,8 @@ private:
         std::unique_ptr<LossyDngEncoder> lossyEncoder;
         if (settings_.recordingFormat == RecordingFormat::LossyDng)
             lossyEncoder = std::make_unique<LossyDngEncoder>(settings_.lossyDngRatio);
+        if (lossyEncoder && cdngLog_)
+            lossyEncoder->setCdngLog(&cdngLog_->params, &cdngLog_->tables);
 
         while (true) {
             FrameJob job;
@@ -4556,6 +4838,8 @@ private:
 
                 job = std::move(queue_.front());
                 queue_.pop_front();
+                queuedBytes_ -= job.rawBytes.size();
+                publishQueueLevel();
             }
 
             job.frame.data = job.rawBytes.data();
@@ -4670,6 +4954,8 @@ private:
 
                 job = std::move(queue_.front());
                 queue_.pop_front();
+                queuedBytes_ -= job.rawBytes.size();
+                publishQueueLevel();
             }
 
             job.frame.data = job.rawBytes.data();
@@ -4717,11 +5003,15 @@ private:
             mediumGone_.store(true, std::memory_order_release);
         failed_.store(true, std::memory_order_release);
         active_.store(false, std::memory_order_release);
+        frameBufferGauge().active.store(false, std::memory_order_release);
         {
             std::lock_guard lock(mutex_);
             stopping_ = true;
             discardedOnFailureFrames_ += queue_.size();
             queue_.clear();
+            queuedBytes_ = 0;
+            frameBufferGauge().used.store(0, std::memory_order_relaxed);
+            bufferbudget::safetyStopState().active.store(false, std::memory_order_release);
         }
         cv_.notify_all();
     }
@@ -4740,12 +5030,90 @@ private:
 
         if ((expectedSize > 0 && capacity > oversizeThreshold)
             || rawPool_.size() >= maxRetainedBuffers
-            || (maxRetainedBytes > 0 && (pooledRawBytes_ + capacity) > maxRetainedBytes)) {
+            || (maxRetainedBytes > 0 && (pooledRawBytes_ + capacity) > maxRetainedBytes)
+            || (ramMode_ && queuedBytes_ + pooledRawBytes_ + capacity > queueBudgetBytes_)) {
             return;
         }
 
         pooledRawBytes_ += capacity;
         rawPool_.push_back(std::move(buffer));
+    }
+
+    // The "ram" queue limit in bytes (mutex_ held). queuedBytes_ is exact: + on push, - on pop, 0 on clear.
+    bool queueHasRoomForBytes(uint64_t bytes) const
+    {
+        return bytes <= queueBudgetBytes_ && queuedBytes_ <= queueBudgetBytes_ - bytes;
+    }
+
+    // " bytes=used/budget MiB" for the drop lines in "ram" mode; empty (the old line) in "frames" mode.
+    std::string ramQueueText() const
+    {
+        if (!ramMode_)
+            return {};
+        return " bytes=" + std::to_string(queuedBytes_ / bufferbudget::kMiB) + "/" +
+            std::to_string(queueBudgetBytes_ / bufferbudget::kMiB) + " MiB";
+    }
+
+    // mutex_ held: the live gauge in the unit of the active mode (frames, or bytes in "ram").
+    void publishQueueLevel()
+    {
+        frameBufferGauge().used.store(ramMode_ ? queuedBytes_ : queue_.size(), std::memory_order_relaxed);
+        // After a safety stop the flag falls the moment the queue is empty (the stop is draining: stopping_).
+        if (safetyStopFired_ && stopping_ && queue_.empty())
+            bufferbudget::safetyStopState().active.store(false, std::memory_order_release);
+    }
+
+    // APERTAR_CDNG_BUFFER=frames|ram, or buffer= in [storage] of the hardware file, once per take (default frames: nothing below runs and nothing is logged).
+    // Applies to every format on this queue: cDNG (uncompressed and lossless), Lossy DNG and MLV.
+    void planQueueBuffer()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queuedBytes_ = 0;
+        maxObservedQueueBytes_ = 0;
+        ramMode_ = false;
+        queueBudgetBytes_ = 0;
+        // Precedence: the environment variable, then [storage] in the hardware file, then the default (frames).
+        const char *const requested = std::getenv("APERTAR_CDNG_BUFFER");
+        const bool fromEnv = requested && *requested;
+        const bufferbudget::BufferConf conf = loadBufferConf();
+        // The safety stop threshold of this take: env, else [storage] buffer_stop_percent, else 90 in ram / off in frames.
+        // Published once per take; the latch and the "buffer_safety_stop" flag restart with the take.
+        const auto publishStop = [&] {
+            if (prerollTake_.load(std::memory_order_acquire)) {   // a storage pre-roll ignores the safety stop; the published threshold stays
+                stopPercent_ = 0;
+                safetyStopFired_ = false;
+                return;
+            }
+            stopPercent_ = bufferbudget::effectiveStopPercent(
+                ramMode_, conf.stopPercent, bufferbudget::parseStopPercent(std::getenv("APERTAR_CDNG_BUFFER_STOP_PERCENT")));
+            safetyStopFired_ = false;
+            bufferbudget::safetyStopState().stopPercent.store(stopPercent_, std::memory_order_release);
+            bufferbudget::safetyStopState().active.store(false, std::memory_order_release);
+        };
+        publishStop();
+        if (fromEnv ? std::string(requested) == "frames" : !conf.ram.value_or(false)) {
+            bufferbudget::publishBufferSetting("frames", "");
+            return;
+        }
+        if (fromEnv && std::string(requested) != "ram") {
+            std::cerr << "ApertarCore buffer: APERTAR_CDNG_BUFFER=" << requested << " is not frames|ram: using frames\n";
+            bufferbudget::publishBufferSetting("frames", std::string("APERTAR_CDNG_BUFFER=") + requested + " is not frames|ram: using frames");
+            return;
+        }
+        BufferPlanInputs in;
+        in.memAvailableBytes = bufferbudget::readMemInfoBytes("MemAvailable");
+        in.memTotalBytes = bufferbudget::readMemInfoBytes("MemTotal");
+        in.frameBytes = frameBytesHint_;
+        in.framesModeFrames = maxQueuedFrames_;
+        in.fraction = bufferbudget::parseDouble(std::getenv("APERTAR_CDNG_QUEUE_RAM_FRACTION"), conf.fraction.value_or(in.fraction));
+        in.floorMb = unsignedEnvValue("APERTAR_CDNG_QUEUE_RAM_FLOOR_MB", conf.floorMb.value_or(512), 0, 1u << 20);
+        in.maxFraction = bufferbudget::parseDouble(std::getenv("APERTAR_CDNG_QUEUE_RAM_MAX_FRACTION"), conf.maxFraction.value_or(in.maxFraction));
+        const BufferPlan plan = planBuffer(in);
+        ramMode_ = plan.ram;
+        queueBudgetBytes_ = plan.ram ? plan.budgetBytes : 0;
+        publishStop();   // ramMode_ is now known
+        bufferbudget::publishBufferSetting("ram", plan.reason);
+        std::cerr << "ApertarCore buffer: " << plan.reason << (plan.ram ? (fromEnv ? " source=env" : " source=conf") : "") << "\n";
     }
 
     size_t preferredRawPoolSize() const
@@ -4788,6 +5156,8 @@ private:
     std::mutex copyMutex_;
     std::condition_variable copyCv_;
     std::deque<PendingCopy> copyQueue_;
+    std::shared_ptr<const CdngLogTake> cdngLog_;      // this take's Log, read by the workers
+    std::shared_ptr<const CdngLogTake> nextCdngLog_;  // handed over by setCdngLog, adopted at take start
     std::vector<std::thread> copyThreads_;
     bool copyStopping_ = false;
     size_t heldRequests_ = 0;
@@ -4813,6 +5183,16 @@ private:
     size_t expectedRawBufferSize_ = 0;
     unsigned int workerCount_ = 0;
     size_t maxQueuedFrames_ = 12;
+    // "ram" mode (guarded by mutex_): the queue is limited by bytes. Entries are the copies in their container
+    // size (16-bit even when Log stores fewer bits), so one entry's bytes are its rawBytes.size().
+    bool ramMode_ = false;
+    uint64_t queueBudgetBytes_ = 0;
+    uint64_t queuedBytes_ = 0;
+    std::atomic<bool> prerollTake_{false};   // the storage pre-roll's take: no safety stop (read by planQueueBuffer)
+    unsigned stopPercent_ = 0;          // safety stop threshold of this take (0 = off), set by planQueueBuffer
+    bool safetyStopFired_ = false;      // the once-per-take latch (guarded by mutex_)
+    uint64_t maxObservedQueueBytes_ = 0;
+    uint64_t frameBytesHint_ = 0;  // bytes of one copied frame of the configured stream, set before the take
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -6591,6 +6971,7 @@ public:
             phaseLock_.release();
             phaseLockDurationUs_.reset();
         }
+        setPrerollFps(0.0);   // a reconfigure ends a storage pre-roll's frame-rate override
 
         gyroRecorder_.stop();
         h264Recorder_.stop();
@@ -6659,6 +7040,9 @@ public:
         }
 
         CaptureSettings sanitized = sanitizeSettingsForSensor(settings, sensorFamily_);
+        // Storage pre-roll: the sensor's own maximum, past the lossless-JPEG and ladder caps the sanitiser applies.
+        if (const double prerollFps = prerollFpsOverride_.load(std::memory_order_acquire); prerollFps > 0.0)
+            sanitized.fps = prerollFps;
         sanitized.whiteBalanceAvailable = !monochromeSensor_ && activeTuningHasCalibratedWhiteBalance();
         constrainExposureMetering(sanitized, exposureMeteringModes());
         longExposureTimingUsed_ |= sanitized.photoModeEnabled && sanitized.longExposureEnabled;
@@ -6818,6 +7202,11 @@ public:
 
         // The watcher's snapshot, not a fresh statvfs: this runs under the controller lock.
         recorder_.setMediaProfile(detectMediaProfile(cachedMediaSnapshotOrProbe(mediaRoot)));
+        recorder_.setFrameBytesHint(activeRawFrameBytes(rawStreamInfo_.stride, rawStreamInfo_.height) > 0
+                                        ? activeRawFrameBytes(rawStreamInfo_.stride, rawStreamInfo_.height)
+                                        : rawStreamInfo_.frameSize);
+        recorder_.setCdngLog(buildCdngLogTake(settings_, sensorFamily_, rawStreamInfo_.packing, rawStreamInfo_.bitDepth,
+                                              rawStreamInfo_.unpackedBytesPerSample));
         if (!recorder_.startAtFolder(clipFolder, settings, error)) {
             audioRecorder_.stop();
             gyroRecorder_.stop();
@@ -6894,6 +7283,98 @@ public:
             recorder_.syncToMedium();
         recordingStopInProgress_.store(false, std::memory_order_release);
         emitMediaWriteState();
+#endif
+    }
+
+    // Storage pre-roll (CameraController::startStoragePreroll): the take's queue ignores the safety stop and its drops
+    // are not shown as a warning. Both are cleared again before the next real take.
+    void setPrerollTake(bool preroll)
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        recorder_.setPrerollTake(preroll);
+        dropWarning_.setMuted(preroll);
+        if (preroll) {
+            prerollFrames_.store(0, std::memory_order_relaxed);
+            prerollFirstUs_.store(0, std::memory_order_relaxed);
+            prerollLastUs_.store(0, std::memory_order_relaxed);
+        }
+        prerollMeasuring_.store(preroll, std::memory_order_release);
+#else
+        (void)preroll;
+#endif
+    }
+    // Storage pre-roll frame rate: fps > 0 makes applyControls keep exactly that fps (no lossless/ladder clamp) and pins
+    // {period, period} FrameDurationLimits on every request; 0 ends both. Idempotent, callable at any time.
+    void setPrerollFps(double fps)
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        prerollFpsOverride_.store(fps > 0.0 ? fps : 0.0, std::memory_order_release);
+        prerollPinUs_.store(fps > 0.0 ? static_cast<int64_t>(1000000.0 / fps) : 0, std::memory_order_release);
+#else
+        (void)fps;
+#endif
+    }
+    // Waits until a completed frame reports a period within 3 % of 1/fps (the new rate is in effect), or, when the
+    // pipeline reports no FrameDuration, until 6 more frames completed; at most timeoutMs. Returns true when seen.
+    bool waitForFramePeriod(double fps, int timeoutMs, int64_t *lastPeriodUs)
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        const double targetUs = 1000000.0 / std::max(1.0, fps);
+        const uint64_t framesAtStart = completedFrames_.load(std::memory_order_acquire);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        bool seen = false;
+        while (true) {
+            const int64_t periodUs = lastFramePeriodUs_.load(std::memory_order_acquire);
+            if (lastPeriodUs) *lastPeriodUs = periodUs;
+            const uint64_t done = completedFrames_.load(std::memory_order_acquire) - framesAtStart;
+            if (periodUs > 0 && std::fabs(double(periodUs) - targetUs) <= targetUs * 0.03 && done >= 2) { seen = true; break; }
+            if (periodUs <= 0 && done >= 6) { seen = true; break; }
+            if (std::chrono::steady_clock::now() >= deadline)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return seen;
+#else
+        (void)fps; (void)timeoutMs; (void)lastPeriodUs;
+        return true;
+#endif
+    }
+    // Frames the pre-roll take enqueued and the sensor timestamps (us) of the first and last of them.
+    struct PrerollMeasure { uint64_t frames = 0; int64_t firstUs = 0; int64_t lastUs = 0; int64_t lastPeriodUs = 0; int64_t echoedUs = 0; };
+    PrerollMeasure prerollMeasure() const
+    {
+        PrerollMeasure m;
+#if APERTARCORE_HAS_LIBCAMERA
+        m.frames = prerollFrames_.load(std::memory_order_acquire);
+        m.firstUs = prerollFirstUs_.load(std::memory_order_relaxed);
+        m.lastUs = prerollLastUs_.load(std::memory_order_relaxed);
+        m.lastPeriodUs = lastFramePeriodUs_.load(std::memory_order_relaxed);
+        m.echoedUs = lastEchoedMinUs_.load(std::memory_order_relaxed);
+#endif
+        return m;
+    }
+    std::string prerollClipFolder() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        return recorder_.folderPath();
+#else
+        return {};
+#endif
+    }
+    uint64_t prerollFramesWritten() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        return recorder_.stats().written;
+#else
+        return 0;
+#endif
+    }
+    uint64_t prerollFramesDropped() const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        return recorder_.stats().droppedQueueFull;
+#else
+        return 0;
 #endif
     }
 
@@ -7150,6 +7631,19 @@ public:
     SensorFamily sensorFamily() const
     {
         return sensorFamily_;
+    }
+
+    // Can the configured raw stream carry CineMate Log for these settings? The take's own test, quietly.
+    bool cdngLogApplicable(const CaptureSettings &settings) const
+    {
+#if APERTARCORE_HAS_LIBCAMERA
+        return rawStreamInfo_.valid && rawStreamInfo_.supported &&
+            planCdngLog(settings, sensorFamily_, rawStreamInfo_.packing, rawStreamInfo_.bitDepth,
+                        rawStreamInfo_.unpackedBytesPerSample, false).has_value();
+#else
+        (void)settings;
+        return false;
+#endif
     }
 
     SensorBinning sensorBinning() const
@@ -7517,10 +8011,12 @@ private:
                     activeRawWidth,
                     activeRawHeight,
                 };
-                const double maxFps = maximumSupportedFpsForResolution(sensorFamily_,
-                                                                       effectiveSettings.resolution,
-                                                                       effectiveSettings.rawBitDepth,
-                                                                       effectiveSettings.clearHdr);
+                const double maxFps = fpsceiling::applyBackendCap(
+                    maximumSupportedFpsForResolution(sensorFamily_,
+                                                     effectiveSettings.resolution,
+                                                     effectiveSettings.rawBitDepth,
+                                                     effectiveSettings.clearHdr),
+                    backendMaximumFps(effectiveSettings, sensorFamily_));
                 if (effectiveSettings.fps > maxFps)
                     effectiveSettings.fps = maxFps;
                 settings_ = effectiveSettings;
@@ -7948,6 +8444,12 @@ private:
                                         libcamera::Span<const int64_t, 2>(range));
                 recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = *phaseLockDurationUs_;
             }
+            // Storage pre-roll: the exact period on every request, so the take cannot fall back to an older limit.
+            if (const int64_t prerollPin = prerollPinUs_.load(std::memory_order_acquire); prerollPin > 0 && !photoBusy) {
+                const int64_t range[2] = { prerollPin, prerollPin };
+                request->controls().set(libcamera::controls::FrameDurationLimits,
+                                        libcamera::Span<const int64_t, 2>(range));
+            }
         }
 
         if (running_.load() && camera_) {
@@ -7972,6 +8474,7 @@ private:
         // Capture callbacks read strings and settings while button/API controls
         // can replace them. Keep the settings -> controls lock order consistent.
         std::shared_lock settingsLock(sessionSettingsMutex_);
+        noteFrameForPreroll(request);
         if (!capturePriorityAdjusted_) {
             capturePriorityAdjusted_ = true;
             // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
@@ -8355,6 +8858,13 @@ private:
 
         if (!recorder_.enqueueCopy(std::move(copy)))
             return false;
+        if (prerollMeasuring_.load(std::memory_order_acquire)) {
+            // First and last enqueued frame of the pre-roll take: this callback is the only writer.
+            if (prerollFrames_.load(std::memory_order_relaxed) == 0)
+                prerollFirstUs_.store(timestampUs, std::memory_order_relaxed);
+            prerollLastUs_.store(timestampUs, std::memory_order_relaxed);
+            prerollFrames_.fetch_add(1, std::memory_order_release);
+        }
         if (frameIndex == 0)
             gyroRecorder_.setVideoStartTimestampUs(static_cast<uint64_t>(std::max<int64_t>(0, timestampUs)), frameIndex);
         return true;
@@ -9168,6 +9678,28 @@ private:
     std::unordered_map<libcamera::FrameBuffer *, MappedPlane> mappedRawBuffers_;
     std::unordered_map<libcamera::FrameBuffer *, MappedPreviewBuffer> mappedPreviewBuffers_;
     libcamera::ControlList pendingControls_;
+    // Storage pre-roll (setPrerollFps / prerollMeasure): the fps past the sanitiser, the exact pinned period, and the
+    // take's frame count with first/last sensor timestamps. lastFramePeriodUs_ / lastEchoedMinUs_ are the newest
+    // FrameDuration and validated FrameDurationLimits[0] the pipeline reported (any frame, preview included).
+    std::atomic<double> prerollFpsOverride_{0.0};
+    std::atomic<int64_t> prerollPinUs_{0};
+    std::atomic<bool> prerollMeasuring_{false};
+    std::atomic<uint64_t> prerollFrames_{0};
+    std::atomic<int64_t> prerollFirstUs_{0};
+    std::atomic<int64_t> prerollLastUs_{0};
+    std::atomic<int64_t> lastFramePeriodUs_{0};
+    std::atomic<int64_t> lastEchoedMinUs_{0};
+    std::atomic<uint64_t> completedFrames_{0};
+
+    // Called from requestComplete under the shared session-settings lock (settings_ is readable).
+    void noteFrameForPreroll(libcamera::Request *request)
+    {
+        if (const auto d = request->metadata().get(libcamera::controls::FrameDuration); d && *d > 0)
+            lastFramePeriodUs_.store(normalizeFrameDurationToUs(static_cast<int64_t>(*d), settings_.fps), std::memory_order_release);
+        if (const auto e = request->metadata().get(libcamera::controls::FrameDurationLimits); e && e->size() == 2)
+            lastEchoedMinUs_.store((*e)[0], std::memory_order_relaxed);
+        completedFrames_.fetch_add(1, std::memory_order_release);
+    }
     bool longExposureTimingUsed_ = false;
     std::mutex controlsMutex_;
     // Frame-rate phase lock state and the duration to pin on the next request (controlsMutex_).
@@ -9477,6 +10009,7 @@ bool CameraController::setResolution(Resolution resolution)
 
     CaptureSettings next = settings_;
     next.resolution = resolution;
+    ladderOverride_ = false;      // a real resolution change ends a Clear HDR override
     return applySettingsLocked(next, true);
 }
 
@@ -9507,6 +10040,8 @@ bool CameraController::setFps(double fps)
         : SensorFamily::Unknown;
     CaptureSettings requested = settings_;
     requested.fps = fps;
+    if (!recording_)
+        ladderOverride_ = false;   // an fps change ends a Clear HDR override; the ladder picks the rung again
     const bool rungChange = ladderRewriteLocked(requested);   // T34: outside a take the FPS picks the rung
     requested = sanitizeSettingsForSensor(requested, sensorFamily);
     double effectiveFps = requested.fps;
@@ -9585,6 +10120,25 @@ void CameraController::restoreFpsAfterRampLocked()
     if (!rampTakeChanged_)
         return;
     rampTakeChanged_ = false;
+    if (!settings_.fpsSpeedRampReturn) {
+        // "Stay": the FPS the ramp ended on is the operator's FPS now, if the mode it is in
+        // after the take accepts it. Same checks as a normal setFps outside a take: no rung
+        // change, and the sensor sanitiser (mode and lossless ceilings) leaves it as it is.
+        const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+        CaptureSettings probe = settings_;
+        const bool rungChange = ladderRewriteLocked(probe);
+        probe = sanitizeSettingsForSensor(probe, family);
+        const bool valid = !rungChange && std::abs(probe.fps - settings_.fps) < 0.0001;
+        if (valid) {
+            // Ramp steps were not persisted during the take: write the file, tell every UI.
+            std::cerr << "ApertarCore fps ramp: take ended at " << settings_.fps << " fps, keeping it\n";
+            persistSettingsLocked();
+            emitSettingsEventLocked();
+            return;
+        }
+        std::cerr << "ApertarCore fps ramp: take ended at " << settings_.fps
+                  << " fps, not valid for the mode, restoring " << rampTakeBaseFps_ << "\n";
+    }
     if (rampTakeBaseFps_ <= 0.0)
         return;
     if (std::abs(settings_.fps - rampTakeBaseFps_) < 0.0001) {
@@ -9636,7 +10190,7 @@ std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder
 // Active: switched on, a raw video format, and at least one rung this sensor and format can run.
 bool CameraController::ladderActiveForLocked(const CaptureSettings &base) const
 {
-    return modeLadder_.enabled && !base.photoModeEnabled && !isProcessedVideoFormat(base.recordingFormat) &&
+    return modeLadder_.enabled && !ladderOverride_ && !base.photoModeEnabled && !isProcessedVideoFormat(base.recordingFormat) &&
            ladder::chooseRung(modeLadder_, ladderStatesLocked(modeLadder_, base), 0.0) >= 0;
 }
 
@@ -9672,6 +10226,7 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     out.ladderRung = 0;
     out.ladderRampReady = false;
     out.ladderEnabled = modeLadder_.enabled;
+    out.ladderOverride = ladderOverride_ && modeLadder_.enabled;
     out.ladderCount = static_cast<uint32_t>(modeLadder_.rungs.size());
     out.ladderTops.clear();
     out.ladderText.clear();
@@ -9686,7 +10241,8 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     const std::string base = runningText();
     if (!out.ladderActive) {
         if (!base.empty())
-            out.ladderText = base + " \u00b7 " + compressionLabel(out) + (modeLadder_.enabled ? "" : " (ladder off)");
+            out.ladderText = base + " \u00b7 " + compressionLabel(out) +
+                             (modeLadder_.enabled ? (ladderOverride_ ? " (ladder overridden)" : "") : " (ladder off)");
         return;
     }
     const auto states = ladderStatesLocked(modeLadder_, out);
@@ -9830,7 +10386,9 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     }
 
     const ladder::Ladder previous = modeLadder_;
+    const bool previousOverride = ladderOverride_;
     modeLadder_ = draft;
+    ladderOverride_ = false;      // a changed ladder ends a Clear HDR override
     // Switching the ladder on (or changing it) may put the camera in another rung: one apply.
     CaptureSettings next = settings_;
     const bool modeChanged = ladderRewriteLocked(next);
@@ -9838,6 +10396,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         next.cdngCompression != settings_.cdngCompression || next.lossyDngRatio != settings_.lossyDngRatio;
     if ((modeChanged || formatChanged) && !applySettingsLocked(next, modeChanged)) {
         modeLadder_ = previous;
+        ladderOverride_ = previousOverride;
         *error = lastError_;
         return false;
     }
@@ -10093,8 +10652,10 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             // format: on in H.264 (where ramping waits) must mean on in cDNG and MLV too.
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
             const bool fpsPhaseLock = next.fpsPhaseLock;
+            const CdngLog cdngLog = next.cdngLog; // CineMate Log is one switch for the camera too
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
             const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
+            const bool fpsSpeedRampReturn = next.fpsSpeedRampReturn;
             const double conformFps = next.conformFps;
             next = saved->second;
             next.tuningFile = tuningFile;
@@ -10103,8 +10664,10 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.fpsSpeedRamp = fpsSpeedRamp;
             next.fpsSpeedRampKeepExposure = fpsSpeedRampKeepExposure;
             next.fpsSpeedRampStretchAudio = fpsSpeedRampStretchAudio;
+            next.fpsSpeedRampReturn = fpsSpeedRampReturn;
             next.conformFps = conformFps;
             next.fpsPhaseLock = fpsPhaseLock;
+            next.cdngLog = cdngLog;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
@@ -10118,6 +10681,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
     next = supportedRecordingSettings(next);
     if (fixedTenBitFormat)
         next.rawBitDepth = 10;
+    ladderOverride_ = false;        // a new record format ends a Clear HDR override
     ladderRewriteLocked(next);      // T34: the new format may serve another rung (none for H.264/ProRes)
     const bool currentUsesProcessedStream = !settings_.photoModeEnabled && isProcessedVideoFormat(settings_.recordingFormat);
     const bool nextUsesProcessedStream = !next.photoModeEnabled && isProcessedVideoFormat(format);
@@ -10141,6 +10705,34 @@ bool CameraController::setCdngCompression(CdngCompression compression)
     CaptureSettings next = settings_;
     next.cdngCompression = compression;
     return applySettingsLocked(next, false);
+}
+
+bool CameraController::setCdngLog(CdngLog log)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_) {
+        setErrorLocked("Log changes are blocked while recording.");
+        return false;
+    }
+    switch (settings_.recordingFormat) {
+    case RecordingFormat::H264:
+        setErrorLocked("Log is not available in H.264.");
+        return false;
+    case RecordingFormat::Prores:
+        setErrorLocked("Log is not available in ProRes.");
+        return false;
+    case RecordingFormat::Mlv:
+        setErrorLocked("Log is not supported in MLV yet.");
+        return false;
+    case RecordingFormat::Cdng:
+    case RecordingFormat::LossyDng:
+        break;
+    }
+    CaptureSettings next = settings_;
+    next.cdngLog = log;
+    const bool ok = applySettingsLocked(next, false);
+    emitLogAppliedIfChangedLocked();
+    return ok;
 }
 
 bool CameraController::setLossyDngRatio(LossyDngRatio ratio)
@@ -10299,6 +10891,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
             emitSettingsEventLocked();
             return true;
         }
+        ladderOverride_ = false;      // a real bit depth change ends a Clear HDR override
         return applySettingsLocked(next, true);
     }
 
@@ -10313,6 +10906,10 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
+    // A real bit depth change ends a Clear HDR override, except the 16-bit that turning Clear HDR on is followed by
+    // (the hardware clear_hdr action and the touch UI send it right after set_clear_hdr).
+    if (!(settings_.clearHdr && requested.rawBitDepth == 16))
+        ladderOverride_ = false;
     return applySettingsLocked(next, true);
 }
 
@@ -10323,10 +10920,9 @@ bool CameraController::setClearHdr(bool enabled)
         setErrorLocked("Clear HDR changes are blocked while recording.");
         return false;
     }
-    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
-        setErrorLocked(kLadderOwnsMode);
-        return false;
-    }
+    // An explicit choice beats the ladder: it holds the mode until fps, resolution, format, bit depth,
+    // Ramp-ready or the ladder itself change (they end ladderOverride_).
+    const bool ladderWasActive = ladderActiveForLocked(settings_);
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
         ? session_->sensorFamily()
@@ -10358,7 +10954,14 @@ bool CameraController::setClearHdr(bool enabled)
         return true;
     }
 
-    return applySettingsLocked(next, true);
+    const bool overrideBefore = ladderOverride_;
+    if (ladderWasActive)
+        ladderOverride_ = true;     // before the apply, so the state event it emits already says "overridden"
+    if (!applySettingsLocked(next, true)) {
+        ladderOverride_ = overrideBefore;
+        return false;
+    }
+    return true;
 }
 
 namespace {
@@ -10519,7 +11122,7 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     return applySettingsLocked(next, false);
 }
 
-bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio)
+bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (recording_ && enabled != settings_.fpsSpeedRamp) {
@@ -10533,6 +11136,9 @@ bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool str
     next.fpsSpeedRamp = enabled;
     next.fpsSpeedRampKeepExposure = keepExposure;
     next.fpsSpeedRampStretchAudio = stretchAudio;
+    next.fpsSpeedRampReturn = returnAfter;
+    if (!recording_ && enabled != settings_.fpsSpeedRamp)
+        ladderOverride_ = false;   // Ramp-ready changes the rung with Speed Ramp: a Clear HDR override ends
     const bool ladderChange = ladderRewriteLocked(next);   // T34: Ramp-ready changes the rung with Speed Ramp
     return applySettingsLocked(next, ladderChange);
 }
@@ -10582,6 +11188,10 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    if (prerollTake_) {
+        setErrorLocked("Storage pre-roll is running. One moment.");
+        return false;
+    }
     if (state_ != CameraState::Ready) {
         setErrorLocked("Camera is not ready.");
         return false;
@@ -10622,6 +11232,163 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     lastError_.clear();
     emitRecordingEventLocked();
     return true;
+}
+
+// ---- Storage pre-roll ----------------------------------------------------------------------------------------
+// CineMate's storage warm-up: a short raw take at the sensor's maximum fps, written through the real path (the same
+// camera session, DngRecordingQueue and write buffer), then deleted. It is not a take: recording_ stays false, the
+// state stays Ready (so no "recording" event, no REC, no failure dialog, no tally), there is no audio and no gyro, and
+// the queue's safety stop and the dropped-frames warning are off (prerollTake_). The fps is the sensor's maximum for
+// the running mode (prerollMaximumFps: it overrides the lossless-JPEG cap, the mode ladder and the speed-ramp limits).
+// It is applied directly (never through ladderRewriteLocked, so the ladder never switches resolution) and gets past the
+// session's own sanitiser by session_->setPrerollFps, which also pins {period, period} FrameDurationLimits on every
+// request. No reconfigure: the sensor mode is chosen by size and bit depth, not by fps. startStoragePreroll waits
+// (at most 1 s) until a completed frame reports the new period, so the whole take runs at full speed. settings_ is
+// changed without commit (not saved, no settings event) and restored from a copy in finishStoragePreroll. Both calls
+// are made by Core's storage pre-roll thread only.
+bool CameraController::startStoragePreroll(std::string *error, double *fpsOut)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto fail = [&](const std::string &message) {
+        setErrorLocked(message);
+        if (error) *error = message;
+        return false;
+    };
+    if (simulateCamera_ || !session_)
+        return fail("Storage pre-roll needs the camera.");
+    if (prerollTake_)
+        return fail("Storage pre-roll is already running.");
+    if (recording_ || timelapseActive() || state_ != CameraState::Ready)
+        return fail("Camera is not ready.");
+    if (settings_.photoModeEnabled)
+        return fail("Leave Still Mode before a storage pre-roll.");
+    if (settings_.recordingFormat != RecordingFormat::Cdng && settings_.recordingFormat != RecordingFormat::LossyDng &&
+        settings_.recordingFormat != RecordingFormat::Mlv)
+        return fail("Storage pre-roll writes raw frames (cDNG, Lossy DNG or MLV).");
+    if (const char *unsupported = unsupportedRecordingSettings(settings_))
+        return fail(unsupported);
+    if (session_->hasPendingPhotoCaptures())
+        return fail("Wait for the still capture to finish first.");
+
+    const SensorFamily family = session_->sensorFamily();
+    const CaptureSettings saved = settings_;
+    const CameraState stateBefore = state_;
+    const double target = prerollMaximumFps(settings_, family);
+    if (!(target > 0.0))
+        return fail("No frame rate to pre-roll at.");
+
+    // Every exit below undoes the override and the settings change.
+    const auto undo = [&]() {
+        session_->setPrerollFps(0.0);
+        if (std::abs(saved.fps - settings_.fps) > 0.0001 || saved.shutterUs != settings_.shutterUs)
+            applySettingsLocked(saved, false, /*commit=*/false);
+        state_ = stateBefore;
+    };
+
+    session_->setPrerollFps(target);   // before the apply: the session sanitiser must not clamp it back
+    {
+        CaptureSettings next = settings_;
+        if (!next.shutterAuto) {
+            if (next.fpsSpeedRamp && next.fpsSpeedRampKeepExposure)
+                next.shutterUs = std::min(next.shutterUs,
+                                          static_cast<uint32_t>(std::max(1.0, std::floor(1000000.0 / target))));
+            else
+                next.shutterUs = shutterUsForPreservedAngle(next.shutterUs, next.fps, target);
+        }
+        next.fps = target;
+        if (!applySettingsLocked(next, false, /*commit=*/false)) {
+            const std::string message = lastError_.empty() ? std::string("The camera refused the pre-roll frame rate.") : lastError_;
+            undo();
+            return fail(message);
+        }
+    }
+    // Wait for the sensor to run the new period (a few frames after the request), so the 2 s are all at full speed.
+    int64_t lastPeriodUs = 0;
+    const bool periodSeen = session_->waitForFramePeriod(settings_.fps, 1000, &lastPeriodUs);
+    if (!periodSeen)
+        std::cerr << "ApertarCore storage preroll: the frame period did not reach " << static_cast<int64_t>(1000000.0 / settings_.fps)
+                  << " us within 1 s (last_us=" << lastPeriodUs << "), starting anyway\n";
+
+    session_->setPrerollTake(true);
+    if (!session_->startRecording(mediaRoot_, settings_, AudioRecordingOptions{}, GyroRecordingOptions{}, &lastError_)) {
+        session_->setPrerollTake(false);
+        const std::string message = lastError_.empty() ? std::string("The pre-roll take could not start.") : lastError_;
+        undo();
+        return fail(message);
+    }
+    prerollSaved_ = saved;
+    prerollFolder_ = session_->prerollClipFolder();
+    prerollFps_ = settings_.fps;
+    prerollTake_ = true;
+    lastError_.clear();
+    if (fpsOut) *fpsOut = prerollFps_;
+    return true;
+}
+
+// The latched write error of the pre-roll take ("" while fine); no controller lock, safe while the take runs.
+std::string CameraController::storagePrerollError() const
+{
+    if (!prerollTake_ || !session_)
+        return {};
+    return session_->recordingError();
+}
+
+// Stops the pre-roll take (every queued frame is written and synced first), counts and deletes the clip folder,
+// and restores the settings it changed. `restored` is false when the restore failed (error says why).
+CameraController::StoragePrerollResult CameraController::finishStoragePreroll()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    StoragePrerollResult result;
+    if (!prerollTake_ || !session_) {
+        result.error = "No storage pre-roll is running.";
+        return result;
+    }
+    const bool mediumGone = mediaFaultMeansGone(session_->recordingFault());
+    session_->stopRecording(mediumGone);
+    result.error = session_->recordingError();
+    result.fps = prerollFps_;
+    result.frames = session_->prerollFramesWritten();
+    result.dropped = session_->prerollFramesDropped();
+    {
+        // Measured over the frames the take enqueued: (n - 1) / (last - first) of the sensor timestamps.
+        const auto measure = session_->prerollMeasure();
+        result.measuredFps = apertar::storagepreroll::measuredFps(measure.frames, measure.firstUs, measure.lastUs);
+        std::cerr << "ApertarCore storage preroll: requested_fps=" << prerollFps_ << " measured_fps=" << result.measuredFps
+                  << " enqueued=" << measure.frames << " last_frame_us=" << measure.lastPeriodUs
+                  << " echoed_min_us=" << measure.echoedUs << "\n";
+    }
+    std::error_code ec;
+    if (!mediumGone && !prerollFolder_.empty()) {
+        for (std::filesystem::recursive_directory_iterator it(prerollFolder_, std::filesystem::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code sizeEc;
+            if (it->is_regular_file(sizeEc))
+                result.bytes += static_cast<uint64_t>(it->file_size(sizeEc));
+        }
+        ec.clear();
+        std::filesystem::remove_all(prerollFolder_, ec);   // the folder is gone: the next take gets this clip number again
+        if (ec && result.error.empty())
+            result.error = "Could not delete the pre-roll clip: " + ec.message();
+    }
+    result.mediumGone = mediumGone;
+    session_->setPrerollTake(false);
+    session_->setPrerollFps(0.0);   // before the restore below, or the session would keep the pre-roll rate
+    prerollTake_ = false;
+    prerollFolder_.clear();
+    if (prerollSaved_) {
+        const CaptureSettings saved = *prerollSaved_;
+        prerollSaved_.reset();
+        if (std::abs(saved.fps - settings_.fps) > 0.0001 || saved.shutterUs != settings_.shutterUs) {
+            const CameraState stateBefore = state_;
+            if (!applySettingsLocked(saved, false, /*commit=*/false)) {
+                state_ = stateBefore;
+                if (result.error.empty())
+                    result.error = "Could not restore the frame rate after the pre-roll: " + lastError_;
+            }
+        }
+    }
+    lastError_.clear();
+    return result;
 }
 
 bool CameraController::capturePhoto(PhotoCaptureFormat format, unsigned count)
@@ -10882,7 +11649,7 @@ bool CameraController::stopRecording()
 bool CameraController::checkRecordingFailure()
 {
     std::lock_guard lock(mutex_);
-    if (simulateCamera_ || !session_ || recordingFailureReported_ ||
+    if (simulateCamera_ || !session_ || recordingFailureReported_ || prerollTake_ ||   // a pre-roll's failure is the pre-roll thread's to report
         (state_ != CameraState::Ready && state_ != CameraState::Recording)) return false;
     const MediaFault sessionFault = session_->recordingFault();
     const std::string error = externalFailureMessage_.empty() ? session_->recordingError() : externalFailureMessage_;
@@ -10933,6 +11700,49 @@ CameraController::MediaWriteStatus CameraController::mediaWriteStatus() const
     return !simulateCamera_ && session_ ? session_->mediaWriteStatus() : MediaWriteStatus{};
 }
 
+bool CameraController::cdngLogApplicableLocked() const
+{
+    return !simulateCamera_ && session_ && session_->cdngLogApplicable(settings_);
+}
+
+bool CameraController::cdngLogApplicable() const
+{
+    std::lock_guard lock(mutex_);
+    return cdngLogApplicableLocked();
+}
+
+// Called about 5 times a second from the HTTP and watcher threads. The numbers come from the write queue's
+// lock-free gauge. Only the mode needs the controller's settings, so it is read under try_lock: while the
+// command path holds the mutex (including the whole drain after a take stops) the last answer is reused.
+CameraController::FrameBufferStatus CameraController::frameBufferStatus() const
+{
+    FrameBufferGauge &gauge = frameBufferGauge();
+    FrameBufferStatus out;
+    out.used = gauge.used.load(std::memory_order_relaxed);
+    out.capacity = gauge.capacity.load(std::memory_order_relaxed);
+    out.recording = gauge.active.load(std::memory_order_acquire);
+    bool frames;
+    if (std::unique_lock lock(mutex_, std::try_to_lock); lock.owns_lock()) {
+        const RecordingFormat format = settings_.recordingFormat;
+        frames = !simulateCamera_ && !settings_.photoModeEnabled &&
+            (format == RecordingFormat::Cdng || format == RecordingFormat::LossyDng || format == RecordingFormat::Mlv);
+        gauge.framesMode.store(frames, std::memory_order_relaxed);
+    } else {
+        frames = gauge.framesMode.load(std::memory_order_relaxed);
+    }
+    if (out.used > 0 || out.recording)
+        frames = true;  // frames are queued right now, whatever the last answer was
+    if (!frames) {
+        out.used = 0;
+        out.capacity = 0;
+        out.recording = false;
+        return out;
+    }
+    out.mode = gauge.ram.load(std::memory_order_relaxed) ? "ram" : "frames";
+    out.used = std::min(out.used, out.capacity);
+    return out;
+}
+
 CameraController::StillExposureStatus CameraController::stillExposureStatus() const
 {
     std::lock_guard lock(mutex_);
@@ -10956,6 +11766,7 @@ CaptureSettings CameraController::settings() const
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings result = settings_;
     result.exposureCompensationAvailable = simulateCamera_ || (session_ && session_->exposureCompensationAvailable());
+    result.cdngLogApplied = cdngLogApplicableLocked();
     if (!simulateCamera_ && session_) {
         result.whiteBalanceMeasured = session_->measuredWhiteBalance();
         if (const float gain = session_->measuredAnalogueGain(); std::isfinite(gain) && gain > 0.0f)
@@ -11109,6 +11920,10 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
         setErrorLocked("Wake the camera before changing capture settings.");
         return false;
     }
+    if (prerollTake_) {
+        setErrorLocked("Storage pre-roll is running. One moment.");
+        return false;
+    }
     if (!simulateCamera_ && session_) {
         const auto reconfigure = [&](const CaptureSettings &settings, std::string *error) {
             try {
@@ -11138,6 +11953,7 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
                 lastError_ = switchError + "; recovery failed: " + recoveryError;
             }
             state_ = CameraState::Error;
+            if (commit) emitLogAppliedIfChangedLocked();
             return false;
         }
     }
@@ -11216,8 +12032,18 @@ void CameraController::emitSettingsEventLocked()
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
     fillLadderFieldsLocked(settings_);
+    settings_.cdngLogApplied = cdngLogApplicableLocked();
+    lastEmittedLogApplied_ = settings_.cdngLogApplied;
     if (eventCallback_)
         eventCallback_(settingsEvent(settings_));
+}
+
+// The event-driven UIs (HDMI monitor, touch UI) learn cdng_log_applied only from settings events. If the
+// answer moved since the last event without one being sent, send it once; never during a take or pre-roll.
+void CameraController::emitLogAppliedIfChangedLocked()
+{
+    if (recording_ || prerollTake_.load() || !lastEmittedLogApplied_) return;
+    if (cdngLogApplicableLocked() != *lastEmittedLogApplied_) emitSettingsEventLocked();
 }
 
 void CameraController::emitRecordingEventLocked()

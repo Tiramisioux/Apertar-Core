@@ -47,6 +47,24 @@ void buildCompanding(int black, int white, bool gradation,
     }
 }
 
+// CineMate Log in place of the square root: the same working domain (0..kWorkingMax) and the same inverse
+// shape, so the quantiser below runs unchanged. The Log code is scaled up to the working range for the
+// forward table and scaled back for the inverse, which then returns linear levels in the source depth
+// (black included: the file's BlackLevel is the linear black, the table is the Log inverse).
+void buildLogCompanding(const cdnglog::Params &log, const cdnglog::Tables &tables,
+                        std::vector<uint16_t> &forward, std::vector<uint16_t> &inverse)
+{
+    const unsigned codeMax = unsigned(log.codeMax());
+    forward.resize(tables.forward.size());
+    for (size_t level = 0; level < forward.size(); ++level)
+        forward[level] = uint16_t((unsigned(tables.forward[level]) * kWorkingMax + codeMax / 2u) / codeMax);
+    inverse.resize(4096);
+    for (unsigned working = 0; working < inverse.size(); ++working) {
+        const unsigned code = (std::min(working, kWorkingMax) * codeMax + kWorkingMax / 2u) / kWorkingMax;
+        inverse[working] = tables.inverse[code];
+    }
+}
+
 
 uint16_t readLe16(const uint8_t *p)
 {
@@ -428,21 +446,26 @@ void LossyDngEncoder::writeDngFile(const std::string &path, const RawFrameView &
     const int srcBits = frame.sampleBits ? int(frame.sampleBits) : int(frame.bitDepth);
     if (srcBits < 8 || srcBits > 16)
         throw std::runtime_error("LossyDng: unsupported sample precision");
-    const unsigned outputBits = srcBits <= 8 ? 8u : (srcBits <= 10 ? 10u : 12u);
+    const cdnglog::Params *log = log_ && logTables_ && srcBits == log_->sourceBits ? log_ : nullptr;
+    const unsigned outputBits = log ? unsigned(log->targetBits) : srcBits <= 8 ? 8u : (srcBits <= 10 ? 10u : 12u);
     const unsigned outputCodes = 1u << outputBits;
-    const int lutBits = frame.gradationCompanded ? 12 : std::max(srcBits, 12);
+    const int lutBits = log ? srcBits : frame.gradationCompanded ? 12 : std::max(srcBits, 12);
     const double blackBase = metadata.hasBlackLevels ? metadata.blackLevels[0] : 200.0;
-    const int black = int(std::lround(blackBase * (metadata.blackLevelsOnContainerScale
+    const int black = log ? log->blackLevel : int(std::lround(blackBase * (metadata.blackLevelsOnContainerScale
         ? 1.0 : std::pow(2.0, lutBits - 12.0))));
-    const int white = (1 << lutBits) - 1;
+    const int white = log ? log->whiteLevel : (1 << lutBits) - 1;
     if (black < 0 || black >= white)
         throw std::runtime_error("LossyDng: invalid black level");
     if (cachedBlack_ != black || cachedLutBits_ != lutBits ||
-        cachedGradation_ != frame.gradationCompanded) {
-        buildCompanding(black, white, frame.gradationCompanded, fwd_, linTable_);
+        cachedGradation_ != frame.gradationCompanded || cachedLog_ != log) {
+        if (log)
+            buildLogCompanding(*log, *logTables_, fwd_, linTable_);
+        else
+            buildCompanding(black, white, frame.gradationCompanded, fwd_, linTable_);
         cachedBlack_ = black;
         cachedLutBits_ = lutBits;
         cachedGradation_ = frame.gradationCompanded;
+        cachedLog_ = log;
         cachedQuantStep_ = 0;
     }
 
@@ -463,7 +486,8 @@ void LossyDngEncoder::writeDngFile(const std::string &path, const RawFrameView &
             const unsigned linear = linTable_[std::min(4094u, code * step)];
             // Preserve the proven 12-bit curve; lower-depth modes reconstruct
             // to their native range rather than advertising 16-bit linear RAW.
-            inverseQuantized_[code] = outputBits == 12 ? uint16_t(linear)
+            // Log's table returns linear levels in the source depth: no rescale.
+            inverseQuantized_[code] = (log || outputBits == 12) ? uint16_t(linear)
                 : uint16_t((linear * (outputCodes - 1u) + 32767u) / 65535u);
         }
         cachedQuantStep_ = step;
@@ -517,7 +541,9 @@ void LossyDngEncoder::writeDngFile(const std::string &path, const RawFrameView &
     outputMetadata.compactJpegCodes = true;
     outputMetadata.hasBlackLevels = true;
     outputMetadata.blackLevelsOnContainerScale = true;
-    std::fill(std::begin(outputMetadata.blackLevels), std::end(outputMetadata.blackLevels), 0.0f);
+    // Log keeps the sensor's linear black (the table decodes to it); the square root removes it.
+    std::fill(std::begin(outputMetadata.blackLevels), std::end(outputMetadata.blackLevels),
+              log ? float(log->blackLevel) : 0.0f);
 
     if (memoryFd_ < 0) {
         memoryFd_ = ::memfd_create("apertar-lossy-dng", MFD_CLOEXEC);

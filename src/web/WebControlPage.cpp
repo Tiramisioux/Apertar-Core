@@ -29,8 +29,11 @@ std::string_view webControlPageHtml()
       --muted-2: #71717a;
       --line: #18181b;
       --ok: #34d399;
+      --info: #38bdf8;
       --danger: #ef4444;
       --danger-2: #dc2626;
+      --select-bg: #ffffff;
+      --select-fg: #18181b;
       --shadow: rgba(0, 0, 0, 0.28);
       --shadow-soft: rgba(255, 255, 255, 0.08);
       --radius-xl: 28px;
@@ -167,6 +170,39 @@ std::string_view webControlPageHtml()
       font-weight: 500;
     }
 
+    .status-pill {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .status-pill.buffer-bar:not(.buffer-drain)::before,
+    .status-pill.buffer-drain::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--buffer-fill, 0%);
+      background: var(--danger);
+      opacity: 0.8;
+      transition: width 0.15s linear;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .status-pill.buffer-bar > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* After a buffer safety stop: normal READY pill, text and dot hidden (space kept),
+       only the green bar draining. */
+    .status-pill.buffer-drain::before {
+      background: var(--ok);
+    }
+
+    .status-pill.buffer-drain > * {
+      visibility: hidden;
+    }
+
     .date-time-pill {
       color: #f4f4f5;
       white-space: nowrap;
@@ -189,6 +225,16 @@ std::string_view webControlPageHtml()
     .status-dot.writing,
     .status-dot.no-media {
       color: #ffd54a;
+    }
+
+    /* Storage pre-roll: blue pill and dot (after .no-media so it wins). */
+    .status-pill.preroll {
+      border-color: var(--info);
+      color: var(--info);
+    }
+
+    .status-dot.preroll {
+      color: var(--info);
     }
 
     .icon-button {
@@ -805,6 +851,7 @@ std::string_view webControlPageHtml()
        it added, a flicker-free angle it added, an angle a speed ramp moves. Shown in italics (not
        colour). Auto modes are plain. */
     .badge.system-value,
+    .settings-summary-value.system-value,
     .pill-button.system-value {
       font-style: italic;
     }
@@ -1351,8 +1398,13 @@ std::string_view webControlPageHtml()
     /* Value lists (T33): one chip per value, x removes it. */
     .value-list-row {
       gap: 12px;
-      padding-top: 14px;
-      border-top: 1px solid var(--line);
+      padding-top: 18px;
+      padding-bottom: 18px;
+      border-top: 1px solid #3f3f46;
+    }
+
+    .value-list-row:last-child {
+      border-bottom: 1px solid #3f3f46;
     }
 
     .value-chip-row {
@@ -1371,6 +1423,17 @@ std::string_view webControlPageHtml()
       color: #f4f4f5;
       padding: 6px 6px 6px 12px;
       font-size: 13px;
+    }
+
+    .value-chip.flicker-free {
+      opacity: 0.5;
+      font-style: italic;
+    }
+
+    .value-chip-note {
+      width: 100%;
+      font-size: 12px;
+      color: var(--muted);
     }
 
     .value-chip button {
@@ -1609,6 +1672,62 @@ std::string_view webControlPageHtml()
     .settings-sidebar-copy {
       margin: 6px 0 0;
       font-size: 14px;
+      color: var(--muted);
+    }
+
+    .settings-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 14px;
+      border: 1px solid #27272a;
+      background: rgba(9, 9, 11, 0.6);
+      color: var(--muted);
+    }
+
+    .settings-search input {
+      flex: 1 1 auto;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: 14px;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    .settings-search svg { flex: none; opacity: 0.7; }
+    .settings-search:focus-within { border-color: #a1a1aa; }
+
+    /* Search: every panel shows at once, only the matching cards stay; the filter only toggles classes. */
+    .settings-panels.searching .settings-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .search-hidden { display: none !important; }
+
+    .settings-search-label {
+      display: none;
+      margin: 0;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .settings-panels.searching .settings-search-label { display: block; }
+
+    .settings-search-empty { display: none; }
+    .settings-panels.searching .settings-search-empty { display: block; }
+
+    .settings-search-empty {
+      padding: 24px 4px;
       color: var(--muted);
     }
 
@@ -2999,8 +3118,20 @@ std::string_view webControlPageHtml()
       background: rgba(9, 9, 11, 0.45);
     }
 
-    .controls-peripheral.undetected {
+    .controls-peripheral.undetected,
+    .controls-output-item.undetected {
       opacity: 0.5;
+    }
+
+    .controls-output-item {
+      padding: 12px 0 0;
+      border-top: 1px solid #27272a;
+    }
+
+    .controls-output-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--muted);
     }
 
     .controls-peripheral-head {
@@ -3063,7 +3194,8 @@ std::string_view webControlPageHtml()
       padding-top: 10px;
     }
 
-    .controls-row.new .controls-row-head {
+    .controls-row.new .controls-row-head,
+    .controls-row[data-output] .controls-row-head {
       padding-top: 0;
     }
 
@@ -3154,6 +3286,101 @@ std::string_view webControlPageHtml()
       background-image:
         linear-gradient(45deg, transparent 50%, rgba(113, 113, 122, 0.38) 50%),
         linear-gradient(135deg, rgba(113, 113, 122, 0.38) 50%, transparent 50%);
+    }
+
+    /* The GPIO and hardware dropdowns (the Controls panel, and the Hardware card on the Config page) are white and
+       dark-texted, like CineMate's web GUI, so they are easy to see. Every other dropdown keeps the dark look. */
+    [data-panel="controls"] .settings-select,
+    #hardwareDevices .settings-select {
+      background-color: var(--select-bg);
+      color: var(--select-fg);
+      border-color: #d4d4d8;
+      color-scheme: light;
+      background-image:
+        linear-gradient(45deg, transparent 50%, #52525b 50%),
+        linear-gradient(135deg, #52525b 50%, transparent 50%);
+    }
+
+    [data-panel="controls"] .settings-select option,
+    #hardwareDevices .settings-select option {
+      background: var(--select-bg);
+      color: var(--select-fg);
+    }
+
+    [data-panel="controls"] .settings-select option:disabled,
+    #hardwareDevices .settings-select option:disabled {
+      color: #a1a1aa;
+    }
+
+    [data-panel="controls"] .settings-select:focus,
+    #hardwareDevices .settings-select:focus {
+      border-color: #71717a;
+      box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);
+    }
+
+    [data-panel="controls"] .settings-select:disabled,
+    #hardwareDevices .settings-select:disabled {
+      opacity: 1;
+      background-color: #e4e4e7;
+      color: #71717a;
+      border-color: #a1a1aa;
+      background-image:
+        linear-gradient(45deg, transparent 50%, #a1a1aa 50%),
+        linear-gradient(135deg, #a1a1aa 50%, transparent 50%);
+    }
+
+    /* The pin dropdowns (GPIO in rows, GPIO out rows) keep the page's normal dark look. */
+    [data-panel="controls"] .settings-select.controls-pin-select {
+      background-color: rgba(9, 9, 11, 0.72);
+      color: #f4f4f5;
+      border-color: #27272a;
+      color-scheme: dark;
+      background-image:
+        linear-gradient(45deg, transparent 50%, #71717a 50%),
+        linear-gradient(135deg, #71717a 50%, transparent 50%);
+    }
+
+    [data-panel="controls"] .settings-select.controls-pin-select option {
+      background: #09090b;
+      color: #f4f4f5;
+    }
+
+    /* A pin another control holds: greyed, with its function in the label. */
+    [data-panel="controls"] .settings-select.controls-pin option[data-used] {
+      color: #8b8b94;
+    }
+
+    [data-panel="controls"] .settings-select.controls-pin-select:focus {
+      border-color: #3f3f46;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    }
+
+    [data-panel="controls"] .settings-select.controls-pin-select:disabled {
+      opacity: 0.56;
+      background-color: rgba(9, 9, 11, 0.72);
+      color: #f4f4f5;
+      border-color: #27272a;
+      background-image:
+        linear-gradient(45deg, transparent 50%, rgba(113, 113, 122, 0.38) 50%),
+        linear-gradient(135deg, rgba(113, 113, 122, 0.38) 50%, transparent 50%);
+    }
+
+    /* GPIO out: pin | function | active | Test, in the second column of a row like GPIO in's. */
+    .controls-output-fields {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 112px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    @media (max-width: 720px) {
+      .controls-output-fields {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .settings-action-row[hidden] {
+      display: none;
     }
 
     .settings-action-row {
@@ -4296,6 +4523,11 @@ std::string_view webControlPageHtml()
           </div>
         </div>
 
+        <label class="settings-search" for="settingsSearchInput">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          <input id="settingsSearchInput" type="search" autocomplete="off" spellcheck="false" placeholder="Search settings: e.g. log, buffer, tally, GPIO 21, pre-roll" aria-label="Search settings">
+        </label>
+
         <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
           <button class="settings-nav-item active" data-panel="favorites" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/favorites.png" alt=""></span>
@@ -4467,6 +4699,21 @@ std::string_view webControlPageHtml()
                   </select>
                 </label>
               </div>
+              <div class="settings-field-grid" id="settingsCdngLogField" data-search="log cinemate encode bit depth">
+                <label class="field-stack field-span-2">
+                  <span class="input-label">Log</span>
+                  <div class="pill-grid" id="settingsCdngLogOptions"></div>
+                  <p class="settings-card-copy" id="settingsCdngLogNote">Linear storage.</p>
+                </label>
+              </div>
+              <div class="settings-field-grid hidden" id="settingsBufferModeField" data-search="buffer ram frames queue safety stop dropped">
+                <div class="field-stack field-span-2">
+                  <span class="input-label">Write buffer</span>
+                  <div class="pill-grid" id="settingsBufferModeOptions"></div>
+                  <p class="settings-card-copy" id="settingsBufferModeInfo"></p>
+                  <p class="settings-card-copy" id="settingsBufferModeNote"></p>
+                </div>
+              </div>
               <div class="settings-card-head compact-head">
                 <div>
                   <h3 class="settings-card-title">Bit Depth</h3>
@@ -4573,6 +4820,11 @@ std::string_view webControlPageHtml()
                 <span class="input-label">Audio (experimental)</span>
                 <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
                 <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">After the take</span>
+                <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
+                <p class="settings-card-copy">Stay: the FPS you ramped to stays when you stop. Return: the FPS goes back to what it was when you pressed record. If that FPS is not available in the current mode, it returns to the start FPS.</p>
               </div>
             </div>
 
@@ -4794,6 +5046,11 @@ std::string_view webControlPageHtml()
               <div class="field-stack">
                 <span class="input-label">Recording frame</span>
                 <div class="pill-grid" id="settingsRecordingFrameOptions"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Frame buffer bar</span>
+                <div class="pill-grid" id="settingsFrameBufferBarOptions"></div>
+                <span class="subtle-note">Shows the write buffer in the REC pill: it fills while recording and empties while the clips are written.</span>
               </div>
               <div class="field-stack">
                 <span class="input-label">Red timecode while recording</span>
@@ -5176,7 +5433,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsMediaCard">
+            <div class="settings-card" id="settingsMediaCard" data-search="storage ssd card format eject mount">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Media</h3>
@@ -5230,7 +5487,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsFormatMediaCard">
+            <div class="settings-card" id="settingsFormatMediaCard" data-search="format card ssd storage erase exfat">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Format Media</h3>
@@ -5253,7 +5510,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsMediaSpeedCard">
+            <div class="settings-card" id="settingsMediaSpeedCard" data-search="preroll pre-roll warm up storage ssd card speed test trim">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Media Speed</h3>
@@ -5276,6 +5533,16 @@ std::string_view webControlPageHtml()
                 <button class="secondary-button" id="runMediaSpeedTestButton" type="button">Run Speed Test</button>
                 <span class="subtle-note">Runs a temporary direct write test and removes the file afterwards.</span>
               </div>
+              <div class="settings-action-row" id="storagePrerollRow" hidden>
+                <button class="secondary-button" id="storagePrerollButton" type="button">Storage pre-roll</button>
+                <span class="subtle-note">Records 2 seconds at the top frame rate of the current mode and then deletes the clip, to warm up and test the card. Also runs when a card is inserted or formatted.</span>
+              </div>
+              <div class="settings-action-row" id="storagePrerollAutoRow" hidden>
+                <span class="input-label">Automatic pre-roll</span>
+                <div class="pill-grid" id="storagePrerollAutoOptions"></div>
+                <span class="subtle-note" id="storagePrerollAutoNote">On: runs when Core starts and when a card is inserted or formatted. Off: only the button runs it.</span>
+              </div>
+              <div class="subtle-note" id="storagePrerollLast" hidden></div>
             </div>
 
             <div class="settings-card" id="settingsThermalCard">
@@ -5492,7 +5759,7 @@ std::string_view webControlPageHtml()
           </section>
 
           <section class="settings-panel" data-panel="controls">
-            <div class="settings-card">
+            <div class="settings-card" data-search="gpio in gpio out button switch encoder rotary knob pin tally led">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Controls</h3>
@@ -6841,9 +7108,10 @@ std::string_view webControlPageHtml()
         const height = parts.length === 2 ? Number(parts[1]) || Number(snapshot.height) : Number(snapshot.height);
         max = Math.min(max, imx477MaximumUncompressedFps(width, height, snapshot && snapshot.raw_bit_depth));
       }
-      if (isLosslessImx585Snapshot(snapshot))
-        max = Math.min(max, 30.0);
-      else if (isLosslessFourKSnapshot(snapshot))
+      if (isLosslessImx585Snapshot(snapshot)) {
+        // Core's fps_max already holds the IMX585 lossless ceiling (the mode's maximum, or the
+        // APERTAR_LOSSLESS_FPS_LIMIT override); no fixed 30 here.
+      } else if (isLosslessFourKSnapshot(snapshot))
         max = Math.min(max, isApproximatelyFourThreeSnapshot(snapshot) ? 24.0 : 30.0);
       else if (isLosslessTwoKSnapshot(snapshot))
         max = Math.min(max, 60.0);
@@ -6894,6 +7162,12 @@ std::string_view webControlPageHtml()
         { label: "Real time", value: "real", enabled: enabled && !recording },
         { label: "Stretched", value: "stretch", enabled: enabled && !recording },
       ], stretchAudio ? "stretch" : "real", (value) => send({ enabled: "true", audio: value }), 2);
+
+      const returnAfter = snapshot.fps_speed_ramp_after === "return";
+      buildOptionButtons("settingsSpeedRampAfterOptions", [
+        { label: "Stay at the ramped FPS", value: "stay", enabled },
+        { label: "Return to the start FPS", value: "return", enabled },
+      ], returnAfter ? "return" : "stay", (value) => send({ enabled: "true", after: value }), 2);
     }
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none.
@@ -7122,7 +7396,8 @@ std::string_view webControlPageHtml()
         let rung = sorted[index];
         if (rung.auto !== false) {
           const ceiling = ladderCeiling(rung);
-          const top = Math.min(ladderDefaultMax(index), ceiling, nextTop - 1);
+          // The last resolution has none below it: it runs to its own ceiling (no default max to collide with the one above).
+          const top = index === sorted.length - 1 ? ceiling : Math.min(ladderDefaultMax(index), ceiling, nextTop - 1);
           rung = Object.assign({}, rung, { auto: true, thr: top >= ceiling ? "" : String(top) });
         }
         nextTop = rung.thr !== "" ? Number(rung.thr) : ladderCeiling(rung);
@@ -7468,7 +7743,8 @@ std::string_view webControlPageHtml()
         text.appendChild(createDomElement("div", "ladder-row-desc" + (crop.cropIn ? " crop-in" : ""), crop.desc));
       const rangeFrom = rowState.after ? "Above Resolution " + rowState.after : (rowState.from === 0 ? "Lowest FPS" : "Above " + rowState.from);
       text.appendChild(createDomElement("div", "ladder-row-range", rowState.problem
-        ? "Not used" : rangeFrom + ", max " + (rowState.open ? "its ceiling" : rowState.top + " fps")));
+        ? "Not used" : rangeFrom + ", max " + (rowState.open ? "its ceiling" : rowState.top + " fps")
+          + (!rowState.open && uncompressedCeiling > 0 && uncompressedCeiling !== rowState.top ? " · sensor max " + uncompressedCeiling + " fps" : "")));
       if (rowState.problem)
         text.appendChild(createDomElement("div", "ladder-problem", rowState.problem));
       main.appendChild(text);
@@ -7499,8 +7775,11 @@ std::string_view webControlPageHtml()
       compField.appendChild(compSelect);
       compField.appendChild(createDomElement("span", "ladder-note", rung.comp === "none" ? "Exact, largest files"
         : (rung.comp === "lossless_jpeg"
-          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : "Exact, smaller files")
+          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : (rung.clear_hdr ? "Exact, smaller files" : "Smaller files (SDR is sensor-compressed)"))
           : "Smaller files")));
+      if (rung.comp === "lossless_jpeg" && known && ceiling > 30 && sensorNameLower(state.snapshot).indexOf("imx585") !== -1)
+        compField.appendChild(createDomElement("span", "ladder-note over",
+          "Above 30 fps the lossless encoder runs close to its limit (about 69 fps measured at 4K 12-bit): watch the buffer bar."));
       compField.appendChild(createDomElement("span", "ladder-size", approx + megabytes.toFixed(1) + " MB per frame"));
       const over = !rowState.problem && !rowState.open && cardSpeed > 0 && rate > cardSpeed;
       compField.appendChild(createDomElement("span", "ladder-note" + (over ? " over" : ""), rowState.problem
@@ -7817,9 +8096,15 @@ std::string_view webControlPageHtml()
       const ui = (snapshot && snapshot.ui) || {};
       if (!container || !Array.isArray(ui.iso_steps))
         return;
+      // The flicker-free angles follow the operator's fps; a storage pre-roll's fps must not redraw the list.
+      if (snapshot.storage_preroll_active !== true)
+        state.valueListFps = Number(snapshot.fps);
+      const flickerFps = ui.flicker_free_shutter_angles ? state.valueListFps : 0;
       const signature = JSON.stringify(valueListDefinitions.map((list) => [ui[list.steps], ui[list.free], ui[list.increment]])
-        .concat([ui.flicker_free_shutter_angles, ui.mains_hz]));
-      if (signature === state.valueListsSignature || container.contains(document.activeElement))
+        .concat([ui.flicker_free_shutter_angles, ui.mains_hz, flickerFps]));
+      // Typing in a field must not be redrawn away; a pressed button keeps focus, so it must not block the redraw.
+      const typing = container.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if (signature === state.valueListsSignature || typing)
         return;
       state.valueListsSignature = signature;
       container.innerHTML = "";
@@ -7834,10 +8119,23 @@ std::string_view webControlPageHtml()
 
         const chips = document.createElement("div");
         chips.className = "value-chip-row";
-        for (const value of steps) {
+        // Flicker-free angles at the current fps and mains: added by the camera, so greyed and not removable.
+        const mains = Number(ui.mains_hz) || 50;
+        const added = list.name === "shutter_angle" && ui.flicker_free_shutter_angles
+          ? flickerFreeShutterAngles(flickerFps, mains).filter((angle) => !steps.some((value) => Math.abs(value - angle) < 0.05))
+          : [];
+        // One list in ascending order, the camera's angles among the operator's.
+        const chipValues = steps.map((value) => ({ value, auto: false })).concat(added.map((value) => ({ value, auto: true })))
+          .sort((a, b) => a.value - b.value);
+        for (const { value, auto } of chipValues) {
           const chip = document.createElement("span");
-          chip.className = "value-chip";
+          chip.className = auto ? "value-chip flicker-free" : "value-chip";
           chip.textContent = String(value) + list.unit;
+          if (auto) {
+            chip.title = "Flicker-free at " + flickerFps + " fps, " + mains + " Hz";
+            chips.appendChild(chip);
+            continue;
+          }
           const remove = document.createElement("button");
           remove.type = "button";
           remove.textContent = "×";
@@ -7852,6 +8150,14 @@ std::string_view webControlPageHtml()
           });
           chip.appendChild(remove);
           chips.appendChild(chip);
+        }
+        if (list.name === "shutter_angle" && ui.flicker_free_shutter_angles) {
+          const note = document.createElement("span");
+          note.className = "value-chip-note";
+          note.textContent = added.length
+            ? "Greyed: flicker-free angles at " + flickerFps + " fps and " + mains + " Hz, added by the camera."
+            : "Flicker-free angles at " + flickerFps + " fps and " + mains + " Hz are all in your list already.";
+          chips.appendChild(note);
         }
         row.appendChild(chips);
 
@@ -7933,6 +8239,13 @@ std::string_view webControlPageHtml()
           buildOptionButtonsInto(mains, [{ value: "50", label: "50 Hz" }, { value: "60", label: "60 Hz" }],
             String(ui.mains_hz || 50), (value) => sendValueSteps({ name: "shutter_angle", mains_hz: Number(value) }));
           row.appendChild(flickerGrid);
+          const flickerNote = document.createElement("p");
+          flickerNote.className = "settings-card-copy";
+          flickerNote.textContent = "Lights on AC power pulse at twice the mains frequency (100 Hz on 50 Hz power). "
+            + "A shutter angle that exposes a whole number of those pulses avoids flickering bands in the picture. "
+            + "With this on, the camera adds those angles for the current frame rate (25 fps on 50 Hz: 90, 180 and 270 degrees). "
+            + "They are greyed because the camera sets them.";
+          row.appendChild(flickerNote);
         }
         container.appendChild(row);
       }
@@ -7956,6 +8269,33 @@ std::string_view webControlPageHtml()
       const steps = valueStepsFromSnapshot(snapshot, "iso_steps", []);
       return !!snapshot && (snapshot.iso_auto_after_clear_hdr === true ||
         (maximum > 0 && Number(snapshot.iso) === maximum && !steps.some((value) => Math.abs(value - maximum) < 0.5)));
+    }
+
+    // Storage pre-roll: Core holds the pre-roll's fps for ~3 s, so every current-fps readout is
+    // italic (system-value) while it runs. Only classes change: no input is written, no command sent.
+    // While storage_preroll_fps > 0 the readouts show the pre-roll's fps, not the user's.
+    function shownFps(snapshot) {
+      const prerollFps = Number(snapshot && snapshot.storage_preroll_fps);
+      return snapshot && snapshot.storage_preroll_active === true && prerollFps > 0 ? prerollFps : snapshot.fps;
+    }
+
+    function showPrerollFpsText(prerollFps) {
+      const snapshot = state.snapshot;
+      if (!snapshot) return;
+      const fps = prerollFps > 0 ? prerollFps : snapshot.fps;
+      setText("fpsBadge", String(Math.round(fps)) + " FPS");
+      setText("settingsFpsSummary", formatFpsLabel(fps));
+    }
+
+    function markPrerollFps(active) {
+      for (const id of ["fpsBadge", "settingsFpsSummary"]) {
+        const element = document.getElementById(id);
+        if (element)
+          element.classList.toggle("system-value", !!active);
+      }
+      const activePill = document.querySelector("#fpsOptions .pill-button.active");
+      if (activePill)
+        activePill.classList.toggle("system-value", !!active);
     }
 
     function markActiveSystemValue(containerId, isSystem) {
@@ -8821,6 +9161,17 @@ std::string_view webControlPageHtml()
       return "CinemaDNG RAW";
     }
 
+    // The format as shown to the user: the codec, plus " · Log" while CineMate Log is really stored in the files.
+    // captureCodecLabel stays plain: the state merge calls it before the Log fields are updated.
+    function codecDisplayLabel(snapshot) {
+      const codec = (snapshot && snapshot.capture && snapshot.capture.codec) || "";
+      if (!codec)
+        return codec;
+      const logActive = snapshot.cdng_log_available === true && Number(snapshot.cdng_log_bits) > 0 &&
+        snapshot.cdng_log_applied !== false;
+      return logActive ? codec + " · Log" : codec;
+    }
+
     function timecodeModeLabel(modeValue) {
       return String(modeValue || "").toLowerCase() === "rec_run" ? "Rec Run" : "Free Run";
     }
@@ -9202,6 +9553,119 @@ std::string_view webControlPageHtml()
         void fetchModeLadder(false);
     }
 
+    // Settings search. While the field has text every panel shows at once and only the matching units stay: a unit is a
+    // direct child of a panel (a .settings-card); a big card with three or more rows (.settings-field-grid, .field-stack,
+    // .settings-action-row, a sub-heading with what follows it) is narrowed to the rows that match, unless its own
+    // heading or data-search matches. All words of the query must be found in the unit's text plus its data-search
+    // keywords. Only classes are toggled (.search-hidden), never DOM, so the 1 Hz renders and their focus guards are
+    // untouched; a MutationObserver re-runs the filter after any render while a query is active.
+    const settingsSearch = { active: false, observer: null, timer: 0, applying: false };
+
+    function settingsSearchHaystack(element) {
+      let text = element.textContent || "";
+      if (element.dataset && element.dataset.search)
+        text += " " + element.dataset.search;
+      element.querySelectorAll("[data-search]").forEach((inner) => { text += " " + inner.dataset.search; });
+      return text.toLowerCase();
+    }
+
+    function settingsSearchGroups(unit) {
+      const starts = ".settings-field-grid, .field-stack, .settings-action-row, .settings-card-head";
+      const groups = [];
+      [...unit.children].slice(1).forEach((child) => {
+        if (!groups.length || child.matches(starts))
+          groups.push([]);
+        groups[groups.length - 1].push(child);
+      });
+      return groups;
+    }
+
+    function applySettingsSearch() {
+      const input = document.getElementById("settingsSearchInput");
+      const container = document.querySelector(".settings-panels");
+      if (!input || !container)
+        return;
+      const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      const matches = (hay) => words.every((word) => hay.includes(word));
+      if (words.length === 0) {
+        if (!settingsSearch.active)
+          return;
+        settingsSearch.active = false;
+        if (settingsSearch.observer)
+          settingsSearch.observer.disconnect();
+        clearTimeout(settingsSearch.timer);
+        container.classList.remove("searching");
+        container.querySelectorAll(".search-hidden").forEach((element) => element.classList.remove("search-hidden"));
+        return;
+      }
+      settingsSearch.applying = true;
+      if (!settingsSearch.active) {
+        settingsSearch.active = true;
+        container.classList.add("searching");
+      }
+      let found = 0;
+      container.querySelectorAll(".settings-panel").forEach((panel) => {
+        let label = panel.querySelector(":scope > .settings-search-label");
+        if (!label) {
+          label = document.createElement("div");
+          label.className = "settings-search-label";
+          const nav = document.querySelector('.settings-nav-item[data-panel="' + panel.dataset.panel + '"] span:last-child');
+          label.textContent = nav ? nav.textContent : panel.dataset.panel;
+          panel.insertBefore(label, panel.firstChild);
+        }
+        let panelHits = 0;
+        [...panel.children].forEach((unit) => {
+          if (unit === label)
+            return;
+          unit.querySelectorAll(":scope > .search-hidden").forEach((child) => child.classList.remove("search-hidden"));
+          const gone = unit.hidden || unit.classList.contains("hidden");
+          let show = !gone && matches(settingsSearchHaystack(unit));
+          if (show && unit.classList.contains("settings-card")) {
+            const groups = settingsSearchGroups(unit);
+            const head = unit.firstElementChild ? settingsSearchHaystack(unit.firstElementChild) + " " + (unit.dataset.search || "").toLowerCase() : "";
+            if (groups.length >= 3 && !matches(head)) {
+              groups.forEach((group) => {
+                const hit = matches(group.map((child) => settingsSearchHaystack(child)).join(" "));
+                group.forEach((child) => child.classList.toggle("search-hidden", !hit));
+              });
+            }
+          }
+          unit.classList.toggle("search-hidden", !show);
+          if (show)
+            panelHits += 1;
+        });
+        label.classList.toggle("search-hidden", panelHits === 0);
+        panel.classList.toggle("search-hidden", panelHits === 0);
+        found += panelHits;
+      });
+      let empty = document.getElementById("settingsSearchEmpty");
+      if (!empty) {
+        empty = document.createElement("div");
+        empty.id = "settingsSearchEmpty";
+        empty.className = "settings-search-empty";
+        empty.textContent = "No setting matches";
+        container.appendChild(empty);
+      }
+      empty.classList.toggle("search-hidden", found > 0);
+      if (!settingsSearch.observer)
+        settingsSearch.observer = new MutationObserver(() => {
+          if (settingsSearch.applying || !settingsSearch.active)
+            return;
+          clearTimeout(settingsSearch.timer);
+          settingsSearch.timer = setTimeout(applySettingsSearch, 250);
+        });
+      settingsSearch.observer.disconnect();
+      settingsSearch.observer.observe(container, { childList: true, subtree: true, characterData: true });
+      settingsSearch.applying = false;
+    }
+
+    function clearSettingsSearch() {
+      const input = document.getElementById("settingsSearchInput");
+      if (input)
+        input.value = "";
+      applySettingsSearch();
+    }
+
     function setText(id, value) {
       const element = document.getElementById(id);
       if (element && element.textContent !== value)
@@ -9517,7 +9981,7 @@ std::string_view webControlPageHtml()
         case "camera":
           return ((snapshot && snapshot.capture && snapshot.capture.sensor) || "Camera")
             + " • "
-            + ((snapshot && snapshot.capture && snapshot.capture.codec) || "RAW");
+            + (codecDisplayLabel(snapshot) || "RAW");
         case "sbc":
           return deviceState.pi_model || "Raspberry Pi";
         case "systemInfo":
@@ -10320,7 +10784,7 @@ std::string_view webControlPageHtml()
           case "camera": {
             card.appendChild(createFavoriteCaptureList([
               { key: "Sensor", value: (snapshot.capture && snapshot.capture.sensor) || "--" },
-              { key: "Codec", value: (snapshot.capture && snapshot.capture.codec) || "--" },
+              { key: "Codec", value: codecDisplayLabel(snapshot) || "--" },
               { key: "Preview", value: (snapshot.capture && snapshot.capture.preview) || "--" },
             ]));
             break;
@@ -12744,6 +13208,34 @@ std::string_view webControlPageHtml()
       }
       if (typeof source.cdng_compression === "string")
         snapshot.cdng_compression = source.cdng_compression;
+      if (typeof source.cdng_log === "string")
+        snapshot.cdng_log = source.cdng_log;
+      if (typeof source.cdng_log_bits === "number")
+        snapshot.cdng_log_bits = source.cdng_log_bits;
+      if (typeof source.cdng_log_available === "boolean")
+        snapshot.cdng_log_available = source.cdng_log_available;
+      if (typeof source.cdng_log_applied === "boolean")
+        snapshot.cdng_log_applied = source.cdng_log_applied;
+      if (typeof source.buffer_setting === "string")
+        snapshot.buffer_setting = source.buffer_setting;
+      if (typeof source.buffer_safety_stop === "boolean")
+        snapshot.buffer_safety_stop = source.buffer_safety_stop;
+      if (typeof source.buffer_stop_percent === "number")
+        snapshot.buffer_stop_percent = source.buffer_stop_percent;
+      if (typeof source.buffer_mode === "string")
+        snapshot.buffer_mode = source.buffer_mode;
+      if (typeof source.storage_preroll_active === "boolean")
+        snapshot.storage_preroll_active = source.storage_preroll_active;
+      if (typeof source.storage_preroll_auto === "boolean")
+        snapshot.storage_preroll_auto = source.storage_preroll_auto;
+      if (typeof source.storage_preroll_auto_env === "boolean")
+        snapshot.storage_preroll_auto_env = source.storage_preroll_auto_env;
+      if (typeof source.storage_preroll_fps === "number")
+        snapshot.storage_preroll_fps = source.storage_preroll_fps;
+      if (typeof source.storage_preroll_last === "string")
+        snapshot.storage_preroll_last = source.storage_preroll_last;
+      if (typeof source.buffer_note === "string")
+        snapshot.buffer_note = source.buffer_note;
       if (source.recording_capabilities)
         snapshot.recording_capabilities = source.recording_capabilities;
       if (typeof source.lossy_dng_ratio === "string")
@@ -12810,6 +13302,8 @@ std::string_view webControlPageHtml()
         snapshot.fps_speed_ramp_keep_exposure = source.fps_speed_ramp_keep_exposure;
       if (typeof source.fps_speed_ramp_stretch_audio === "boolean")
         snapshot.fps_speed_ramp_stretch_audio = source.fps_speed_ramp_stretch_audio;
+      if (source.fps_speed_ramp_after === "stay" || source.fps_speed_ramp_after === "return")
+        snapshot.fps_speed_ramp_after = source.fps_speed_ramp_after;
     }
 
     function applyCommandSnapshotPatch(payload, result, optimistic) {
@@ -12852,6 +13346,8 @@ std::string_view webControlPageHtml()
             snapshot.fps_speed_ramp_keep_exposure = payload.shutter === "exposure";
           if (typeof payload.audio === "string")
             snapshot.fps_speed_ramp_stretch_audio = payload.audio === "stretch";
+          if (payload.after === "stay" || payload.after === "return")
+            snapshot.fps_speed_ramp_after = payload.after;
           break;
         case "set_mode_ladder":
           if (typeof payload.enabled === "string")
@@ -12894,6 +13390,15 @@ std::string_view webControlPageHtml()
           break;
         case "set_cdng_compression":
           snapshot.cdng_compression = payload.value;
+          break;
+        case "set_cdng_log":
+          snapshot.cdng_log = payload.value === "off" ? "off" : "auto";
+          break;
+        case "set_buffer_mode":
+          snapshot.buffer_setting = payload.value;
+          break;
+        case "set_storage_preroll":
+          snapshot.storage_preroll_auto = payload.value === "on";
           break;
         case "set_prores_profile":
           snapshot.prores_profile = payload.value;
@@ -13102,6 +13607,9 @@ std::string_view webControlPageHtml()
           break;
         case "set_recording_frame_enabled":
           uiState.recording_frame_enabled = boolValue;
+          break;
+        case "set_frame_buffer_bar_enabled":
+          uiState.frame_buffer_bar_enabled = boolValue;
           break;
         case "set_recording_red_timecode_enabled":
           uiState.recording_red_timecode_enabled = boolValue;
@@ -13494,6 +14002,14 @@ std::string_view webControlPageHtml()
     }
 
     function renderSnapshot(snapshot) {
+      // /api/state carries the write-buffer and storage pre-roll fields under "system"; the page reads them at the top level.
+      const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
+      if (systemFields) {
+        for (const key of Object.keys(systemFields)) {
+          if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_")) && snapshot[key] === undefined)
+            snapshot[key] = systemFields[key];
+        }
+      }
       const previousPhotoError = state.snapshot && state.snapshot.photo_write_error;
       if (snapshot.photo_write_error && snapshot.photo_write_error !== previousPhotoError)
         showToast("Still not saved: " + snapshot.photo_write_error, true);
@@ -13659,13 +14175,14 @@ std::string_view webControlPageHtml()
       setText("networkHost", snapshot.network_host || window.location.host || window.location.hostname);
       setText("networkTransport", snapshot.network_transport || "Wi-Fi / Ethernet");
       setText("webDateTimePill", formatWebDateTimePill(localDateTimeValue));
-      setText("recordingStatus", !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
+      const prerollShown = snapshot.storage_preroll_active === true && !isRecording && !isTimelapse;
+      setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending ? "WRITING" : "READY"))));
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
         ? " · " + rawBits + "-bit" + (snapshot.clear_hdr ? " · Clear HDR" : "") : "";
       setText("resolutionBadge", h264RecordFormat ? h264OutputResolutionLabel(snapshot) : resolutionLabel + rawResolutionDetail);
-      setText("fpsBadge", String(Math.round(snapshot.fps)) + " FPS");
+      setText("fpsBadge", String(Math.round(shownFps(snapshot))) + " FPS");
       // Auto shows the value in use, not the word; green whenever the camera set it.
       const isoInUse = snapshot.iso_auto && Number(snapshot.iso_actual) > 0 ? Number(snapshot.iso_actual) : 0;
       const isoLabel = snapshot.iso_auto ? (isoInUse > 0 ? String(isoInUse) : "Auto") : String(snapshot.iso);
@@ -13709,6 +14226,51 @@ std::string_view webControlPageHtml()
       }
       const ladderActive = snapshot.ladder_active === true;
       setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported || ladderActive);
+      const cdngLogAvailable = snapshot.cdng_log_available === true;
+      const cdngLogSetting = String(snapshot.cdng_log || "off");
+      const cdngLogBits = Number(snapshot.cdng_log_bits) || 0;
+      document.getElementById("settingsCdngLogField").classList.toggle("hidden", recordFormatText !== "CinemaDNG" || !cdngLogAvailable);
+      buildOptionButtons("settingsCdngLogOptions", [
+        { value: "Off", label: "Off", enabled: !isRecording },
+        { value: "On", label: "On", enabled: !isRecording }
+      ], cdngLogSetting === "off" ? "Off" : "On", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_cdng_log", value: value === "On" ? "auto" : "off" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+      setText("settingsCdngLogNote", cdngLogBits > 0 && snapshot.cdng_log_applied === false
+        ? "Not applied: in SDR the sensor chip already compresses the raw stream, so Log works in Clear HDR (16-bit). The files stay linear."
+        : cdngLogBits > 0
+        ? "Stores " + cdngLogBits + "-bit (from " + snapshot.raw_bit_depth + "-bit sensor data)."
+        : (cdngLogSetting !== "off"
+          ? "Records linear: the chosen depth is not below the sensor depth."
+          : "Linear storage."));
+      const bufferSetting = snapshot.buffer_setting === "ram" ? "ram" : (snapshot.buffer_setting === "frames" ? "frames" : "");
+      document.getElementById("settingsBufferModeField").classList.toggle("hidden",
+        !bufferSetting || (recordFormatText !== "CinemaDNG" && recordFormatText !== "MLV"));
+      if (bufferSetting) {
+        const bufferNote = typeof snapshot.buffer_note === "string" ? snapshot.buffer_note.trim() : "";
+        // "ram budget 1465 MiB (MemAvailable ..., frame 15.8 MiB = 92 frames)" -> "1465 MiB, 92 frames of 15.8 MiB"
+        const noteMatch = /ram budget (\d+) MiB .*frame ([\d.]+) MiB = (\d+) frames/.exec(bufferNote);
+        const shortBufferNote = noteMatch ? noteMatch[1] + " MiB, " + noteMatch[3] + " frames of " + noteMatch[2] + " MiB" : bufferNote;
+        buildOptionButtons("settingsBufferModeOptions", ["Frames", "RAM"], bufferSetting === "ram" ? "RAM" : "Frames", async (value) => {
+          try {
+            await sendCommand({ cmd: "set_buffer_mode", value: value === "RAM" ? "ram" : "frames" });
+          } catch (error) {
+            showToast(error.message, true);
+          }
+        }, 2);
+        setText("settingsBufferModeInfo", bufferSetting === "ram"
+          ? "Frames wait in a large memory buffer (up to 60 % of free memory), so the camera rides out card pauses of several seconds. If the buffer gets 90 % full, the take stops cleanly instead of losing frames."
+          : "A small queue of 12 frames. If the card pauses for a moment, frames can be lost.");
+        setText("settingsBufferModeNote", bufferSetting === "frames"
+          ? ""
+          : (snapshot.buffer_mode === "ram"
+            ? "RAM buffer in use." + (shortBufferNote ? " " + shortBufferNote + "." : "")
+            : "Takes effect at the next take." + (shortBufferNote ? " Last take: " + shortBufferNote + "." : "")));
+      }
       setText("settingsRawBitDepthValue", rawBitDepthText);
       setText("settingsRawBitDepthNote", rawBitDepthFixedForH264
         ? recordFormatText + (recordingFeatureSupported(snapshot, "h264_hardware") ? " uses 8-bit YUV420 hardware encoding." : " uses processed video output, so capture is fixed to 10-bit here.")
@@ -13719,7 +14281,7 @@ std::string_view webControlPageHtml()
       setText("settingsAutofocusValue", autofocusSummaryText);
       setText("settingsSensorValue", snapshot.capture.sensor);
       setText("settingsResolutionSummary", snapshot.resolution);
-      setText("settingsFpsSummary", formatFpsLabel(snapshot.fps));
+      setText("settingsFpsSummary", formatFpsLabel(shownFps(snapshot)));
       setText("settingsStorageSummary", snapshot.capture.storage);
       setText("settingsPreviewStreamValue", snapshot.capture.preview);
       setText("settingsPreviewTransportValue", snapshot.network_transport || "Wi-Fi / Ethernet");
@@ -13727,11 +14289,11 @@ std::string_view webControlPageHtml()
       setText("settingsPreviewSourceValue",
               smpteEnabled
                 ? "SMPTE Bars"
-                : (resolutionLabel + " / " + formatFpsLabel(snapshot.fps)));
+                : (resolutionLabel + " / " + formatFpsLabel(shownFps(snapshot))));
       setText("settingsIsoSummary", "ISO " + isoLabel);
       setText("settingsWbSummary", whiteBalanceLabel);
       setText("settingsShutterSummary", shutterLabel);
-      setText("settingsCodecSummary", snapshot.capture.codec);
+      setText("settingsCodecSummary", codecDisplayLabel(snapshot));
       setText("settingsInputVolumeValue", String(inputVolume));
       setText("settingsHeadphoneVolumeValue", String(headphoneVolume));
       setText("settingsImuStatusPill", imuDriverText);
@@ -13978,6 +14540,13 @@ std::string_view webControlPageHtml()
       statusPill.classList.toggle("recording", (isRecording || isTimelapse) && hasMedia);
       statusPill.classList.toggle("timelapse", isTimelapse && hasMedia);
       statusPill.classList.toggle("no-media", !hasMedia);
+      updateFrameBufferBar(snapshot, statusPill);
+      // frameBufferBar.preroll is the fresher of the 4 Hz poll and this snapshot.
+      const prerollNow = frameBufferBar.preroll && !isRecording && !isTimelapse;
+      statusPill.classList.toggle("preroll", prerollNow);
+      statusDot.classList.toggle("preroll", prerollNow);
+      if (prerollNow && !prerollShown)
+        setText("recordingStatus", "PRE-ROLL");
       statusDot.classList.toggle("recording", (isRecording || isTimelapse) && hasMedia);
       statusDot.classList.toggle("timelapse", isTimelapse && hasMedia);
       statusDot.classList.toggle("no-media", !hasMedia);
@@ -14039,6 +14608,41 @@ std::string_view webControlPageHtml()
       setElementDisabled("settingsMediaFormatSelect", !hasMedia);
       if (ejectMediaButton)
         ejectMediaButton.disabled = !hasMedia;
+      const prerollKnown = typeof snapshot.storage_preroll_active === "boolean";
+      const prerollRow = document.getElementById("storagePrerollRow");
+      if (prerollRow)
+        prerollRow.hidden = !prerollKnown;
+      const prerollButton = document.getElementById("storagePrerollButton");
+      if (prerollButton)
+        prerollButton.disabled = !hasMedia || isRecording || snapshot.storage_preroll_active === true;
+      const prerollAutoRow = document.getElementById("storagePrerollAutoRow");
+      if (prerollAutoRow) {
+        const autoKnown = typeof snapshot.storage_preroll_auto === "boolean";
+        prerollAutoRow.hidden = !autoKnown;
+        if (autoKnown) {
+          const fromEnv = snapshot.storage_preroll_auto_env === true;
+          const autoContainer = document.getElementById("storagePrerollAutoOptions");
+          buildOptionButtonsInto(autoContainer, ["On", "Off"], snapshot.storage_preroll_auto ? "On" : "Off", async (value) => {
+            try {
+              await sendCommand({ cmd: "set_storage_preroll", value: value === "On" ? "on" : "off" });
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 2);
+          if (fromEnv && autoContainer)
+            for (const button of autoContainer.querySelectorAll("button"))
+              button.disabled = true;
+          setText("storagePrerollAutoNote", fromEnv
+            ? "Set by APERTAR_STORAGE_PREROLL"
+            : "On: runs when Core starts and when a card is inserted or formatted. Off: only the button runs it.");
+        }
+      }
+      const prerollLast = document.getElementById("storagePrerollLast");
+      if (prerollLast) {
+        const lastText = prerollKnown && typeof snapshot.storage_preroll_last === "string" ? snapshot.storage_preroll_last : "";
+        prerollLast.textContent = lastText;
+        prerollLast.hidden = lastText === "";
+      }
       if (runMediaSpeedTestButton) {
         runMediaSpeedTestButton.disabled = !hasMedia || !!systemState.write_speed_running;
         runMediaSpeedTestButton.textContent = systemState.write_speed_running ? "Testing..." : "Run Speed Test";
@@ -14094,6 +14698,7 @@ std::string_view webControlPageHtml()
             button.appendChild(createDomElement("span", "pill-sub", ladderSizeText(mode) + " · " + ladderClassText(mode)));
         });
       }
+      markPrerollFps(frameBufferBar.preroll === true);
       const fpsLadderLine = document.getElementById("fpsLadderLine");
       setText("fpsLadderLine", state.fpsSwitchingTo > 0
         ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : (ladderActive ? String(snapshot.ladder_text || "") : ""));
@@ -14319,6 +14924,13 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       });
+      buildOptionButtons("settingsFrameBufferBarOptions", toggleOptions, formatToggleLabel(uiState.frame_buffer_bar_enabled === true), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_frame_buffer_bar_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
       buildOptionButtons("settingsRecordingRedTimecodeOptions", toggleOptions, formatToggleLabel(recordingRedTimecodeEnabled), async (value) => {
         try {
           await sendCommand({ cmd: "set_recording_red_timecode_enabled", enabled: value === "On" ? "true" : "false" });
@@ -14466,7 +15078,7 @@ std::string_view webControlPageHtml()
 
       renderFavoritesPanel(snapshot);
 
-      setText("captureCodec", snapshot.capture.codec);
+      setText("captureCodec", codecDisplayLabel(snapshot));
       setText("captureSensor", snapshot.capture.sensor);
       setText("captureStorage", snapshot.capture.storage);
       setText("capturePreview", snapshot.capture.preview);
@@ -14510,6 +15122,158 @@ std::string_view webControlPageHtml()
           void fetchState(queuedSilent);
         }
       }
+    }
+
+    // Frame buffer bar: fill level shown inside the REC pill. /api/state (1 Hz) gives
+    // the baseline; /api/buffer is polled at ~4 Hz only while the option is on and the
+    // camera is recording or the buffer has not yet drained back to 0.
+    const frameBufferBar = { fill: 0, fillAtMs: 0, timer: 0, inFlight: false, recording: false,
+      active: false, safetyStop: false, stopPercent: 0, stopSeen: false,
+      preroll: false, prerollFps: 0, prerollAtMs: 0, prerollUntilMs: 0 };
+
+    // Storage pre-roll: the same /api/buffer poll also carries storage_preroll_active, so the
+    // blue PRE-ROLL pill appears within a fraction of a second, independent of the bar option.
+    // Polling runs while it is active or for 5 s after this page's button asked for one.
+    function prerollPollWanted() {
+      return frameBufferBar.preroll || performance.now() < frameBufferBar.prerollUntilMs;
+    }
+
+    function startFrameBufferTimer() {
+      if (!frameBufferBar.timer)
+        frameBufferBar.timer = window.setInterval(pollFrameBufferBar, 250);
+    }
+
+    function notePrerollRequested() {
+      frameBufferBar.prerollUntilMs = performance.now() + 5000;
+      startFrameBufferTimer();
+      pollFrameBufferBar();
+    }
+
+    function applyPrerollPill(active, recording) {
+      const pill = document.querySelector(".status-pill");
+      const dot = document.getElementById("statusDot");
+      const shown = active && !recording;
+      const label = document.getElementById("recordingStatus");
+      const wasShown = pill && pill.classList.contains("preroll");
+      if (pill)
+        pill.classList.toggle("preroll", shown);
+      if (dot)
+        dot.classList.toggle("preroll", shown);
+      markPrerollFps(active);
+      if (label && shown)
+        label.textContent = "PRE-ROLL";
+      else if (label && wasShown && label.textContent === "PRE-ROLL")
+        label.textContent = "READY"; // the 1 Hz render sets the real text
+    }
+
+    function noteBufferSafetyStop(flag, percent) {
+      frameBufferBar.safetyStop = flag === true;
+      if (Number.isFinite(percent))
+        frameBufferBar.stopPercent = percent;
+      if (frameBufferBar.safetyStop && !frameBufferBar.stopSeen) {
+        const limit = frameBufferBar.stopPercent > 0 ? frameBufferBar.stopPercent + " %" : "the limit";
+        showToast("Recording stopped: the write buffer reached " + limit + ".", true);
+      }
+      frameBufferBar.stopSeen = frameBufferBar.safetyStop;
+    }
+
+    function applyFrameBufferPillClasses(pill) {
+      if (!pill)
+        return;
+      const drain = frameBufferBar.active && frameBufferBar.safetyStop && !frameBufferBar.recording
+        && frameBufferBar.fill > 0;
+      pill.classList.toggle("buffer-drain", drain);
+    }
+
+    function pollFrameBufferBar() {
+      if (frameBufferBar.inFlight)
+        return;
+      frameBufferBar.inFlight = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 800);
+      fetch("/api/buffer", { cache: "no-store", signal: controller.signal })
+        .then((response) => response.json())
+        .then((payload) => {
+          if (payload && typeof payload.storage_preroll_active === "boolean") {
+            frameBufferBar.preroll = payload.storage_preroll_active;
+            frameBufferBar.prerollAtMs = performance.now();
+            if (frameBufferBar.preroll)
+              frameBufferBar.prerollUntilMs = 0;
+            frameBufferBar.prerollFps = frameBufferBar.preroll ? Number(payload.storage_preroll_fps) || 0 : 0;
+            if (state.snapshot) {
+              state.snapshot.storage_preroll_active = frameBufferBar.preroll;
+              state.snapshot.storage_preroll_fps = frameBufferBar.prerollFps;
+              if (typeof payload.storage_preroll_auto === "boolean")
+                state.snapshot.storage_preroll_auto = payload.storage_preroll_auto;
+              if (typeof payload.storage_preroll_auto_env === "boolean")
+                state.snapshot.storage_preroll_auto_env = payload.storage_preroll_auto_env;
+            }
+            applyPrerollPill(frameBufferBar.preroll, !!payload.recording);
+            showPrerollFpsText(frameBufferBar.prerollFps);
+          }
+          const fill = Number(payload && payload.buffer_fill);
+          if (Number.isFinite(fill)) {
+            frameBufferBar.fill = Math.min(1, Math.max(0, fill));
+            frameBufferBar.fillAtMs = performance.now();
+            frameBufferBar.recording = !!payload.recording;
+            noteBufferSafetyStop(payload.buffer_safety_stop, Number(payload.buffer_stop_percent));
+            const pill = document.querySelector(".status-pill");
+            if (pill && pill.classList.contains("buffer-bar")) {
+              pill.style.setProperty("--buffer-fill", (frameBufferBar.fill * 100).toFixed(1) + "%");
+              applyFrameBufferPillClasses(pill);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          window.clearTimeout(timeout);
+          frameBufferBar.inFlight = false;
+          if (frameBufferBar.timer && !frameBufferBar.recording && !frameBufferBar.safetyStop && frameBufferBar.fill <= 0
+              && !prerollPollWanted())
+            stopFrameBufferPolling();
+        });
+    }
+
+    function stopFrameBufferPolling() {
+      if (frameBufferBar.timer)
+        window.clearInterval(frameBufferBar.timer);
+      frameBufferBar.timer = 0;
+    }
+
+    function updateFrameBufferBar(snapshot, pill) {
+      const uiState = snapshot.ui || {};
+      const mode = snapshot.buffer_mode;
+      const active = uiState.frame_buffer_bar_enabled === true && (mode === "frames" || mode === "ram");
+      pill.classList.toggle("buffer-bar", active);
+      frameBufferBar.active = active;
+      if (!(performance.now() - frameBufferBar.prerollAtMs < 1000 && frameBufferBar.timer)) {
+        frameBufferBar.preroll = snapshot.storage_preroll_active === true;
+        if (frameBufferBar.preroll)
+          frameBufferBar.prerollUntilMs = 0;
+      }
+      if (prerollPollWanted())
+        startFrameBufferTimer();
+      const polledStop = performance.now() - frameBufferBar.fillAtMs < 1000;
+      if (!polledStop || !frameBufferBar.timer)
+        noteBufferSafetyStop(snapshot.buffer_safety_stop, Number(snapshot.buffer_stop_percent));
+      if (!active) {
+        if (!prerollPollWanted())
+          stopFrameBufferPolling();
+        frameBufferBar.fill = 0;
+        pill.classList.remove("buffer-drain");
+        pill.style.removeProperty("--buffer-fill");
+        return;
+      }
+      const polledFresh = performance.now() - frameBufferBar.fillAtMs < 1000;
+      const snapshotFill = Number(snapshot.buffer_fill);
+      const fill = polledFresh ? frameBufferBar.fill : (Number.isFinite(snapshotFill) ? Math.min(1, Math.max(0, snapshotFill)) : 0);
+      if (!polledFresh)
+        frameBufferBar.fill = fill;
+      frameBufferBar.recording = !!snapshot.recording;
+      pill.style.setProperty("--buffer-fill", (fill * 100).toFixed(1) + "%");
+      applyFrameBufferPillClasses(pill);
+      if ((frameBufferBar.recording || fill > 0 || frameBufferBar.safetyStop) && !frameBufferBar.timer)
+        frameBufferBar.timer = window.setInterval(pollFrameBufferBar, 250);
     }
 
     async function fetchPresetLibrary(silent) {
@@ -14609,8 +15373,14 @@ std::string_view webControlPageHtml()
       return lines.some((line) => line.removed || !line.orig || line.orig !== base + line.suffix || line.value !== line.raw);
     }
 
+    // The Tally LED card sits on Controls and saves with Save Controls; the other device settings stay on Config.
+    const controlsTallySection = "recording_indicator";
+    function tallyEdits() {
+      return [...controlsState.settingEdits.values()].filter((edit) => edit.section === controlsTallySection);
+    }
+
     function controlsDirty() {
-      return controlsState.edits.size > 0 || controlsState.removed.size > 0 || controlsState.added.length > 0 ||
+      return controlsState.edits.size > 0 || tallyEdits().length > 0 || controlsState.removed.size > 0 || controlsState.added.length > 0 ||
         [...controlsState.buttons.values()].some((push) => buttonLinesChanged(push.base, push.lines));
     }
 
@@ -14933,7 +15703,9 @@ std::string_view webControlPageHtml()
       const wholeRow = ["switch2", "switch3", "encoder"].includes(row.kind);
       const removed = wholeRow ? controlsState.removed.has(rowId)
         : !!push && push.lines.length > 0 && push.lines.every((line) => line.removed);
-      let changed = removed || (!!push && buttonLinesChanged(row.base, push.lines));
+      if (controlsPinSources.includes(section))
+        fillControlsPinHead(element.firstChild, row, removed);
+      let changed = removed || (!!push && buttonLinesChanged(row.base, push.lines)) || controlsPinsMoved(row);
       element.dataset.index = String(((controlsState.model && controlsState.model.rows) || []).indexOf(row));
       let fixedLines = row.lines.filter((line) => !pushKeys.has(line.key));
       // T41 Turn adjusts: a knob whose two turns step one setting up and down shows one line, the pair.
@@ -15000,22 +15772,276 @@ std::string_view webControlPageHtml()
           }
           renderControls();
         }) : null;
-        lines.appendChild(buildControlsLine(line.label, select, remove, false));
+        lines.appendChild(buildControlsLine(controlsLineLabel(row, line), select, remove, false));
       });
       if (push && !(wholeRow && removed))
         appendButtonLines(lines, row.title, section, row.base, push.lines, gestures, null);
       element.className = "controls-row" + (row.enabled ? "" : " off") + (removed ? " removed" : "") + (changed ? " changed" : "");
       element.appendChild(lines);
+      if (controlsPinSources.includes(section) && (removed || (!!push && push.lines.some((line) => line.removed)))) {
+        // A control removed to free its pin cannot come back while another one holds that pin.
+        const holders = controlsPinOwners({ row: row });
+        const info = controlsRowPinInfo(row);
+        const clash = info ? info.now.map((pin) => holders.get(pin)).find((holder) => holder && holder.kind !== "outside") : null;
+        if (clash)
+          element.querySelectorAll("button").forEach((button) => {
+            if (button.textContent === "Undo") {
+              button.disabled = true;
+              button.title = "That pin is now used by " + clash.text + ".";
+            }
+          });
+      }
       return element;
     }
 
-    // The pins a new row may take: free on the header, not held outside Core, not picked by another new row.
-    function controlsFreePins(entry) {
-      const model = controlsState.model;
+    // GPIO in: the pins of an existing row, as the file has them (orig) and as the page has them now (now).
+    // A button's pin is in its key (d6), so a move renames the lines' base; a switch's and an encoder's pins are
+    // values (switchN_pins, encoderN_a / _b / _press_gpio) and move as plain edits. null: not a GPIO-in row.
+    const controlsPinSources = ["gpio_buttons", "gpio_switches", "gpio_encoders"];
+    function controlsRowPinInfo(row) {
+      const num = (text) => { const value = parseInt(text, 10); return Number.isFinite(value) ? value : null; };
+      if (row.source === "gpio_buttons") {
+        const push = controlsState.buttons.get(row.source + "|" + row.base);
+        return push ? { names: [""], keys: null, orig: [row.pin], now: [num(push.base.slice(1))] } : null;
+      }
+      const editOf = (key) => { const edit = controlsState.edits.get(row.source + "|" + key); return edit ? edit.value : null; };
+      if (row.source === "gpio_switches") {
+        const key = (row.keys || []).find((candidate) => /^switch\d+_pins$/.test(candidate));
+        const match = /^GPIO (\d+)(?: \+ (\d+))?$/.exec(row.title || "");
+        if (!key || !match)
+          return null;
+        const orig = [num(match[1])].concat(match[2] ? [num(match[2])] : []);
+        const edited = editOf(key);
+        return { names: orig.length > 1 ? ["Pin 1", "Pin 2"] : [""], keys: [key], orig: orig, now: edited === null ? orig : edited.split(",").map(num) };
+      }
+      if (row.source === "gpio_encoders") {
+        const match = /^A (\d+), B (\d+), push (\d+|none)$/.exec(row.detail || "");
+        if (!match || !row.base)
+          return null;
+        const keys = [row.base + "_a", row.base + "_b", row.base + "_press_gpio"];
+        const orig = [num(match[1]), num(match[2]), num(match[3])];
+        return { names: ["A", "B", "Push"], keys: keys, orig: orig, now: keys.map((key, index) => { const edited = editOf(key); return edited === null ? orig[index] : num(edited); }) };
+      }
+      return null;
+    }
+
+    // Pins something else holds: held outside Core, picked by another row (new or moved here), or the tally's
+    // GPIO. skipRow / skipTally leave out the row asking.
+    function controlsPinsTaken(skipRow, skipTally) {
       const taken = new Set();
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
+      (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
+        const info = row === skipRow ? null : controlsRowPinInfo(row);
+        if (info)
+          info.now.forEach((pin) => { if (pin !== null) taken.add(pin); });
+      });
+      const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
+      if (tally && !skipTally && tallyShown(tally, "target") === "gpio") {
+        const pin = parseInt(tallyShown(tally, "line"), 10);
+        if (pin >= 0)
+          taken.add(pin);
+      }
+      return taken;
+    }
+
+    // The pins other controls replaced here: "section.key" -> the review line (the first key of a control) or "" (its other keys).
+    const controlsReplaced = new Map();
+    function buildControlsPinOptionElement([optionValue, optionText, owner]) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionText;
+      if (owner) {
+        option.dataset.used = "1";
+        if (owner.kind === "outside")
+          option.disabled = true;
+      }
+      return option;
+    }
+    // Who holds each GPIO pin, as the page has it now (saved file plus unsaved edits): pin -> { kind, text, ... }.
+    // kind: outside (held by something outside Core, cannot be taken), row (an existing button, switch or encoder),
+    // entry (a row added here, not saved), tally. self ({ row } / { entry } / { tally }) is left out: its own pin is free to it.
+    // A control marked for removal holds nothing. text is what the dropdowns and the confirm show.
+    const controlsKindNames = { switch2: "Two-way switch", switch3: "Three-way switch", encoder: "Rotary encoder" };
+    function controlsRowRemoved(row) {
+      const push = controlsState.buttons.get(row.source + "|" + row.base);
+      return row.source === "gpio_buttons" ? !!push && push.lines.length > 0 && push.lines.every((line) => line.removed)
+        : controlsState.removed.has(row.source + "|" + (row.base || row.lines[0].key));
+    }
+    // What a row does, in a few words: a button's Press line ("Eject media", "Press: Eject media, +2"), else its kind.
+    function controlsRowOwnerText(row) {
+      const push = controlsState.buttons.get(row.source + "|" + row.base);
+      if (row.source !== "gpio_buttons" || !push)
+        return controlsKindNames[row.kind] || row.title;
+      const lines = push.lines.filter((line) => !line.removed && line.value && line.value !== "none");
+      if (lines.length === 0)
+        return "Button";
+      const first = lines.find((line) => line.suffix === "") || lines[0];
+      if (lines.length === 1)
+        return controlsActionWords(first.value);
+      const gesture = (row.gestures || []).find((candidate) => candidate.suffix === first.suffix);
+      return (gesture ? gesture.label : "Press") + ": " + controlsActionWords(first.value) + ", +" + (lines.length - 1);
+    }
+    function controlsPinOwners(self) {
+      const owners = new Map();
+      controlsState.peripherals.forEach((peripheral) => {
+        ((peripheral.status && peripheral.status.pins) || []).forEach((line) => {
+          if (!line.core)
+            owners.set(line.pin, { kind: "outside", text: line.consumer || "another program" });
+        });
+      });
+      (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
+        const info = self && self.row === row ? null : controlsRowPinInfo(row);
+        if (info && !controlsRowRemoved(row))
+          info.now.forEach((pin) => { if (pin !== null && !owners.has(pin)) owners.set(pin, { kind: "row", row: row, text: controlsRowOwnerText(row) }); });
+      });
+      controlsState.added.forEach((entry) => {
+        if (!self || self.entry !== entry)
+          entry.pins.forEach((pin) => { if (pin !== null && !owners.has(pin)) owners.set(pin, { kind: "entry", entry: entry, text: controlsNewTitles[entry.kind] + " (not saved)" }); });
+      });
+      const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
+      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio") {
+        const pin = parseInt(tallyShown(tally, "line"), 10);
+        if (pin >= 0 && !owners.has(pin))
+          owners.set(pin, { kind: "tally", tally: tally, text: "Tally light" });
+      }
+      return owners;
+    }
+    // Every pin a dropdown lists: the model's free and used pins, whoever holds one now, and the extra pins asked for.
+    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones).
+    function controlsPinChoices(owners, extra) {
+      const pins = ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [])
+        .concat((((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || [])).map((used) => used.pin))
+        .concat(Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
+      return Array.from(new Set(pins)).filter((pin) => Number.isFinite(pin)).sort((a, b) => a - b);
+    }
+    // One dropdown entry: [value, text, owner]. Held by another control: greyed, with its function; held outside Core: also disabled.
+    function controlsPinOption(pin, prefix, owner, value) {
+      const text = prefix + "GPIO " + pin + (!owner ? "" : owner.kind === "outside" ? " · used by " + owner.text : " · " + owner.text);
+      return [value || String(pin), text, owner || null];
+    }
+    // Picking a pin another control holds: ask first, then remove that control (the same unsaved remove as its Remove
+    // button, so Undo, Reload, the review and Save work). Returns false on No; the caller then redraws, which snaps the dropdown back.
+    function controlsClaimPin(pin, owner, self) {
+      if (!owner)
+        return true;
+      if (owner.kind === "outside")
+        return false;
+      if (!window.confirm("GPIO " + pin + " is used by " + owner.text + ". Replace it? That control will be removed."))
+        return false;
+      const by = self.row ? controlsRowOwnerText(self.row) : self.entry ? controlsNewTitles[self.entry.kind].toLowerCase() : "Tally light";
+      if (owner.row) {
+        const row = owner.row;
+        const message = row.title + ": " + owner.text + " removed (replaced by " + by + ")";
+        if (row.source === "gpio_buttons") {
+          const push = controlsState.buttons.get(row.source + "|" + row.base);
+          push.lines.forEach((line) => { line.removed = true; });
+          push.lines.filter((line) => line.orig).forEach((line, at) => controlsReplaced.set(row.source + "." + line.orig, at === 0 ? message : ""));
+        } else {
+          controlsState.removed.add(row.source + "|" + (row.base || row.lines[0].key));
+          row.lines.forEach((line) => controlsState.edits.delete(row.source + "|" + line.key));
+          const keys = (row.keys || []).filter((key) => !/_(pins|a|b|press_gpio)$/.test(key));
+          (row.keys || []).forEach((key) => controlsReplaced.set(row.source + "." + key, key === keys[0] ? message : ""));
+        }
+      } else if (owner.entry) {
+        controlsState.added = controlsState.added.filter((other) => other !== owner.entry);
+      } else if (owner.tally) {
+        setTallyField(owner.tally, "target", "gpio");
+        setTallyField(owner.tally, "line", "-1");
+        setTallyField(owner.tally, "pcf_pin", "-1");
+        syncTallyEnabled(owner.tally);
+        renderHardware();
+      }
+      return true;
+    }
+
+    // A pin dropdown: dark, unlike the other Controls dropdowns. options: [[value, text, owner]]; an owner greys the option.
+    function buildControlsPinSelect(options, value, label, onPick) {
+      const select = document.createElement("select");
+      select.className = "settings-select controls-pin controls-pin-select";
+      select.setAttribute("aria-label", label);
+      options.forEach((entry) => select.appendChild(buildControlsPinOptionElement(entry)));
+      select.value = value;
+      select.disabled = controlsState.saving;
+      select.addEventListener("change", () => onPick(select.value));
+      return select;
+    }
+
+    // An existing GPIO-in row: its pins are dropdowns, as in a new row. Choosing one moves the control there.
+    function fillControlsPinHead(head, row, removed) {
+      const info = controlsRowPinInfo(row);
+      if (!info)
+        return;
+      head.textContent = "";
+      const self = { row: row };
+      const owners = controlsPinOwners(self);
+      info.now.forEach((pin, index) => {
+        const prefix = info.names[index] ? info.names[index] + ": " : "";
+        const choices = controlsPinChoices(owners, info.orig.concat(info.now))
+          .filter((candidate) => !(info.now.includes(candidate) && info.now[index] !== candidate));
+        const options = [];
+        if (row.source === "gpio_encoders" && index === 2 && info.orig[2] === null)
+          options.push(["", prefix + "none"]);              // a push set cannot be taken away again from here
+        choices.forEach((candidate) => options.push(controlsPinOption(candidate, prefix, owners.get(candidate))));
+        const select = buildControlsPinSelect(options, pin === null ? "" : String(pin), info.names[index] || "Pin", (value) => {
+          const next = info.now.slice();
+          next[index] = value === "" ? null : parseInt(value, 10);
+          if (next[index] !== null && !controlsClaimPin(next[index], owners.get(next[index]), self)) {
+            renderControls();                                // No: the dropdown snaps back
+            return;
+          }
+          setControlsRowPins(row, info, next);
+        });
+        select.disabled = removed || controlsState.saving;
+        head.appendChild(select);
+      });
+      const kindName = { button: "", switch2: "Two-way switch", switch3: "Three-way switch", encoder: "Rotary encoder" }[row.kind];
+      if (kindName) {
+        const kind = document.createElement("div");
+        kind.className = "controls-row-detail";
+        kind.textContent = kindName;
+        head.appendChild(kind);
+      }
+    }
+
+    function controlsPinsMoved(row) {
+      const info = controlsRowPinInfo(row);
+      return !!info && info.now.some((pin, index) => pin !== info.orig[index]);
+    }
+
+    // A three-way switch names its pins on the position lines; they follow a moved pin.
+    function controlsLineLabel(row, line) {
+      const info = row.kind === "switch3" ? controlsRowPinInfo(row) : null;
+      if (!info)
+        return line.label;
+      return /_position0$/.test(line.key) ? line.label.replace(/GPIO \d+/, "GPIO " + info.now[0])
+        : /_position2$/.test(line.key) ? line.label.replace(/GPIO \d+/, "GPIO " + info.now[1]) : line.label;
+    }
+
+    function setControlsRowPins(row, info, next) {
+      if (row.source === "gpio_buttons") {
+        controlsState.buttons.get(row.source + "|" + row.base).base = "d" + next[0];
+      } else {
+        info.keys.forEach((key, index) => {
+          const value = row.source === "gpio_switches" ? next.join(",") : String(next[index]);
+          const original = row.source === "gpio_switches" ? info.orig.join(",") : String(info.orig[index]);
+          if (row.source === "gpio_encoders" && next[index] === null)
+            return;                                          // push stays as it is
+          if (value === original)
+            controlsState.edits.delete(row.source + "|" + key);
+          else
+            controlsState.edits.set(row.source + "|" + key, { section: row.source, key: key, value: value });
+        });
+      }
+      renderControls();
+    }
+
+    // The pins a new row may take: free on the header, not held outside Core, not picked by another new row
+    // or by a row moved here.
+    function controlsFreePins(entry) {
+      const model = controlsState.model;
+      const taken = controlsPinsTaken(null, false);
       controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => { if (pin !== null) taken.add(pin); }); });
       return ((model && model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
     }
@@ -15028,7 +16054,9 @@ std::string_view webControlPageHtml()
       // No title: the pin dropdowns head the row; a switch or encoder says what it is underneath.
       const kindName = { button: "", switch2: "Two-way switch", switch3: "Three-way switch", encoder: "Rotary encoder" }[entry.kind];
       const head = buildControlsRowHead("", "");
-      const free = controlsFreePins(entry);
+      const self = { entry: entry };
+      const owners = controlsPinOwners(self);
+      const free = controlsPinChoices(owners, entry.pins);
       const pinNames = entry.kind === "encoder" ? ["A", "B", "Push"] : entry.pins.length > 1 ? ["Pin 1", "Pin 2"] : [""];
       entry.pins.forEach((pin, index) => {
         const select = document.createElement("select");
@@ -15042,15 +16070,17 @@ std::string_view webControlPageHtml()
           select.appendChild(none);
         }
         free.filter((candidate) => candidate === pin || !entry.pins.includes(candidate)).forEach((candidate) => {
-          const option = document.createElement("option");
-          option.value = String(candidate);
-          option.textContent = prefix + "GPIO " + candidate;
-          select.appendChild(option);
+          select.appendChild(buildControlsPinOptionElement(controlsPinOption(candidate, prefix, owners.get(candidate))));
         });
         select.value = pin === null ? "" : String(pin);
         select.disabled = controlsState.saving;
         select.addEventListener("change", () => {
-          entry.pins[index] = select.value === "" ? null : parseInt(select.value, 10);
+          const picked = select.value === "" ? null : parseInt(select.value, 10);
+          if (picked !== null && !controlsClaimPin(picked, owners.get(picked), self)) {
+            renderControls();                                // No: the dropdown snaps back
+            return;
+          }
+          entry.pins[index] = picked;
           renderControls();
         });
         if (entry.kind === "switch3" && index === 1) {        // pin 2 sits on its position's line, below the middle
@@ -15152,6 +16182,67 @@ std::string_view webControlPageHtml()
     // Rows are shown for hardware that is there: the GPIO always, an I2C device when Core runs it or finds it.
     const controlsDetectedStates = ["running", "found", "restart"];
 
+    // An I2C expander is attached when the PCF8574 card is detected: Core runs it, finds it, or is about to start it.
+    function controlsExpanderAttached() {
+      const expander = controlsState.peripherals.find((peripheral) => peripheral.id === "pcf8574");
+      return !!expander && controlsDetectedStates.includes((expander.status || {}).state);
+    }
+
+    // The expander's pins that something uses: pin -> who. The PCF buttons come from the rows, the tally and the
+    // trigger from their settings (with unsaved edits applied).
+    function controlsPcfPinsInUse() {
+      const used = new Map();
+      (((controlsState.model && controlsState.model.rows) || [])).filter((row) => row.source === "pcf8574").forEach((row) => {
+        const match = /(\d+)\s*$/.exec(row.title || "");
+        if (match)
+          used.set(parseInt(match[1], 10), "button");
+      });
+      controlsState.peripherals.filter((peripheral) => peripheral.output).forEach((peripheral) => {
+        const value = (key) => {
+          const edit = controlsState.settingEdits.get(peripheral.section + "|" + key);
+          if (edit)
+            return edit.value;
+          const setting = (peripheral.settings || []).find((candidate) => candidate.key === key);
+          return setting ? setting.value : "";
+        };
+        const pin = parseInt(value("pcf_pin"), 10);
+        if (value("enabled") === "true" && value("target") === "pcf8574" && pin >= 0)
+          used.set(pin, peripheral.id === controlsTallySection ? "tally" : "trigger");
+      });
+      return used;
+    }
+
+    // The Tally LED has no On field: it is on exactly when the chosen wiring has a pin (Wired to gpio with a GPIO
+    // number, or pcf8574 with a pin other than None). Editing any field writes enabled=true/false into the same edit.
+    function tallyRaw(peripheral, key) {
+      const setting = (peripheral.settings || []).find((candidate) => candidate.key === key);
+      return setting ? String(setting.value) : "";
+    }
+    function tallyFileEnabled(peripheral) {
+      return tallyRaw(peripheral, "enabled");
+    }
+    // What the card shows: an edit if there is one; else the file's value, except that a tally the file has switched
+    // off shows its pins as None (saving a pin then turns it on).
+    function tallyShown(peripheral, key) {
+      const edit = controlsState.settingEdits.get(peripheral.section + "|" + key);
+      if (edit)
+        return key === "line" && edit.value === "-1" ? "" : edit.value;
+      const raw = tallyRaw(peripheral, key);
+      if ((key === "line" || key === "pcf_pin") && tallyFileEnabled(peripheral) !== "true")
+        return key === "line" ? "" : "-1";
+      return key === "line" && raw === "-1" ? "" : raw;
+    }
+    function syncTallyEnabled(peripheral) {
+      const viaPcf = tallyShown(peripheral, "target") === "pcf8574";
+      const pin = parseInt(tallyShown(peripheral, viaPcf ? "pcf_pin" : "line"), 10);
+      const on = Number.isFinite(pin) && pin >= 0 ? "true" : "false";
+      const id = peripheral.section + "|enabled";
+      if (on === tallyFileEnabled(peripheral))
+        controlsState.settingEdits.delete(id);
+      else
+        controlsState.settingEdits.set(id, { section: peripheral.section, key: "enabled", value: on });
+    }
+
     // One peripheral: whether it is there (a message only when something needs saying) and its settings, which are
     // saved with the same Save button as the rows.
     function buildControlsPeripheral(peripheral, withSettings) {
@@ -15207,9 +16298,12 @@ std::string_view webControlPageHtml()
       const settings = document.createElement("div");
       settings.className = "controls-settings";
       (peripheral.settings || []).forEach((setting) => {
+        const isTally = peripheral.id === controlsTallySection;
+        if (isTally && setting.key === "enabled")
+          return;                                           // no On field: a pin that is set means on
         const id = peripheral.section + "|" + setting.key;
         const edit = controlsState.settingEdits.get(id);
-        const value = edit ? edit.value : setting.value;
+        const value = isTally ? tallyShown(peripheral, setting.key) : (edit ? edit.value : setting.value);
         const field = document.createElement("label");
         field.className = "field-stack" + (edit ? " changed" : "");
         const label = document.createElement("span");
@@ -15228,6 +16322,16 @@ std::string_view webControlPageHtml()
             option.textContent = optionText;
             control.appendChild(option);
           });
+        } else if (setting.key === "pcf_pin") {
+          // An expander has eight pins; -1 is none.
+          control = document.createElement("select");
+          control.className = "settings-select";
+          [["-1", "None"], ...[0, 1, 2, 3, 4, 5, 6, 7].map((pin) => [String(pin), "Pin " + pin])].forEach(([optionValue, optionText]) => {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            control.appendChild(option);
+          });
         } else {
           control = document.createElement("input");
           control.className = "settings-input";
@@ -15238,24 +16342,41 @@ std::string_view webControlPageHtml()
           }
         }
         control.value = value;
-        control.disabled = controlsState.saving;
+        if (isTally && setting.key === "line")
+          control.placeholder = "None";
+        control.disabled = controlsState.saving || (setting.key === "pcf_pin" && !controlsExpanderAttached());
         // Typing counts at once (Save must be pressable without leaving the field first); only "change" redraws,
         // so the cursor stays in the field while typing.
         const stage = (redraw) => {
-          const next = String(control.value).trim();
-          if (next === setting.value)
+          let next = String(control.value).trim();
+          if (isTally && setting.key === "line" && next === "")
+            next = "-1";                                    // an empty GPIO field is "no pin"
+          // While the file has the tally off, its pins are shown as None; an edit of a pin is kept even when it equals the file.
+          const keepEdit = isTally && (setting.key === "line" || setting.key === "pcf_pin") && tallyFileEnabled(peripheral) !== "true";
+          if (next === setting.value && !keepEdit)
             controlsState.settingEdits.delete(id);
           else
             controlsState.settingEdits.set(id, { section: peripheral.section, key: setting.key, value: next });
+          if (isTally)
+            syncTallyEnabled(peripheral);
           field.classList.toggle("changed", controlsState.settingEdits.has(id));
-          if (redraw)
+          if (redraw) {
             renderHardware();
-          else
+            renderControls();
+          } else {
             updateHardwareButtons();
+            updateControlsButtons();
+          }
         };
         control.addEventListener("input", () => stage(false));
         control.addEventListener("change", () => stage(true));
         field.appendChild(control);
+        if (setting.key === "pcf_pin" && !controlsExpanderAttached()) {
+          const hint = document.createElement("div");
+          hint.className = "controls-row-detail";
+          hint.textContent = "No PCF8574 expander found.";
+          field.appendChild(hint);
+        }
         settings.appendChild(field);
       });
       card.appendChild(settings);
@@ -15281,6 +16402,103 @@ std::string_view webControlPageHtml()
       return wrap;
     }
 
+    // One write to the tally's settings, the way the Hardware card writes a field: no edit when it equals the file
+    // (except pins while the file has the tally off), and enabled follows the pin.
+    function setTallyField(peripheral, key, next) {
+      const setting = (peripheral.settings || []).find((candidate) => candidate.key === key);
+      const id = peripheral.section + "|" + key;
+      const keepEdit = (key === "line" || key === "pcf_pin") && tallyFileEnabled(peripheral) !== "true";
+      if (setting && next === setting.value && !keepEdit)
+        controlsState.settingEdits.delete(id);
+      else
+        controlsState.settingEdits.set(id, { section: peripheral.section, key: key, value: next });
+    }
+
+    // An output row, left to right: pin (None, GPIO n, and PCF8574 pin n when an expander is detected), function
+    // (Tally light for now; add more to controlsOutputFunctions), Active, Test. The pin writes target + line / pcf_pin.
+    const controlsOutputFunctions = [["tally", "Tally light"]];
+    function buildControlsOutputRow(peripheral) {
+      const status = peripheral.status || {};
+      const element = document.createElement("div");
+      element.className = "controls-row" + (tallyEdits().length > 0 ? " changed" : "") + (status.state === "running" ? "" : " off");
+      element.dataset.output = "tally";
+      const viaPcf = tallyShown(peripheral, "target") === "pcf8574";
+      const shownPin = parseInt(tallyShown(peripheral, viaPcf ? "pcf_pin" : "line"), 10);
+      const current = Number.isFinite(shownPin) && shownPin >= 0 ? (viaPcf ? "p:" : "g:") + shownPin : "none";
+      const self = { tally: true };
+      const owners = controlsPinOwners(self);
+      const fileGpio = parseInt(tallyRaw(peripheral, "line"), 10);
+      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null]);
+      const options = [["none", "None"], ...gpioPins.map((pin) => controlsPinOption(pin, "", owners.get(pin), "g:" + pin))];
+      if (controlsExpanderAttached() || current.startsWith("p:")) {      // PCF8574 pins only with an expander detected
+        const used = controlsPcfPinsInUse();
+        if (current.startsWith("p:"))
+          used.delete(shownPin);
+        [0, 1, 2, 3, 4, 5, 6, 7].filter((pin) => !used.has(pin)).forEach((pin) => options.push(["p:" + pin, "PCF8574 pin " + pin]));
+      }
+      const head = buildControlsRowHead("", "");
+      head.appendChild(buildControlsPinSelect(options, current, "Output pin", (value) => {
+        if (value.startsWith("g:") && !controlsClaimPin(parseInt(value.slice(2), 10), owners.get(parseInt(value.slice(2), 10)), self)) {
+          renderControls();                                  // No: the dropdown snaps back
+          return;
+        }
+        const gpio = value.startsWith("g:") ? value.slice(2) : "-1";
+        const pcf = value.startsWith("p:") ? value.slice(2) : "-1";
+        setTallyField(peripheral, "target", value.startsWith("p:") ? "pcf8574" : "gpio");
+        setTallyField(peripheral, "line", gpio);
+        setTallyField(peripheral, "pcf_pin", pcf);
+        syncTallyEnabled(peripheral);
+        renderHardware();
+        renderControls();
+      }));
+      element.appendChild(head);
+      const fields = document.createElement("div");
+      fields.className = "controls-output-fields";
+      const fn = document.createElement("select");
+      fn.className = "settings-select";
+      fn.setAttribute("aria-label", "Output function");
+      controlsOutputFunctions.forEach(([value, text]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        fn.appendChild(option);
+      });
+      fn.value = "tally";
+      fn.disabled = controlsState.saving;
+      fields.appendChild(fn);
+      const activeSetting = (peripheral.settings || []).find((candidate) => candidate.key === "active_high") || { value: "true", options: ["high", "low"] };
+      const activeEdit = controlsState.settingEdits.get(peripheral.section + "|active_high");
+      const active = document.createElement("select");
+      active.className = "settings-select";
+      active.setAttribute("aria-label", "Active");
+      [["true", (activeSetting.options || [])[0] || "high"], ["false", (activeSetting.options || [])[1] || "low"]].forEach(([value, text]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        active.appendChild(option);
+      });
+      active.value = activeEdit ? activeEdit.value : activeSetting.value;
+      active.disabled = controlsState.saving;
+      active.addEventListener("change", () => {
+        setTallyField(peripheral, "active_high", active.value);
+        renderHardware();
+        renderControls();
+      });
+      fields.appendChild(active);
+      const test = document.createElement("button");
+      test.className = "secondary-button preset-action";
+      test.type = "button";
+      test.textContent = "Test";
+      test.disabled = status.state !== "running";
+      test.addEventListener("click", async () => {
+        const result = await controlsCall({ cmd: "test_output", which: peripheral.id });
+        showToast(result.ok ? peripheral.title + ": test sent." : (result.error || "Could not test it."), !result.ok);
+      });
+      fields.appendChild(test);
+      element.appendChild(fields);
+      return element;
+    }
+
     function renderControls() {
       const host = document.getElementById("controlsRows");
       const model = controlsState.model;
@@ -15296,6 +16514,11 @@ std::string_view webControlPageHtml()
           return;                                           // Controls is for hardware that is there; Config lists the rest
         // One card per device: its heading, its groups of rows, and for the GPIO the add buttons.
         const card = buildControlsPeripheral(peripheral, false);
+        if (peripheral.id === "gpio_buttons") {              // display only: Core's label stays "GPIO buttons" on Config
+          const cardTitle = card.querySelector(".controls-row-title");
+          if (cardTitle)
+            cardTitle.textContent = "GPIO in";
+        }
         sources.forEach((source) => {
           const group = buildControlsGroup(controlsGroups.find((candidate) => candidate.source === source), sections);
           if (group)
@@ -15303,14 +16526,43 @@ std::string_view webControlPageHtml()
         });
         if (peripheral.id === "gpio_buttons")
           card.appendChild(buildControlsAddBar());
+        if (peripheral.id === "pcf8574") {
+          const pins = controlsPcfPinsInUse();
+          const note = document.createElement("div");
+          note.className = "controls-row-detail";
+          note.textContent = pins.size === 0 ? "No expander pin is used yet."
+            : "Pins in use: " + [...pins.entries()].sort((a, b) => a[0] - b[0]).map(([pin, by]) => "pin " + pin + " (" + by + ")").join(", ") + ".";
+          card.appendChild(note);
+        }
         host.appendChild(card);
       });
+      // The Tally LED has its own card, apart from the GPIO groups; it is shown whether or not it is switched on.
+      const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
+      if (tally) {
+        // GPIO out: a card of its own after the input cards; each output is a row: pin, function, active, Test.
+        const outCard = document.createElement("div");
+        outCard.className = "controls-peripheral";
+        outCard.dataset.search = "tally led light recording indicator output gpio out" + (controlsExpanderAttached() ? " pcf8574 expander" : "");
+        const outHead = document.createElement("div");
+        outHead.className = "controls-peripheral-head";
+        const outTitle = document.createElement("div");
+        outTitle.className = "controls-row-title";
+        outTitle.textContent = "GPIO out";
+        outHead.appendChild(outTitle);
+        const outPill = document.createElement("div");
+        outPill.className = "online-pill";
+        outPill.textContent = controlsStateNames[(tally.status || {}).state] || (tally.status || {}).state || "";
+        outHead.appendChild(outPill);
+        outCard.appendChild(outHead);
+        outCard.appendChild(buildControlsOutputRow(tally));
+        host.appendChild(outCard);
+      }
       renderControlsReview();
       updateControlsButtons();
     }
 
     function hardwareDirty() {
-      return controlsState.settingEdits.size > 0;
+      return [...controlsState.settingEdits.values()].some((edit) => edit.section !== controlsTallySection);
     }
 
     function updateHardwareButtons() {
@@ -15409,7 +16661,8 @@ std::string_view webControlPageHtml()
         }
         host.appendChild(buses);
       }
-      controlsState.peripherals.forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral, true)));
+      controlsState.peripherals.filter((peripheral) => peripheral.id !== controlsTallySection)
+        .forEach((peripheral) => host.appendChild(buildControlsPeripheral(peripheral, true)));
       updateHardwareButtons();
     }
 
@@ -15417,7 +16670,10 @@ std::string_view webControlPageHtml()
       if (!hardwareDirty() || controlsState.saving)
         return;
       const payload = { cmd: "set_controls", base: controlsState.revision, by: "webui" };
-      controlsState.settingEdits.forEach((edit) => { payload["set." + edit.section + "." + edit.key] = edit.value; });
+      controlsState.settingEdits.forEach((edit) => {
+        if (edit.section !== controlsTallySection)
+          payload["set." + edit.section + "." + edit.key] = edit.value;
+      });
       controlsState.saving = true;
       updateHardwareButtons();
       try {
@@ -15473,6 +16729,7 @@ std::string_view webControlPageHtml()
         controlsState.apply = controls.controls.apply || null;
         controlsChipLines.clear();
         controlsSeparateTurns.clear();
+        controlsReplaced.clear();
         controlsState.settingEdits = new Map();
         controlsState.edits = new Map();
         controlsState.added = [];
@@ -15523,9 +16780,13 @@ std::string_view webControlPageHtml()
       const unsets = new Set();   // "section.key"; a key that is also set (a gesture moved onto it) is only set
       const set = (section, key, value) => sets.set(section + "." + key, value);
       controlsState.edits.forEach((edit) => set(edit.section, edit.key, edit.value));
+      tallyEdits().forEach((edit) => set(edit.section, edit.key, edit.value));
       controlsState.removed.forEach((id) => {
         const row = rows.find((candidate) => candidate.source + "|" + (candidate.base || candidate.lines[0].key) === id);
-        (row ? row.keys || [] : []).forEach((key) => unsets.add(row.source + "." + key));
+        (row ? row.keys || [] : []).forEach((key) => {
+          unsets.add(row.source + "." + key);
+          sets.delete(row.source + "." + key);               // a pin edited before the row was removed
+        });
       });
       controlsState.buttons.forEach((push, id) => {
         if (controlsState.removed.has(id))
@@ -15632,11 +16893,52 @@ std::string_view webControlPageHtml()
       head.textContent = "Not saved yet:";
       box.appendChild(head);
       const list = document.createElement("ul");
-      Object.keys(payload).filter((key) => /^(set|unset)\./.test(key)).forEach((key) => {
+      // A GPIO-in row moved to other pins is one line ("GPIO 6 → GPIO 5: Eject media"), not an unset and some sets.
+      const hidden = new Set();
+      (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
+        const info = controlsPinsMoved(row) ? controlsRowPinInfo(row) : null;
+        if (!info)
+          return;
+        const push = controlsState.buttons.get(row.source + "|" + row.base);
+        if (row.source === "gpio_buttons" ? push.lines.every((line) => line.removed) : controlsState.removed.has(row.source + "|" + (row.base || row.lines[0].key)))
+          return;
+        const words = (pins) => row.source === "gpio_encoders"
+          ? "A " + pins[0] + ", B " + pins[1] + ", push " + (pins[2] === null ? "none" : pins[2]) : "GPIO " + pins.join(" + ");
+        let actions = [];
+        if (row.source === "gpio_buttons") {
+          push.lines.forEach((line) => {
+            hidden.add("unset." + row.source + "." + line.orig);
+            hidden.add("set." + row.source + "." + push.base + line.suffix);
+            const gesture = (row.gestures || []).find((candidate) => candidate.suffix === line.suffix);
+            actions.push({ label: gesture ? gesture.label : line.suffix, text: line.removed ? "removed" : controlsActionWords(line.value) });
+          });
+        } else {
+          info.keys.forEach((key) => hidden.add("set." + row.source + "." + key));
+          row.lines.forEach((line) => {
+            const edit = controlsState.edits.get(row.source + "|" + line.key);
+            actions.push({ label: line.label, text: controlsActionWords(edit ? edit.value : (line.raw || "none")) });
+          });
+        }
+        actions = actions.filter((action) => action.text !== "Nothing");
+        const item = document.createElement("li");
+        item.textContent = (row.source === "gpio_encoders" ? row.title + " · " : "") + words(info.orig) + " → " + words(info.now) + ": " +
+          (actions.length === 0 ? "no actions" : actions.length === 1 && actions[0].label === "Press" ? actions[0].text
+            : actions.map((action) => action.label + ": " + action.text).join("; "));
+        list.appendChild(item);
+      });
+      Object.keys(payload).filter((key) => /^(set|unset)\./.test(key) && !hidden.has(key)).forEach((key) => {
         const [op, section, ...rest] = key.split(".");
         const name = rest.join(".");
         if (op === "unset" && /_(pins|a|b|press_gpio)$/.test(name))
           return;
+        if (op === "unset" && controlsReplaced.has(section + "." + name)) {      // replaced by a pin picked elsewhere
+          if (controlsReplaced.get(section + "." + name)) {
+            const replaced = document.createElement("li");
+            replaced.textContent = controlsReplaced.get(section + "." + name);
+            list.appendChild(replaced);
+          }
+          return;
+        }
         const item = document.createElement("li");
         item.textContent = controlsDescribe(section, name) + (op === "unset" ? ": removed" : /_(pins|a|b|press_gpio)$/.test(name) ? ": GPIO " + payload[key]
           : name === "enabled" ? "" : " → " + controlsActionWords(payload[key]));
@@ -16207,6 +17509,7 @@ std::string_view webControlPageHtml()
         "cameraResolutionHeight",
         "cameraRecordingFormat",
         "cameraCdngCompression",
+        "cameraCdngLog",
         "cameraLossyDngRatio",
         "cameraProresProfile",
         "cameraProresColorProfile",
@@ -16227,7 +17530,7 @@ std::string_view webControlPageHtml()
         "cameraRawBitDepth",
         "recordingFrameEnabled", "recordingRedTimecodeEnabled",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
-        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio",
+        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio", "cameraFpsSpeedRampAfter",
       ];
 
       for (const key of allowedKeys) {
@@ -16937,6 +18240,16 @@ std::string_view webControlPageHtml()
       }
     }
 
+    async function requestStoragePreroll() {
+      try {
+        await sendCommand({ cmd: "storage_preroll" });
+        notePrerollRequested();
+        showToast("Storage pre-roll started", false);
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    }
+
     async function requestStandby() {
       try {
         const result = await sendCommand({cmd: state.snapshot && state.snapshot.state === "standby" ? "wake" : "enter_standby"});
@@ -17201,6 +18514,7 @@ std::string_view webControlPageHtml()
       document.getElementById("refreshMediaDrivesButton").addEventListener("click", () => fetchState(false));
       document.getElementById("mountMediaDriveButton").addEventListener("click", requestMountMediaDrive);
       document.getElementById("runMediaSpeedTestButton").addEventListener("click", requestMediaSpeedTest);
+      document.getElementById("storagePrerollButton").addEventListener("click", requestStoragePreroll);
       document.getElementById("restartSystemButton").addEventListener("click", requestRestartSystem);
       document.getElementById("powerOffSystemButton").addEventListener("click", requestPowerOffSystem);
       document.getElementById("saveCurrentPresetButton").addEventListener("click", saveCurrentPreset);
@@ -17251,12 +18565,18 @@ std::string_view webControlPageHtml()
       });
 
       document.querySelectorAll(".settings-nav-item").forEach((item) => {
-        item.addEventListener("click", () => setSettingsPanel(item.dataset.panel));
+        item.addEventListener("click", () => {
+          clearSettingsSearch();
+          setSettingsPanel(item.dataset.panel);
+        });
       });
+      document.getElementById("settingsSearchInput").addEventListener("input", applySettingsSearch);
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && state.mediaBrowserOpen)
           pbEscape();
+        else if (event.key === "Escape" && state.settingsOpen && settingsSearch.active)
+          clearSettingsSearch();
         else if (event.key === "Escape" && state.settingsOpen)
           setSettingsOpen(false);
       });

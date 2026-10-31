@@ -14,6 +14,7 @@
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
 #include "util/MediaProfile.hpp"
+#include "util/StoragePreroll.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <sys/types.h>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -108,11 +110,27 @@ private:
     void joinMediaSpeedTest();
     void runMediaWatcher();
     void stopMediaWatcher();
+    void runBufferEvents();
+    void runBufferSafetyStop();
+    // Storage pre-roll (CineMate's warm-up): requestStoragePreroll only requests; the thread runs it.
+    storagepreroll::GuardDecision storagePrerollGuard(storagepreroll::Trigger trigger) const;
+    void requestStoragePreroll(storagepreroll::Trigger trigger, std::optional<unsigned> seconds);
+    void runStoragePreroll();
+    void runStoragePrerollOnce(storagepreroll::Trigger trigger, unsigned seconds);
+    void stopStoragePreroll();
     MediaSnapshot mediaSnapshot() const;
     std::string mediaGateError() const;
     bool mediaGateBypassed() const;
     std::string playbackHoldReason(bool withYield = true) const;   // "" or recording, writing, media_test, standby, media
     void applyMediaTuning(const MediaProfile &profile, bool apply);
+    // Trim of the recording drive (root helper apertar-media-trim). trimMedia() only requests; one worker thread runs it.
+    void trimMedia(const std::string &reason);
+    void trimMediaAfterDelete(uint64_t freeBefore);
+    void runMediaTrim();
+    void stopMediaTrim();
+    std::string mediaTrimStateJson() const;
+    bool mediaTrimMayRun() const;
+    void waitForMediaTrim(const std::string &commandName, int blockMs);
     MediaProfile mediaProfile() const;
     void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
@@ -137,6 +155,8 @@ private:
     TriggerOutput triggerOutput_;
     AudioRecordingSession soundRecorder_;
     std::atomic<bool> soundRecordingActive_{false};
+    std::atomic<bool> storagePrerollFormatRunning_{false};   // a format runs; the watcher's mount change is not an insert
+    std::atomic<int64_t> storagePrerollFormatDoneMs_{0};     // trimNowMs() when the last format ended (0 = none)
     std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
     std::atomic<size_t> controlsErrors_{0};        // T37: what the validator found in the hardware file, shown in state
     std::atomic<size_t> controlsWarnings_{0};
@@ -228,6 +248,59 @@ private:
     MediaSnapshot mediaSnapshot_;
     bool mediaSnapshotValid_ = false;
     MediaProfile mediaProfile_;
+
+    // The "buffer" event thread (runBufferEvents): own thread, no controller lock; stopped in stopMediaWatcher.
+    std::thread bufferEventThread_;
+    std::atomic<bool> bufferEventsRunning_{false};
+    std::mutex bufferEventMutex_;
+    std::condition_variable bufferEventCv_;
+
+    // The buffer safety stop thread (runBufferSafetyStop): started and joined with bufferEventThread_. The write queue's
+    // hook only sets these atomics and notifies the cv; the thread performs the record_stop (may take the command path).
+    std::thread bufferSafetyStopThread_;
+    std::atomic<bool> bufferSafetyStopRunning_{false};
+    std::atomic<bool> bufferSafetyStopPending_{false};
+    std::atomic<uint64_t> bufferSafetyStopUsed_{0};
+    std::atomic<uint64_t> bufferSafetyStopCapacity_{0};
+    std::atomic<bool> bufferSafetyStopRam_{false};
+    std::mutex bufferSafetyStopMutex_;
+    std::condition_variable bufferSafetyStopCv_;
+
+    // The storage pre-roll thread (runStoragePreroll): requests coalesce under the mutex; the stop flag ends a running
+    // pre-roll early (record_stop, shutdown) and its clip is still deleted.
+    std::thread storagePrerollThread_;
+    std::atomic<bool> storagePrerollRunning_{false};
+    std::atomic<bool> storagePrerollStop_{false};
+    std::mutex storagePrerollMutex_;
+    std::condition_variable storagePrerollCv_;
+    bool storagePrerollPending_ = false;
+    bool storagePrerollManual_ = false;
+    storagepreroll::Trigger storagePrerollTrigger_ = storagepreroll::Trigger::Manual;
+    unsigned storagePrerollSeconds_ = 2;
+    int storagePrerollDelayMs_ = 0;
+
+    // Media trim worker. mediaTrimMutex_ is only ever held for short state changes, never while the helper runs and
+    // never together with commandMutex_ in the worker, so handleCommand may wait on it while holding commandMutex_.
+    std::thread mediaTrimThread_;
+    std::atomic<bool> mediaTrimWorkerRunning_{false};
+    mutable std::mutex mediaTrimMutex_;
+    std::condition_variable mediaTrimCv_;
+    bool mediaTrimPending_ = false;
+    std::string mediaTrimReason_;
+    bool mediaTrimBusy_ = false;                    // the helper process is running
+    bool mediaTrimWorking_ = false;                 // a request is being served (queued for an idle medium, or running)
+    std::atomic<pid_t> mediaTrimPid_{0};
+    std::atomic<bool> mediaTrimKilled_{false};
+    std::atomic<int64_t> mediaTrimBlockUntilMs_{0}; // a take or media action began: start no new trim until then
+    bool mediaTrimUnsupported_ = false;             // exit 3, remembered until the mount id changes
+    int mediaTrimUnsupportedMountId_ = -1;
+    int mediaTrimFailures_ = 0;
+    int mediaTrimBackoffRounds_ = 0;
+    int64_t mediaTrimBackoffUntilMs_ = 0;
+    std::string mediaTrimLastResult_ = "none";
+    uint64_t mediaTrimLastBytes_ = 0;
+    uint64_t mediaTrimLastMs_ = 0;
+    int64_t mediaTrimLastUnix_ = 0;
 };
 
 } // namespace apertar

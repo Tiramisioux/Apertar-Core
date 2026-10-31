@@ -1,0 +1,90 @@
+#!/bin/sh
+# apertar-media-trim <mountpoint>
+#
+# Root helper that runs fstrim on the recording drive. Called by apertar-core
+# (as `sudo -n /usr/local/libexec/apertar-media-trim /media/RAW`) after a big
+# delete and when the drive is mounted. An exFAT NVMe stays
+# clean for about 0.9 TB of writes after a trim, then stalls for seconds.
+#
+# The sudoers rule pins only this path, so every argument is validated here:
+# exactly one, under /media/, a real mount point, on a device that can discard.
+#
+# Exit codes: 0 trimmed, 1 fstrim failed, 2 bad argument or not a mount point,
+#             3 discard not supported, 4 fstrim hit the 20 s limit.
+# Stdout on success: one line, the one fstrim prints, e.g.
+#   /media/RAW: 917.1 GiB (984728076288 bytes) trimmed
+set -u
+
+log() { echo "apertar-media-trim: $*" >&2; }
+
+if [ $# -ne 1 ]; then
+    log "usage: apertar-media-trim <mountpoint>"
+    exit 2
+fi
+MNT=$1
+
+case "$MNT" in
+    /media/*) ;;
+    *) log "bad mount point (must be under /media/)"; exit 2 ;;
+esac
+case "$MNT" in
+    /media/) log "bad mount point (/media/ itself)"; exit 2 ;;
+    *..*) log "bad mount point (contains ..)"; exit 2 ;;
+    *[!A-Za-z0-9._/-]*) log "bad mount point (characters outside A-Za-z0-9._/-)"; exit 2 ;;
+esac
+
+for tool in mountpoint findmnt readlink; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        log "$tool not found"
+        exit 2
+    fi
+done
+
+# a symlink under /media/ must not lead the trim to some other filesystem
+MNT=${MNT%/}
+if [ "$(readlink -f "$MNT")" != "$MNT" ]; then
+    log "$MNT: not a canonical path (symlink?)"
+    exit 2
+fi
+
+if ! mountpoint -q "$MNT"; then
+    log "$MNT: not a mount point"
+    exit 2
+fi
+SRC=$(findmnt -n -o SOURCE --target "$MNT" 2>/dev/null | head -n 1)
+if [ -z "$SRC" ]; then
+    log "$MNT: no backing device"
+    exit 2
+fi
+
+# whole-disk name: nvme0n1p2 -> nvme0n1, sda1 -> sda, mmcblk0p1 -> mmcblk0
+DEV=$(basename "$(readlink -f "$SRC")")
+if [ -e "/sys/class/block/$DEV/partition" ]; then
+    DISK=$(basename "$(readlink -f "/sys/class/block/$DEV/..")")
+else
+    DISK=$DEV
+fi
+DISCARD=$(cat "/sys/block/$DISK/queue/discard_max_bytes" 2>/dev/null || echo 0)
+case "$DISCARD" in
+    ""|0|*[!0-9]*) echo "apertar-media-trim: $MNT: discard not supported"; exit 3 ;;
+esac
+
+OUT=$(mktemp 2>/dev/null) || { log "$MNT: mktemp failed"; exit 1; }
+trap 'rm -f "$OUT"' EXIT
+if command -v timeout >/dev/null 2>&1; then
+    timeout 20 /usr/sbin/fstrim -v "$MNT" >"$OUT" 2>&1
+else
+    /usr/sbin/fstrim -v "$MNT" >"$OUT" 2>&1
+fi
+RC=$?
+LINE=$(tr '\n' ' ' <"$OUT" | sed 's/ *$//')
+if [ "$RC" -eq 124 ]; then
+    log "$MNT: fstrim timed out after 20 s"
+    exit 4
+fi
+if [ "$RC" -ne 0 ]; then
+    log "$MNT: fstrim failed ($RC): $LINE"
+    exit 1
+fi
+echo "$LINE"
+exit 0

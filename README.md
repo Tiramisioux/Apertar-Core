@@ -266,6 +266,18 @@ Names use the capture date and an incrementing counter. Keep a clip's associated
 
 Settings are saved separately from recordings. Core's camera settings normally live in `~/.config/apertar-core/camera_settings.conf`; shared UI settings and presets are managed by the Apertar application.
 
+### Trim the recording drive
+
+After about one card of writing without a trim, the NVMe stalls for seconds. Core trims the recording drive after clips are deleted (when a delete frees at least 1 GiB) and when the drive is mounted, through a small root helper; `APERTAR_MEDIA_TRIM=0` turns it off.
+
+```bash
+sudo install -m 0755 -o root -g root ~/ApertarCore/scripts/apertar-media-trim /usr/local/libexec/apertar-media-trim
+sudo install -m 0440 ~/ApertarCore/config/apertar-media-trim.sudoers /etc/sudoers.d/apertar-media-trim
+sudo visudo -cf /etc/sudoers.d/apertar-media-trim
+# proof: prints "... trimmed" and asks for no password
+sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
+```
+
 ## For Developers
 
 ApertarCore is the source of truth for camera and capture state. Native UI commands, WebUI requests and hardware actions reach the same controller and busy-state checks.

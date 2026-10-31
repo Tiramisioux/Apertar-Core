@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cdng/CdngEncoder.hpp"
+#include "cdng/LogCurve.hpp"
 #include <apertar/core/Types.hpp>
 
 #include <cstdint>
@@ -20,6 +21,13 @@ public:
 
     void setRatio(LossyDngRatio ratio);
     void invalidateTables();
+    // CineMate Log for this take: replaces the square-root companding. Both pointers must outlive the
+    // take (null = square root). Applies only to frames whose sample depth is params->sourceBits.
+    void setCdngLog(const cdnglog::Params *params, const cdnglog::Tables *tables)
+    {
+        log_ = params;
+        logTables_ = tables;
+    }
     void writeDngFile(const std::string &path, const RawFrameView &frame,
                       const CdngEncoder::Metadata &metadata);
     static void drainWrites();
@@ -39,6 +47,9 @@ private:
     int cachedBlack_ = -1;
     int cachedLutBits_ = 0;
     bool cachedGradation_ = false;
+    const cdnglog::Params *log_ = nullptr;
+    const cdnglog::Tables *logTables_ = nullptr;
+    const cdnglog::Params *cachedLog_ = nullptr;
     std::vector<uint16_t> rowScratch_;
     std::vector<uint16_t> unpacked_;
     std::vector<uint8_t> unpacked8_;
