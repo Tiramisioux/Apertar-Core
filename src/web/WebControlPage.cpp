@@ -3104,6 +3104,13 @@ std::string_view webControlPageHtml()
       user-select: none;
     }
 
+    /* Boot Config: a line the card's controls or the fan mode set (italic, as other system values) */
+    .config-gutter .managed,
+    .config-diff .diff-managed {
+      color: var(--text);
+      font-style: italic;
+    }
+
     .config-editor-wrap .config-editor {
       border-radius: 0 18px 18px 0;
     }
@@ -3134,6 +3141,29 @@ std::string_view webControlPageHtml()
     .config-diff .diff-add { color: #86efac; }
     .config-diff .diff-del { color: #fca5a5; }
     .config-diff .diff-gap { color: var(--muted); }
+    .config-diff .diff-note {
+      margin: 8px 0 0;
+      font-family: inherit;
+      white-space: normal;
+      color: #fcd34d;
+    }
+
+    .config-diff .diff-info {
+      margin: 6px 0 0;
+      font-family: inherit;
+      white-space: normal;
+      color: var(--muted);
+    }
+
+    .config-diff .diff-confirm {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin: 8px 0 0;
+      font-family: inherit;
+      white-space: normal;
+    }
+
     .config-diff .diff-actions {
       display: flex;
       gap: 10px;
@@ -5736,6 +5766,99 @@ std::string_view webControlPageHtml()
                   <option value="Full Blast">Full Blast</option>
                 </select>
                 <span class="subtle-note" id="settingsFanModeNote">Fan mode control is available when supported by the board.</span>
+              </div>
+            </div>
+
+            <div class="settings-card" id="settingsBootConfigCard" data-search="boot config config.txt firmware sensor camera overlay dtoverlay imx477 imx577 imx585 imx294 mono link frequency csi lane rp1 overclock clock i2c i2s spi audio dpi display waveshare hyperpixel hdmi reboot">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Boot Config</h3>
+                  <p class="settings-card-copy">What the Pi loads at power-on, from /boot/firmware/config.txt: the sensor on each camera connector, the buses, the RP1 clock and the display. Apertar comments and uncomments the lines already in the file, the way its own comments say; every other line stays as it is. A change takes effect after a reboot.</p>
+                </div>
+                <div class="online-pill" id="bootConfigStatePill">Not Loaded</div>
+              </div>
+
+              <div class="config-issues" id="bootConfigMessage" hidden></div>
+              <div class="config-issues info" id="bootConfigWarnings" hidden></div>
+
+              <div class="settings-field-grid">
+                <div class="field-stack" id="bootConfigCam0Field">
+                  <label class="input-label" for="bootConfigCam0Select">Camera 0 sensor</label>
+                  <select class="settings-select" id="bootConfigCam0Select"></select>
+                  <span class="subtle-note" id="bootConfigCam0Note"></span>
+                </div>
+                <div class="field-stack hidden" id="bootConfigCam0LinkField">
+                  <label class="input-label" for="bootConfigCam0LinkSelect">Camera 0 link frequency</label>
+                  <select class="settings-select" id="bootConfigCam0LinkSelect"></select>
+                  <span class="subtle-note" id="bootConfigCam0LinkNote">CSI-2 lane rate: sets the frame-rate ceiling.</span>
+                </div>
+                <div class="field-stack" id="bootConfigCam1Field">
+                  <label class="input-label" for="bootConfigCam1Select">Camera 1 sensor</label>
+                  <select class="settings-select" id="bootConfigCam1Select"></select>
+                  <span class="subtle-note" id="bootConfigCam1Note"></span>
+                </div>
+                <div class="field-stack hidden" id="bootConfigCam1LinkField">
+                  <label class="input-label" for="bootConfigCam1LinkSelect">Camera 1 link frequency</label>
+                  <select class="settings-select" id="bootConfigCam1LinkSelect"></select>
+                  <span class="subtle-note" id="bootConfigCam1LinkNote">CSI-2 lane rate: sets the frame-rate ceiling.</span>
+                </div>
+                <div class="field-stack" id="bootConfigRp1Field">
+                  <span class="input-label">RP1 overclock</span>
+                  <div class="pill-grid two-col" id="bootConfigRp1Options"></div>
+                  <span class="subtle-note" id="bootConfigRp1Note">dtoverlay=rp1-clk-333mhz: raises the RP1 clock so higher sensor frame rates get through.</span>
+                </div>
+                <div class="field-stack" id="bootConfigDisplayField">
+                  <label class="input-label" for="bootConfigDisplaySelect">Display</label>
+                  <select class="settings-select" id="bootConfigDisplaySelect"></select>
+                  <span class="subtle-note" id="bootConfigDisplayNote">A DPI panel takes GPIO 0-27, I2C bus 1 included.</span>
+                </div>
+                <div class="field-stack">
+                  <span class="input-label">I&#178;C bus (GPIO 2/3)</span>
+                  <div class="pill-grid two-col" id="bootConfigI2cOptions"></div>
+                  <span class="subtle-note">The CFE hat, NeoRotary 4, PCF8574 and INA219 use it.</span>
+                </div>
+                <div class="field-stack">
+                  <span class="input-label">I&#178;S bus</span>
+                  <div class="pill-grid two-col" id="bootConfigI2sOptions"></div>
+                  <span class="subtle-note">Some audio HATs need it instead of USB.</span>
+                </div>
+                <div class="field-stack">
+                  <span class="input-label">SPI bus</span>
+                  <div class="pill-grid two-col" id="bootConfigSpiOptions"></div>
+                  <span class="subtle-note">For SPI accessories: displays, some sensors.</span>
+                </div>
+                <div class="field-stack">
+                  <span class="input-label">Onboard audio</span>
+                  <div class="pill-grid two-col" id="bootConfigAudioOptions"></div>
+                  <span class="subtle-note">The Pi's own audio output. Off is fine with a USB microphone only.</span>
+                </div>
+              </div>
+
+              <div class="config-diff" id="bootConfigDiff" hidden></div>
+
+              <div class="settings-action-row">
+                <button class="secondary-button" id="reloadBootConfigButton" type="button">Reload</button>
+                <button class="secondary-button" id="viewBootConfigButton" type="button">View file</button>
+                <button class="secondary-button" id="editBootConfigButton" type="button">Edit file</button>
+                <button class="secondary-button" id="downloadBootConfigButton" type="button">Download</button>
+                <button class="secondary-button" id="uploadBootConfigButton" type="button">Upload</button>
+                <input id="bootConfigUploadInput" type="file" accept=".txt,text/plain" style="display:none;" />
+                <button class="primary-button" id="saveBootConfigButton" type="button" disabled>Save &amp; Reboot</button>
+                <span class="subtle-note" id="bootConfigFootNote">Save shows the lines that change first. The previous file is kept as config.txt.apertar.bak.</span>
+              </div>
+              <div class="config-diff" id="bootConfigFileView" hidden></div>
+              <div class="field-stack hidden" id="bootConfigEditField">
+                <span class="input-label">config.txt as text</span>
+                <div class="config-editor-wrap">
+                  <pre class="config-gutter" id="bootConfigGutter" aria-hidden="true">1</pre>
+                  <textarea class="settings-input config-editor" id="bootConfigEditor" spellcheck="false" wrap="off" aria-label="config.txt"></textarea>
+                </div>
+                <span class="subtle-note" id="bootConfigEditorLegend"></span>
+                <span class="subtle-note">Use This Text puts it on the card; Save then shows every line that changes before it writes.</span>
+                <div class="settings-action-row">
+                  <button class="primary-button" id="useBootConfigTextButton" type="button">Use This Text</button>
+                  <button class="secondary-button" id="closeBootConfigEditorButton" type="button">Close</button>
+                </div>
               </div>
             </div>
 
@@ -9661,6 +9784,7 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsOverlay").classList.toggle("hidden", !state.settingsOpen);
       if (state.settingsOpen && state.activeSettingsPanel === "audio") void refreshAudioCaptureCapabilities();
       if (state.settingsOpen && state.activeSettingsPanel === "record") void fetchModeLadder(false);
+      if (state.settingsOpen && state.activeSettingsPanel === "system" && !bootConfig.payload && !bootConfigBusy()) void loadBootConfig(true);
     }
 
     function setMediaBrowserOpen(open, fromHistory) {
@@ -9712,6 +9836,8 @@ std::string_view webControlPageHtml()
 
       if (normalized === "presets")
         fetchPresetLibrary(true);
+      if (normalized === "system" && !bootConfigDirty() && !bootConfigBusy())
+        void loadBootConfig(true);
       if (normalized === "controls" && !controlsDirty())
         void loadControls(true);
       if (normalized === "config" && !state.configDirty)
@@ -17450,7 +17576,7 @@ std::string_view webControlPageHtml()
         if (controlsState.dpiLines.length > 0) {
           const dpi = document.createElement("div");
           dpi.className = "controls-scan";
-          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Only you edit config.txt.";
+          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot.";
           buses.appendChild(dpi);
         }
         host.appendChild(buses);
@@ -17993,14 +18119,34 @@ std::string_view webControlPageHtml()
 
     // T43: line numbers beside the editor, scrolled with it.
     function updateConfigGutter() {
-      const editor = document.getElementById("settingsConfigEditor");
-      const gutter = document.getElementById("settingsConfigGutter");
+      updateEditorGutter("settingsConfigEditor", "settingsConfigGutter");
+    }
+
+    // marks: optional Map line -> title; those numbers are drawn as .managed
+    function updateEditorGutter(editorId, gutterId, marks) {
+      const editor = document.getElementById(editorId);
+      const gutter = document.getElementById(gutterId);
       if (!editor || !gutter)
         return;
       const count = editor.value.split("\n").length;
-      if (gutter.dataset.count !== String(count)) {
-        gutter.textContent = Array.from({ length: count }, (_, index) => String(index + 1)).join("\n");
-        gutter.dataset.count = String(count);
+      const key = count + (marks ? ":" + Array.from(marks.keys()).join(",") : "");
+      if (gutter.dataset.count !== key) {
+        gutter.textContent = "";
+        for (let line = 1; line <= count; ++line) {
+          const title = marks && marks.get(line);
+          if (title) {
+            const span = document.createElement("span");
+            span.className = "managed";
+            span.title = title;
+            span.textContent = String(line);
+            gutter.appendChild(span);
+          } else {
+            gutter.appendChild(document.createTextNode(String(line)));
+          }
+          if (line < count)
+            gutter.appendChild(document.createTextNode("\n"));
+        }
+        gutter.dataset.count = key;
       }
       gutter.scrollTop = editor.scrollTop;
     }
@@ -19081,6 +19227,747 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // ---- Boot Config card (System pane): /boot/firmware/config.txt through /api/boot-config ----------------------
+    // Core reads the file into a state (sensor per connector, link frequency, buses, RP1 clock, DPI display) and edits
+    // the lines already there; this card shows that state, asks Core what a change would do (dry_run) before saving,
+    // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
+    const bootConfig = {
+      payload: null,          // the last GET: path, revision, state, drm, text, helper
+      form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
+      loading: false,
+      saving: false,
+      waiting: false,
+      savedPendingReboot: false,
+      review: null,           // the last dry run shown in the diff box
+      text: null,             // the file as edited by hand (Edit file); Save sends it and the choices go on top
+      previewState: null,     // the state of the last text shown (View file, Edit file)
+      editorMarks: null,      // Edit file: Map line -> control, re-read while typing
+      editorTimer: 0,
+    };
+    const BOOT_CONFIG_TOGGLES = [["i2c", "bootConfigI2cOptions"], ["i2s", "bootConfigI2sOptions"], ["spi", "bootConfigSpiOptions"], ["audio", "bootConfigAudioOptions"]];
+    // what Core's state.managed names: the control that sets that line
+    const BOOT_CONFIG_MANAGED = { cam0: "Camera 0 sensor", cam1: "Camera 1 sensor", i2c: "I²C", i2s: "I²S", spi: "SPI",
+      audio: "Onboard audio", rp1: "RP1 overclock", display: "Display", camera_auto_detect: "camera detection (kept at 0)",
+      fan: "Fan mode (Thermal card)" };
+
+    function bootConfigManagedMap(bootState) {
+      const marks = new Map();
+      ((bootState && bootState.managed) || []).forEach((entry) => marks.set(entry.line, BOOT_CONFIG_MANAGED[entry.what] || entry.what));
+      return marks;
+    }
+
+    // "30 I²C · 31 I²S · 41-43 Camera 0 sensor": runs of lines set by the same control
+    function bootConfigManagedSummary(marks) {
+      const runs = [];
+      Array.from(marks.keys()).sort((a, b) => a - b).forEach((line) => {
+        const last = runs[runs.length - 1];
+        if (last && last.to === line - 1 && last.title === marks.get(line))
+          last.to = line;
+        else
+          runs.push({ from: line, to: line, title: marks.get(line) });
+      });
+      return runs.map((run) => (run.from === run.to ? run.from : run.from + "-" + run.to) + " " + run.title).join(" · ");
+    }
+
+    // Where an operator's own line goes: the end of the file when it is in [all], else under a new [all] there.
+    function bootConfigOwnLinesHint(text, bootState) {
+      let last = "";
+      text.split("\n").forEach((line) => {
+        const match = line.match(/^\s*\[([^\]]*)\]/);
+        if (match)
+          last = match[1].trim().toLowerCase();
+      });
+      const board = (bootState && bootState.board && bootState.board.section) || "pi5";
+      const end = last === "all" ? "at the end of the file (it is in [all], so every Pi reads it)"
+        : "at the end of the file under an [all] line (the end is in [" + last + "] now)";
+      return "Your own lines: any line not in italics is yours and Save keeps it as typed. Add new ones " + end
+        + ", or in the [" + board + "] section for this kind of Pi only.";
+    }
+
+    function bootConfigFormFrom(bootState) {
+      const form = { sensors: {}, links: {}, toggles: {}, rp1: !!(bootState.rp1 && bootState.rp1.on),
+        display: (bootState.display && bootState.display.value) || "hdmi" };
+      ["cam0", "cam1"].forEach((port) => {
+        const camera = (bootState.cameras && bootState.cameras[port]) || {};
+        form.sensors[port] = camera.sensor || "none";
+        form.links[port] = camera.link_frequency === undefined ? null : camera.link_frequency;
+      });
+      BOOT_CONFIG_TOGGLES.forEach(([key]) => {
+        form.toggles[key] = !!(bootState.toggles && bootState.toggles[key] && bootState.toggles[key].on);
+      });
+      return form;
+    }
+
+    function bootConfigState() {
+      return bootConfig.payload ? bootConfig.payload.state : null;
+    }
+
+    function bootConfigPorts() {
+      const bootState = bootConfigState();
+      return bootState && bootState.board && Array.isArray(bootState.board.ports) ? bootState.board.ports : ["cam0", "cam1"];
+    }
+
+    function bootConfigSensorInfo(key) {
+      const bootState = bootConfigState();
+      return bootState && Array.isArray(bootState.sensors) ? bootState.sensors.find((sensor) => sensor.key === key) || null : null;
+    }
+
+    function bootConfigRp1Available() {
+      const bootState = bootConfigState();
+      return !!(bootState && bootState.rp1 && bootState.rp1.available);
+    }
+
+    // The link frequency a form means for a port: the number, or the sensor's default when it says none.
+    function bootConfigEffectiveLink(form, port) {
+      const info = bootConfigSensorInfo(form.sensors[port]);
+      if (!info || !info.link)
+        return null;
+      return form.links[port] === null || form.links[port] === undefined ? info.link.default_hz : Number(form.links[port]);
+    }
+
+    function bootConfigDirty() {
+      if (!bootConfig.payload || !bootConfig.form)
+        return false;
+      if (bootConfig.text !== null && bootConfig.text !== bootConfig.payload.text)
+        return true;
+      const loaded = bootConfigFormFrom(bootConfig.payload.state);
+      const form = bootConfig.form;
+      for (const port of bootConfigPorts()) {
+        if (form.sensors[port] !== loaded.sensors[port] || bootConfigEffectiveLink(form, port) !== bootConfigEffectiveLink(loaded, port))
+          return true;
+      }
+      if (BOOT_CONFIG_TOGGLES.some(([key]) => form.toggles[key] !== loaded.toggles[key]))
+        return true;
+      return (bootConfigRp1Available() && form.rp1 !== loaded.rp1) || form.display !== loaded.display;
+    }
+
+    function bootConfigBusy() {
+      return bootConfig.loading || bootConfig.saving || bootConfig.waiting;
+    }
+
+    function bootConfigRequestBody(extra) {
+      const form = bootConfig.form;
+      const body = {};
+      for (const port of bootConfigPorts()) {
+        body[port + "_sensor"] = form.sensors[port];
+        const info = bootConfigSensorInfo(form.sensors[port]);
+        if (info && info.link)
+          body[port + "_link_frequency"] = bootConfigEffectiveLink(form, port);
+      }
+      BOOT_CONFIG_TOGGLES.forEach(([key]) => { body[key] = form.toggles[key]; });
+      if (bootConfigRp1Available())
+        body.rp1 = form.rp1;
+      body.display = form.display;
+      if (bootConfig.text !== null)
+        body.text = bootConfig.text;
+      return Object.assign(body, extra || {});
+    }
+
+    async function bootConfigPost(body, revision) {
+      const headers = { "Content-Type": "application/json" };
+      if (revision)
+        headers["X-Apertar-Revision"] = revision;
+      try {
+        const response = await fetch("/api/boot-config", { method: "POST", headers, body: JSON.stringify(body), cache: "no-store" });
+        const result = await response.json();
+        result.httpStatus = response.status;
+        return result;
+      } catch (error) {
+        return { ok: false, error: (error && error.message) || "Could not reach the camera." };
+      }
+    }
+
+    function showBootConfigMessage(text, info) {
+      const box = document.getElementById("bootConfigMessage");
+      if (!box)
+        return;
+      box.textContent = text || "";
+      box.classList.toggle("info", !!info);
+      box.hidden = !text;
+    }
+
+    function hideBootConfigPanels() {
+      ["bootConfigDiff", "bootConfigFileView"].forEach((id) => {
+        const box = document.getElementById(id);
+        if (box) {
+          box.hidden = true;
+          box.textContent = "";
+        }
+      });
+      bootConfig.review = null;
+    }
+
+    function bootConfigOption(select, value, label, disabled) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.disabled = !!disabled;
+      select.appendChild(option);
+    }
+
+    function megahertzText(hz) {
+      const mhz = Number(hz) / 1000000;
+      return (Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1)) + " MHz";
+    }
+
+    function renderBootConfigPort(port, bootState, loaded, editable) {
+      const prefix = port === "cam0" ? "bootConfigCam0" : "bootConfigCam1";
+      const ports = bootConfigPorts();
+      const present = ports.includes(port);
+      const field = document.getElementById(prefix + "Field");
+      const linkField = document.getElementById(prefix + "LinkField");
+      field.classList.toggle("hidden", !present);
+      if (!present) {
+        linkField.classList.add("hidden");
+        return;
+      }
+      const single = ports.length === 1;
+      const label = field.querySelector("label");
+      if (label)
+        label.textContent = single ? "Camera sensor" : (port === "cam0" ? "Camera 0 sensor" : "Camera 1 sensor");
+
+      const form = bootConfig.form;
+      const current = form.sensors[port];
+      const select = document.getElementById(prefix + "Select");
+      select.innerHTML = "";
+      if (port !== "cam0")
+        bootConfigOption(select, "none", "None connected");
+      (bootState.sensors || []).forEach((sensor) => {
+        const missing = sensor.installed === false;
+        bootConfigOption(select, sensor.key, sensor.label + (missing ? " (driver not installed)" : ""), missing && sensor.key !== loaded.sensors[port]);
+      });
+      if (port === "cam0")
+        bootConfigOption(select, "none", "None connected");
+      if (current !== "none" && !bootConfigSensorInfo(current))
+        bootConfigOption(select, current, current + " (as in config.txt)");
+      select.value = current;
+      select.disabled = !editable || bootConfigBusy();
+
+      const camera = (bootState.cameras && bootState.cameras[port]) || {};
+      const note = document.getElementById(prefix + "Note");
+      if (current === loaded.sensors[port])
+        note.textContent = camera.line ? "config.txt line " + camera.line + "." : "No sensor line is active for this connector.";
+      else
+        note.textContent = current === "none" ? "Save comments its line out." : "Save turns this sensor's line on.";
+
+      const info = bootConfigSensorInfo(current);
+      linkField.classList.toggle("hidden", !(info && info.link));
+      if (!(info && info.link))
+        return;
+      const linkSelect = document.getElementById(prefix + "LinkSelect");
+      linkSelect.innerHTML = "";
+      const offered = new Set();
+      info.link.options.forEach((option) => {
+        bootConfigOption(linkSelect, String(option.hz), option.label);
+        offered.add(option.hz);
+      });
+      const kept = [];
+      if (current === loaded.sensors[port] && camera.link_frequency)
+        kept.push(camera.link_frequency);
+      const candidates = bootState.candidates && bootState.candidates[port];
+      if (candidates && candidates[current])
+        kept.push(candidates[current]);
+      kept.filter((hz, index) => !offered.has(hz) && kept.indexOf(hz) === index)
+        .forEach((hz) => bootConfigOption(linkSelect, String(hz), megahertzText(hz) + " (as in config.txt)"));
+      const effective = bootConfigEffectiveLink(form, port);
+      linkSelect.value = String(effective);
+      const pi5 = bootState.board && bootState.board.family === "pi5";
+      const rp1Gates = pi5 && bootConfigRp1Available();
+      linkSelect.disabled = !editable || bootConfigBusy() || (rp1Gates && !form.rp1);
+      const linkNote = document.getElementById(prefix + "LinkNote");
+      if (rp1Gates && !form.rp1)
+        linkNote.textContent = effective !== info.link.default_hz
+          ? "Above the default needs the RP1 overclock: without it the RP1 caps out near 43.8 fps at 4K whatever the sensor sends."
+          : "Turn the RP1 overclock on to pick a faster link.";
+      else
+        linkNote.textContent = "CSI-2 lane rate: sets the frame-rate ceiling.";
+    }
+
+    function renderBootConfig() {
+      const card = document.getElementById("settingsBootConfigCard");
+      if (!card)
+        return;
+      const payload = bootConfig.payload;
+      const bootState = payload ? payload.state : null;
+      const editable = !!(bootState && bootState.editable);
+      const dirty = bootConfigDirty();
+      setText("bootConfigStatePill", bootConfig.loading ? "Loading" : bootConfig.saving ? "Saving" : bootConfig.waiting ? "Rebooting"
+        : !payload ? "Not Loaded" : !editable ? "Read Only" : dirty ? "Unsaved" : bootConfig.savedPendingReboot ? "Reboot to Apply" : "Ready");
+      document.getElementById("saveBootConfigButton").disabled = !editable || !dirty || bootConfigBusy();
+      ["reloadBootConfigButton", "viewBootConfigButton", "editBootConfigButton", "downloadBootConfigButton", "uploadBootConfigButton",
+        "useBootConfigTextButton"].forEach((id) => {
+        document.getElementById(id).disabled = bootConfigBusy();
+      });
+      if (!payload || !bootConfig.form || !bootState)
+        return;
+
+      const notes = [];
+      if (bootState.board && !bootState.board.detected)
+        notes.push("No Raspberry Pi device tree here: the card reads config.txt as a Pi 5 would.");
+      (bootState.warnings || []).forEach((warning) => notes.push(warning));
+      if (bootState.camera_auto_detect === 1)
+        notes.push("camera_auto_detect=1: Save sets it to 0, because the file names its sensors.");
+      const warnings = document.getElementById("bootConfigWarnings");
+      warnings.textContent = notes.join(" ");
+      warnings.hidden = notes.length === 0;
+      if (!editable)
+        showBootConfigMessage(bootState.problem || "config.txt cannot be edited here.");
+
+      const loaded = bootConfigFormFrom(bootState);
+      renderBootConfigPort("cam0", bootState, loaded, editable);
+      renderBootConfigPort("cam1", bootState, loaded, editable);
+
+      const form = bootConfig.form;
+      const onOff = (on) => (on ? "On" : "Off");
+      const pill = (containerId, on, onChange, disabled) => {
+        buildOptionButtons(containerId, [{ value: "Off", enabled: !disabled }, { value: "On", enabled: !disabled }], onOff(on), (value) => onChange(value === "On"));
+      };
+      const locked = !editable || bootConfigBusy();
+      document.getElementById("bootConfigRp1Field").classList.toggle("hidden", !bootConfigRp1Available());
+      pill("bootConfigRp1Options", form.rp1, (on) => { form.rp1 = on; bootConfigChanged(); }, locked);
+      const rp1 = bootState.rp1 || {};
+      setText("bootConfigRp1Note", "dtoverlay=" + (rp1.overlay || "rp1-clk-333mhz") + (rp1.line ? " (line " + rp1.line + ")" : "")
+        + ": raises the RP1 clock so higher sensor frame rates get through.");
+      BOOT_CONFIG_TOGGLES.forEach(([key, containerId]) => {
+        pill(containerId, form.toggles[key], (on) => { form.toggles[key] = on; bootConfigChanged(); }, locked);
+      });
+
+      const display = document.getElementById("bootConfigDisplaySelect");
+      display.innerHTML = "";
+      (bootState.displays || []).forEach((entry) => {
+        bootConfigOption(display, entry.key, entry.label + (entry.installed === false ? " (overlay not installed)" : ""),
+          entry.installed === false && entry.key !== loaded.display);
+      });
+      if (loaded.display === "custom" || form.display === "custom")
+        bootConfigOption(display, "custom", "As in config.txt: " + ((bootState.display && bootState.display.overlays) || []).join(", "));
+      display.value = form.display;
+      display.disabled = locked;
+      const displayLines = (bootState.display && bootState.display.lines) || [];
+      setText("bootConfigDisplayNote", (displayLines.length ? "config.txt line " + displayLines.join(", ") + ". " : "")
+        + "A DPI panel takes GPIO 0-27, I2C bus 1 included.");
+    }
+
+    function bootConfigChanged() {
+      hideBootConfigPanels();
+      showBootConfigMessage("");
+      renderBootConfig();
+    }
+
+    async function loadBootConfig(silent, force, keepForm) {
+      if (bootConfig.loading)
+        return;
+      if (force && bootConfigDirty() && !window.confirm("Reload config.txt and drop the changes on this card?"))
+        return;
+      bootConfig.loading = true;
+      renderBootConfig();
+      try {
+        const response = await fetch("/api/boot-config", { cache: "no-store" });
+        const result = await response.json();
+        if (!result.ok)
+          throw new Error(result.error || "Could not read config.txt.");
+        bootConfig.payload = result.boot_config;
+        if (!keepForm || !bootConfig.form) {
+          bootConfig.form = bootConfigFormFrom(bootConfig.payload.state);
+          bootConfig.text = null;
+          closeBootConfigEditor(true);
+        }
+        hideBootConfigPanels();
+        if (!keepForm)
+          showBootConfigMessage("");
+        if (!silent)
+          showToast("config.txt loaded.", false);
+      } catch (error) {
+        showBootConfigMessage((error && error.message) || "Could not read config.txt.");
+      } finally {
+        bootConfig.loading = false;
+        renderBootConfig();
+      }
+    }
+
+    function bootConfigDiffLine(box, className, text) {
+      const line = document.createElement("div");
+      if (className)
+        line.className = className;
+      line.textContent = text;
+      box.appendChild(line);
+      return line;
+    }
+
+    function drmSummary(drm) {
+      if (!Array.isArray(drm) || drm.length === 0)
+        return "";
+      return "DRM now: " + drm.map((c) => c.name + " " + (c.status || "?") + " (" + c.modes + " mode" + (c.modes === 1 ? "" : "s") + ")").join(", ")
+        + ". A DPI overlay reports its connector connected even with no panel attached.";
+    }
+
+    // Save shows what changes first: the lines Core would write, then Save and Reboot / Save Only / Back.
+    async function reviewBootConfig() {
+      if (!bootConfig.form)
+        return;
+      showBootConfigMessage("");
+      const result = await bootConfigPost(bootConfigRequestBody({ dry_run: true }));
+      if (!result.ok) {
+        showBootConfigMessage(result.error || "Core refused the change.");
+        return;
+      }
+      bootConfig.review = result;
+      const box = document.getElementById("bootConfigDiff");
+      document.getElementById("bootConfigFileView").hidden = true;
+      box.textContent = "";
+      const changes = Array.isArray(result.changes) ? result.changes : [];
+      bootConfigDiffLine(box, "", changes.length ? "What Save changes in config.txt:" : "Nothing changes in config.txt.");
+      changes.forEach((change) => {
+        if (change.removed) {
+          bootConfigDiffLine(box, "diff-del", String(change.line).padStart(4, " ") + " - " + change.before + "   (removed)");
+        } else if (change.line > 0) {
+          bootConfigDiffLine(box, "diff-del", String(change.line).padStart(4, " ") + " - " + change.before);
+          bootConfigDiffLine(box, "diff-add", String(change.line).padStart(4, " ") + " + " + change.now);
+        } else {
+          bootConfigDiffLine(box, "diff-add", "   + " + change.now + "   (new, after line " + change.after + ")");
+        }
+      });
+
+      let gate = null;
+      if (result.display_changed) {
+        const loaded = bootConfigFormFrom(bootConfig.payload.state);
+        const leavingDpi = loaded.display !== "hdmi";
+        const toDpi = bootConfig.form.display !== "hdmi";
+        if (leavingDpi)
+          bootConfigDiffLine(box, "diff-note", "If this camera's touch screen is that DPI panel, it stays dark after the reboot. This page stays reachable at "
+            + window.location.host + " to switch it back; otherwise put the card in a reader and remove the # again.");
+        if (toDpi)
+          bootConfigDiffLine(box, "diff-note", "With DPI overlays loaded, GPIO 0-27 belong to the panel: I2C bus 1 (GPIO 2/3) and buttons on those pins stop working, "
+            + "and the touch UI moves to the panel.");
+        const drm = drmSummary(result.drm);
+        if (drm)
+          bootConfigDiffLine(box, "diff-info", drm);
+        const row = document.createElement("label");
+        row.className = "diff-confirm";
+        gate = document.createElement("input");
+        gate.type = "checkbox";
+        row.appendChild(gate);
+        row.appendChild(document.createTextNode(" Change the display anyway"));
+        box.appendChild(row);
+      }
+      if (state.snapshot && state.snapshot.recording)
+        bootConfigDiffLine(box, "diff-note", "A take is recording: Save and Reboot stops it.");
+
+      const actions = document.createElement("div");
+      actions.className = "diff-actions";
+      const makeButton = (label, primary, onClick) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = primary ? "primary-button" : "secondary-button";
+        button.textContent = label;
+        button.addEventListener("click", onClick);
+        actions.appendChild(button);
+        return button;
+      };
+      const saveReboot = makeButton("Save and Reboot", true, () => { void saveBootConfig(true); });
+      const saveOnly = makeButton("Save Only", false, () => { void saveBootConfig(false); });
+      makeButton("Back", false, hideBootConfigPanels);
+      const syncGate = () => {
+        const blocked = changes.length === 0 || (gate && !gate.checked);
+        saveReboot.disabled = blocked;
+        saveOnly.disabled = blocked;
+      };
+      if (gate)
+        gate.addEventListener("change", syncGate);
+      syncGate();
+      box.appendChild(actions);
+      box.hidden = false;
+    }
+
+    async function saveBootConfig(reboot) {
+      if (!bootConfig.payload || bootConfigBusy())
+        return;
+      const review = bootConfig.review;
+      bootConfig.saving = true;
+      renderBootConfig();
+      const result = await bootConfigPost(bootConfigRequestBody({ confirm_display: !!(review && review.display_changed) }), bootConfig.payload.revision);
+      bootConfig.saving = false;
+      if (!result.ok) {
+        hideBootConfigPanels();
+        if (result.code === "stale" || result.code === "old_page")
+          await loadBootConfig(true, false, true);   // the card keeps its choices; Save asks again against the new file
+        showBootConfigMessage(result.error || "Could not save config.txt.");
+        renderBootConfig();
+        return;
+      }
+      hideBootConfigPanels();
+      if (!result.written) {
+        renderBootConfig();
+        showToast("config.txt already says that.", false);
+        return;
+      }
+      bootConfig.savedPendingReboot = true;
+      await loadBootConfig(true);
+      if (!reboot) {
+        showBootConfigMessage("Saved. config.txt takes effect at the next reboot.", true);
+        showToast("Saved config.txt.", false);
+        return;
+      }
+      await rebootForBootConfig();
+    }
+
+    function bootConfigSleep(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    // "back": answered again after going away; "never-down": kept answering, so no reboot happened; "timeout".
+    async function waitForCameraAfterReboot() {
+      const started = Date.now();
+      let wentDown = false;
+      while (Date.now() - started < 240000) {
+        await bootConfigSleep(2500);
+        let up = false;
+        try {
+          const response = await fetch("/api/buffer", { cache: "no-store" });
+          up = response.ok;
+        } catch (error) {
+          up = false;
+        }
+        if (!up)
+          wentDown = true;
+        else if (wentDown)
+          return "back";
+        else if (Date.now() - started > 60000)
+          return "never-down";
+      }
+      return "timeout";
+    }
+
+    async function rebootForBootConfig() {
+      try {
+        await sendCommand({ cmd: "restart_system" });
+      } catch (error) {
+        showBootConfigMessage("Saved, but the reboot failed: " + ((error && error.message) || "unknown error")
+          + " Restart the camera to apply config.txt.");
+        return;
+      }
+      bootConfig.waiting = true;
+      showBootConfigMessage("Rebooting: waiting for the camera to answer again. A reboot takes about half a minute.", true);
+      renderBootConfig();
+      const outcome = await waitForCameraAfterReboot();
+      bootConfig.waiting = false;
+      if (outcome === "back") {
+        bootConfig.savedPendingReboot = false;
+        await loadBootConfig(true);
+        showBootConfigMessage("The camera is back with the new config.txt.", true);
+        showToast("The camera is back.", false);
+      } else if (outcome === "never-down") {
+        showBootConfigMessage("The camera kept answering, so it did not reboot. Restart it to apply config.txt.");
+      } else {
+        showBootConfigMessage("No answer from the camera after 4 minutes. It may still be starting: reload this page. "
+          + "If the screen stays dark, the display or sensor line may be wrong: config.txt.apertar.bak on the boot partition is the previous file.");
+      }
+      renderBootConfig();
+    }
+
+    async function bootConfigPreviewText() {
+      bootConfig.previewState = bootConfig.payload ? bootConfig.payload.state : null;
+      if (!bootConfig.form)
+        return bootConfig.payload ? bootConfig.payload.text : "";
+      const result = await bootConfigPost(bootConfigRequestBody({ dry_run: true }));
+      if (!result.ok) {
+        showToast(result.error || "Core refused the change; showing the file as it is.", true);
+        return bootConfig.payload ? bootConfig.payload.text : "";
+      }
+      bootConfig.previewState = result.state;
+      return result.text;
+    }
+
+    async function toggleBootConfigFile() {
+      const box = document.getElementById("bootConfigFileView");
+      if (!box.hidden) {
+        box.hidden = true;
+        return;
+      }
+      const text = await bootConfigPreviewText();
+      box.textContent = "";
+      bootConfigDiffLine(box, "diff-gap", (bootConfigDirty() ? "config.txt as Save would write it" : "config.txt") + " ("
+        + ((bootConfig.payload && bootConfig.payload.path) || "/boot/firmware/config.txt") + "). Italic lines are set by the card or the fan mode:");
+      const marks = bootConfigManagedMap(bootConfig.previewState);
+      text.replace(/\n$/, "").split("\n").forEach((line, index) => {
+        const title = marks.get(index + 1);
+        const row = bootConfigDiffLine(box, title ? "diff-managed" : "", String(index + 1).padStart(4, " ") + "  " + line);
+        if (title)
+          row.title = title;
+      });
+      box.hidden = false;
+    }
+
+    async function downloadBootConfig() {
+      const text = await bootConfigPreviewText();
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "config.txt";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // An uploaded config.txt fills the card, read with this Pi's board rules; nothing is saved until Save.
+    async function uploadBootConfig(file) {
+      if (!file || !bootConfig.payload)
+        return;
+      try {
+        const text = await file.text();
+        const response = await fetch("/api/boot-config/parse", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+        const result = await response.json();
+        if (!result.ok)
+          throw new Error(result.error || "Could not read that file.");
+        const uploaded = bootConfigFormFrom(result.state);
+        if (!bootConfigRp1Available())
+          uploaded.rp1 = bootConfig.form.rp1;
+        bootConfig.form = uploaded;
+        bootConfigChanged();
+        showToast("Loaded " + file.name + " into the card: not saved yet.", false);
+      } catch (error) {
+        showToast((error && error.message) || "Could not read that file.", true);
+      }
+    }
+
+    // Edit file: the whole file as text, the card's current choices already in it. Nothing is saved until Save.
+    async function openBootConfigEditor() {
+      const field = document.getElementById("bootConfigEditField");
+      const editor = document.getElementById("bootConfigEditor");
+      if (!field.classList.contains("hidden")) {
+        editor.focus();
+        return;
+      }
+      const text = await bootConfigPreviewText();
+      editor.value = text;
+      editor.dataset.opened = text;
+      document.getElementById("bootConfigFileView").hidden = true;
+      field.classList.remove("hidden");
+      showBootConfigEditorMarks(bootConfig.previewState);
+      editor.focus();
+    }
+
+    // The italic line numbers and the legend: which lines the card sets, and where the operator's own go.
+    function showBootConfigEditorMarks(bootState) {
+      const editor = document.getElementById("bootConfigEditor");
+      bootConfig.editorMarks = bootConfigManagedMap(bootState);
+      updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks);
+      const summary = bootConfigManagedSummary(bootConfig.editorMarks);
+      setText("bootConfigEditorLegend", (summary ? "Italic line numbers are set by the card's controls (hover for which): " + summary
+        + ". Change those with the controls above; edited here, they move the controls when you use the text. " : "")
+        + bootConfigOwnLinesHint(editor.value, bootState));
+    }
+
+    // While typing, lines move: Core reads the text again (no save) so the marks follow it.
+    function bootConfigEditorEdited() {
+      updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks);
+      window.clearTimeout(bootConfig.editorTimer);
+      bootConfig.editorTimer = window.setTimeout(async () => {
+        const text = document.getElementById("bootConfigEditor").value;
+        try {
+          const response = await fetch("/api/boot-config/parse", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+          const result = await response.json();
+          if (result.ok && document.getElementById("bootConfigEditor").value === text)
+            showBootConfigEditorMarks(result.state);
+        } catch (error) {
+          // the marks stay as they were; Use This Text reports a real problem
+        }
+      }, 500);
+    }
+
+    function closeBootConfigEditor(force) {
+      const field = document.getElementById("bootConfigEditField");
+      const editor = document.getElementById("bootConfigEditor");
+      if (!field || field.classList.contains("hidden"))
+        return;
+      if (!force && editor.value !== editor.dataset.opened && !window.confirm("Close the text and drop the edits in it?"))
+        return;
+      field.classList.add("hidden");
+      editor.value = "";
+    }
+
+    // Use This Text: Core reads the text with this Pi's board rules (as for Upload), the card shows what it says,
+    // and Save sends the text itself, so lines the card has no control for are kept as typed.
+    async function useBootConfigText() {
+      const text = document.getElementById("bootConfigEditor").value;
+      try {
+        const response = await fetch("/api/boot-config/parse", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+        const result = await response.json();
+        if (!result.ok)
+          throw new Error(result.error || "Could not read that text.");
+        if (!result.state.editable)
+          throw new Error(result.state.problem || "That text is not a config.txt this card can save.");
+        const typed = bootConfigFormFrom(result.state);
+        if (!bootConfigRp1Available())
+          typed.rp1 = bootConfig.form.rp1;
+        bootConfig.form = typed;
+        bootConfig.text = text;
+        closeBootConfigEditor(true);
+        bootConfigChanged();
+        showBootConfigMessage(bootConfigDirty() ? "Your text is on the card, not saved yet: Save shows every line that changes."
+          : "The text says what config.txt already says.", true);
+      } catch (error) {
+        showToast((error && error.message) || "Could not read that text.", true);
+      }
+    }
+
+    function installBootConfigInteractions() {
+      ["cam0", "cam1"].forEach((port) => {
+        const prefix = port === "cam0" ? "bootConfigCam0" : "bootConfigCam1";
+        document.getElementById(prefix + "Select").addEventListener("change", (event) => {
+          if (!bootConfig.form)
+            return;
+          const sensor = event.target.value;
+          bootConfig.form.sensors[port] = sensor;
+          // a newly picked sensor keeps the rate the card has when it offers it (IMX585 colour <-> mono), else starts at
+          // the rate config.txt already has for it, else its default
+          const bootState = bootConfigState();
+          const loaded = bootConfigFormFrom(bootState);
+          const camera = bootState.cameras && bootState.cameras[port];
+          const candidates = bootState.candidates && bootState.candidates[port];
+          const info = bootConfigSensorInfo(sensor);
+          const current = bootConfig.form.links[port];
+          const offered = current !== null && current !== undefined && info && info.link
+            && info.link.options.some((option) => option.hz === Number(current));
+          bootConfig.form.links[port] = sensor === loaded.sensors[port] && camera ? camera.link_frequency
+            : offered ? Number(current) : (candidates && candidates[sensor]) || null;
+          bootConfigChanged();
+        });
+        document.getElementById(prefix + "LinkSelect").addEventListener("change", (event) => {
+          if (!bootConfig.form)
+            return;
+          bootConfig.form.links[port] = Number(event.target.value);
+          bootConfigChanged();
+        });
+      });
+      document.getElementById("bootConfigDisplaySelect").addEventListener("change", (event) => {
+        if (!bootConfig.form)
+          return;
+        bootConfig.form.display = event.target.value;
+        bootConfigChanged();
+      });
+      document.getElementById("reloadBootConfigButton").addEventListener("click", () => { void loadBootConfig(false, true); });
+      document.getElementById("saveBootConfigButton").addEventListener("click", () => { void reviewBootConfig(); });
+      document.getElementById("viewBootConfigButton").addEventListener("click", () => { void toggleBootConfigFile(); });
+      document.getElementById("editBootConfigButton").addEventListener("click", () => { void openBootConfigEditor(); });
+      document.getElementById("useBootConfigTextButton").addEventListener("click", () => { void useBootConfigText(); });
+      document.getElementById("closeBootConfigEditorButton").addEventListener("click", () => closeBootConfigEditor(false));
+      const bootConfigEditor = document.getElementById("bootConfigEditor");
+      bootConfigEditor.addEventListener("input", bootConfigEditorEdited);
+      bootConfigEditor.addEventListener("scroll", () => updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks));
+      document.getElementById("downloadBootConfigButton").addEventListener("click", () => { void downloadBootConfig(); });
+      document.getElementById("uploadBootConfigButton").addEventListener("click", () => {
+        document.getElementById("bootConfigUploadInput").click();
+      });
+      document.getElementById("bootConfigUploadInput").addEventListener("change", (event) => {
+        const file = event.target.files && event.target.files[0];
+        event.target.value = "";
+        void uploadBootConfig(file);
+      });
+      renderBootConfig();
+    }
+
     function installInteractions() {
       arrangeSettingsPanels();
 
@@ -19313,6 +20200,7 @@ std::string_view webControlPageHtml()
       document.getElementById("runMediaSpeedTestButton").addEventListener("click", requestMediaSpeedTest);
       document.getElementById("storagePrerollButton").addEventListener("click", requestStoragePreroll);
       document.getElementById("restartSystemButton").addEventListener("click", requestRestartSystem);
+      installBootConfigInteractions();
       document.getElementById("powerOffSystemButton").addEventListener("click", requestPowerOffSystem);
       document.getElementById("saveCurrentPresetButton").addEventListener("click", saveCurrentPreset);
       document.getElementById("savePresetNameInput").addEventListener("keydown", (event) => {

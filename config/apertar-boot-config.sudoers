@@ -1,0 +1,4 @@
+# /etc/sudoers.d/apertar-boot-config  (install with: sudo install -m 0440 config/apertar-boot-config.sudoers /etc/sudoers.d/apertar-boot-config)
+# Lets the user apertar-core runs as replace /boot/firmware/config.txt (the WebUI's Boot config card, the fan mode).
+# The rule pins the path and no arguments (""); the script fixes the destination and checks the text it reads on stdin.
+pi ALL=(root) NOPASSWD: /usr/local/libexec/apertar-boot-config ""

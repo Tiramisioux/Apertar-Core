@@ -176,6 +176,40 @@ These are mapping examples, not a complete hardware configuration. Use the corre
 
 The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust.
 
+## Boot Config (config.txt)
+
+The WebUI's **System** pane has a **Boot Config** card for `/boot/firmware/config.txt`: the sensor on each camera connector, the IMX477/IMX585 link frequency, the RP1 overclock, the I²C, I²S, SPI and onboard-audio switches, and the display (HDMI only, Waveshare 4" or Hyperpixel 4" DPI).
+
+The card edits the file the way its own comments say: it comments and uncomments the lines already there, in their `[pi5]`, `[pi4]` or `[all]` section, and adds a line next to its kind only when none exists. Every other line, the fan block included, stays byte for byte.
+
+**Save & Reboot** first shows the lines that change. Core then reads the result back and refuses a save that would not do what you asked, for example when a line it does not edit still decides it, naming that line. The previous file is kept as `config.txt.apertar.bak`.
+
+| Card | config.txt line |
+| --- | --- |
+| Camera 0 / Camera 1 sensor | `dtoverlay=<sensor>[,cam0][,mono][,link-frequency=<Hz>]` in the board's section; cam1 is the overlay default, without a port word |
+| RP1 overclock | `dtoverlay=rp1-clk-333mhz` in `[all]` |
+| I²C, I²S, SPI | `dtparam=i2c_arm=on`, `dtparam=i2s=on`, `dtparam=spi=on` in the board's section |
+| Onboard audio | `dtparam=audio=on` in `[all]` |
+| Display | the DPI overlays at the end of the file |
+
+**Edit file** opens the whole file as text, for the lines the card has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup.
+
+A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included.
+
+`/boot/firmware` belongs to root. Install the small root helper the card and the fan mode write through:
+
+```bash
+sudo install -m 0755 -o root -g root ~/ApertarCore/scripts/apertar-boot-config /usr/local/libexec/apertar-boot-config
+sudo install -m 0440 ~/ApertarCore/config/apertar-boot-config.sudoers /etc/sudoers.d/apertar-boot-config
+sudo visudo -cf /etc/sudoers.d/apertar-boot-config
+```
+
+Without it, Core falls back to `sudo -n install`, as the fan mode always has.
+
+If the camera does not come back after a change, put the card in a reader and copy `config.txt.apertar.bak` over `config.txt` on the boot partition.
+
+Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and optionally `text` (the whole file as edited; the other fields go on top of it).
+
 ## Building From Source
 
 ### Requirements
