@@ -79,6 +79,24 @@ constexpr uint32_t kWebPreviewMaxWidth = 640;
 constexpr uint32_t kWebPreviewMaxHeight = 360;
 constexpr double kWebPreviewMaxFps = 30.0;
 constexpr int kWebPreviewJpegQuality = 75;
+
+// The web preview's rate while a raw take runs (APERTAR_WEB_PREVIEW_RECORDING_FPS): default the normal 30,
+// 0 = no web preview frames while recording. The downsample for it is the one per-frame image pass left on
+// libcamera's completion thread, so this is the A/B knob for the WebUI-open drops (kb working/dng-chain).
+double webPreviewRecordingFps()
+{
+    static const double fps = []() {
+        const char *text = std::getenv("APERTAR_WEB_PREVIEW_RECORDING_FPS");
+        if (!text || !*text)
+            return kWebPreviewMaxFps;
+        char *end = nullptr;
+        const double parsed = std::strtod(text, &end);
+        if (end == text || *end != '\0' || parsed < 0.0 || parsed > kWebPreviewMaxFps)
+            return kWebPreviewMaxFps;
+        return parsed;
+    }();
+    return fps;
+}
 constexpr size_t kMaxEditableHardwareConfigBytes = 256 * 1024;
 
 std::string resolveExecutablePath(std::initializer_list<const char *> candidates,
@@ -9353,9 +9371,13 @@ void ApertarCoreApp::captureWebPreviewFrame(const PreviewFrameDescriptor &frame)
         return;
 
     // This runs on libcamera's completion thread. Camera stop/reconfigure holds
-    // the control mutex while waiting for that thread, so never query it here.
+    // the control mutex while waiting for that thread, so never query it here
+    // (rawTakeActive reads one atomic).
+    const double maxFps = camera_.rawTakeActive() ? webPreviewRecordingFps() : kWebPreviewMaxFps;
+    if (maxFps <= 0.0)
+        return;
     const auto minInterval = std::chrono::microseconds(
-        static_cast<int64_t>(1'000'000.0 / kWebPreviewMaxFps));
+        static_cast<int64_t>(1'000'000.0 / maxFps));
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(mjpegMutex_);

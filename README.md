@@ -290,6 +290,7 @@ Environment variables of the Core service (a systemd drop-in with `Environment=`
 | `APERTAR_DNG_DONTNEED=sync` or `off` | writer | When a written DNG's pages leave the page cache: `writer` right after the write (as before; the pages are still dirty then, so the call frees nothing and costs a cross-CPU LRU drain per frame), `sync` on the once-a-second sync thread after the file's `fsync`, `off` never. |
 | `APERTAR_DNG_WRITEBACK=0` | on | No `sync_file_range` per written DNG (the kernel's own writeback only). |
 | `APERTAR_MEDIA_SYNC_MS=0` | 1000 | No once-a-second `fsync` of the finished DNGs and the clip folder during a take; the stop-time `syncfs` stays. |
+| `APERTAR_WEB_PREVIEW_RECORDING_FPS=N` | 30 | The WebUI live preview's frame rate while a raw take runs (`0` pauses it). Its downsample runs on libcamera's completion thread, inside the per-frame cycle, whenever a browser shows the preview. |
 | `APERTAR_RT=1` | off | The start script runs Core under `SCHED_FIFO` priority 70 on cores 1 to 3 with the best-effort I/O class (`APERTAR_RT_PRIORITY`, `APERTAR_RT_CPUS` adjust it), as cinemate runs cinepi-raw. Needs `LimitRTPRIO` on the unit: install `config/apertar-core-capture-priority.conf` as a drop-in. |
 | `APERTAR_MEDIA_TUNE=1` | off | Kernel-side knobs for the recording drive through the `apertar-media-tune` root helper (dirty-page cushion, scheduler, queue depth). |
 

@@ -11978,6 +11978,11 @@ bool CameraController::cdngLogApplicable() const
 // Called about 5 times a second from the HTTP and watcher threads. The numbers come from the write queue's
 // lock-free gauge. Only the mode needs the controller's settings, so it is read under try_lock: while the
 // command path holds the mutex (including the whole drain after a take stops) the last answer is reused.
+bool CameraController::rawTakeActive() const
+{
+    return frameBufferGauge().active.load(std::memory_order_acquire);
+}
+
 CameraController::FrameBufferStatus CameraController::frameBufferStatus() const
 {
     FrameBufferGauge &gauge = frameBufferGauge();
