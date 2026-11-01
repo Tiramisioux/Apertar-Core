@@ -2,6 +2,7 @@
 #include "util/CfeHat.hpp"
 #include "util/MediaIntent.hpp"
 #include "util/StoragePreroll.hpp"
+#include "util/ClipName.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/ExposureMetering.hpp"
@@ -333,6 +334,8 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
+        << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
+        << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -6308,9 +6311,11 @@ std::string clipContainerTypeLabel(const std::filesystem::path &path)
     const std::string name = toLowerAsciiCopy(path.filename().string());
     if (ext == ".mlv")
         return "MLV Clip";
-    if (ext == ".mov" && name.rfind("prores_", 0) == 0)
+    // The take's own container is <folder>.<ext> (any clip name template); older takes are told by the prefix.
+    const bool ownContainer = toLowerAsciiCopy(path.stem().string()) == toLowerAsciiCopy(path.parent_path().filename().string());
+    if (ext == ".mov" && (ownContainer || name.rfind("prores_", 0) == 0))
         return "ProRes Clip";
-    if (ext == ".mp4" && name.rfind("h264_", 0) == 0)
+    if (ext == ".mp4" && (ownContainer || name.rfind("h264_", 0) == 0))
         return "H.264 Clip";
     return "Video Clip";
 }
@@ -7486,6 +7491,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addString("cameraFpsSpeedRampShutter", settings.fpsSpeedRampKeepExposure ? "exposure" : "angle");
     addString("cameraFpsSpeedRampAudio", settings.fpsSpeedRampStretchAudio ? "stretch" : "real");
     addString("cameraFpsSpeedRampAfter", settings.fpsSpeedRampReturn ? "return" : "stay");
+    addString("cameraClipNameTemplate", settings.clipNameTemplate);
     addBool("cameraFpsPhaseLock", settings.fpsPhaseLock);
     addString("cameraTimecodeMode", toString(settings.timecodeMode));
     addNumberString("cameraConformFps", jsonNumber(settings.conformFps, 3));
@@ -9103,6 +9109,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
+        << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
+        << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -12072,7 +12080,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -12358,6 +12366,35 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return camera_.setFpsSpeedRamp(*enabled == "true" || *enabled == "1", keepExposure, stretchAudio, returnAfter)
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
+    }
+
+    if (command.name == "set_clip_name_template") {
+        // value: the template string (src/util/ClipName.hpp); a missing {clip} is appended and reported.
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_clip_name_template requires value.");
+        const auto parsed = apertar::clipname::parse(*value);
+        if (!parsed.ok)
+            return errorReply(command.id, parsed.error);
+        std::string stored;
+        if (!camera_.setClipNameTemplate(*value, &stored))
+            return errorReply(command.id, camera_.lastError());
+        const CaptureSettings settings = camera_.settings();
+        return okReply(command.id, settingsBody(settings) +
+            ",\"corrected\":" + (parsed.corrected ? "true" : "false") +
+            ",\"example\":\"" + escapeJson(settings.clipNameExample) + "\"");
+    }
+
+    if (command.name == "preview_clip_name") {
+        // value: a template (the saved one when absent or empty). The next clip's name, no side effects.
+        const std::string value = command.string("value").value_or("");
+        std::string example;
+        std::string error;
+        if (!camera_.previewClipName(value, &example, &error))
+            return errorReply(command.id, error);
+        const auto parsed = apertar::clipname::parse(value.empty() ? camera_.settings().clipNameTemplate : value);
+        return okReply(command.id, "\"example\":\"" + escapeJson(example) + "\",\"template\":\"" +
+            escapeJson(parsed.normalized) + "\",\"corrected\":" + (parsed.corrected ? "true" : "false"));
     }
 
     if (command.name == "set_conform_fps") {
@@ -13427,6 +13464,12 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             if (*value != "stay" && *value != "return")
                 return errorReply(command.id, "Invalid preset speed-ramp after-take option.");
             presetSettings.fpsSpeedRampReturn = *value == "return";
+        }
+        if (const auto value = command.string("cameraClipNameTemplate")) {
+            const auto parsed = apertar::clipname::parse(*value);
+            if (!parsed.ok)
+                return errorReply(command.id, "Invalid preset clip name template: " + parsed.error);
+            presetSettings.clipNameTemplate = parsed.normalized;
         }
         if (const auto value = command.string("cameraFpsPhaseLock"))
             presetSettings.fpsPhaseLock = parseUiSettingsBool(*value, presetSettings.fpsPhaseLock);

@@ -165,12 +165,16 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
         // FORMAT row (design §4.3): 16-bit = Clear HDR; a LinearizationTable on 12-bit = companded
         const bool table = !f.first.linearization.empty();
         std::string look;
+        // The lossy ratio is told by the clip name: the {format} token (cDNG_3to1) or {comp} (lossy3) may sit
+        // anywhere in a custom clip name template, so search, do not anchor.
+        const bool lossy3 = f.name.find("cDNG_3to1") != std::string::npos || f.name.find("lossy3") != std::string::npos;
+        const bool lossy5 = f.name.find("cDNG_5to1") != std::string::npos || f.name.find("lossy5") != std::string::npos;
         if (f.first.bits == 16) look = "Clear HDR 16-bit";
-        else if (f.name.find("cDNG_3to1_") == 0 && table) { look = "12-bit companded · lossy 3:1"; f.companded = true; }
-        else if (f.name.find("cDNG_5to1_") == 0 && table) { look = "12-bit companded · lossy 5:1"; f.companded = true; }
+        else if (lossy3 && table) { look = "12-bit companded · lossy 3:1"; f.companded = true; }
+        else if (lossy5 && table) { look = "12-bit companded · lossy 5:1"; f.companded = true; }
         else if (table) { look = "Clear HDR 12-bit companded"; f.companded = true; }
         else look = "SDR " + std::to_string(f.first.bits) + "-bit";
-        const bool lossy = f.name.find("cDNG_3to1_") == 0 || f.name.find("cDNG_5to1_") == 0;
+        const bool lossy = lossy3 || lossy5;
         f.formatText = look + (lossy ? "" : (f.first.compression == 7 ? " · lossless" : " · uncompressed"));
     }
     if (f.ramp) f.droppedText = "unknown (speed ramp)";

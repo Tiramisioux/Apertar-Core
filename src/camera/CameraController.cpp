@@ -30,6 +30,7 @@
 #include "util/MediaProfile.hpp"
 #include "util/BufferBudget.hpp"
 #include "util/StoragePreroll.hpp"
+#include "util/ClipName.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
@@ -225,6 +226,8 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
+        << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
+        << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -608,6 +611,11 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         ? std::round(std::clamp(settings.bracketingEv, 1.0 / 3.0, 3.0) * 3.0) / 3.0 : 1.0;
     settings.conformFps = std::isfinite(settings.conformFps) && settings.conformFps >= 1.0 && settings.conformFps <= 120.0
         ? settings.conformFps : 25.0;
+    {
+        // A template that no longer parses (hand-edited file) falls back to the original name.
+        const auto parsed = apertar::clipname::parse(settings.clipNameTemplate);
+        settings.clipNameTemplate = parsed.ok ? parsed.normalized : std::string(apertar::clipname::kDefaultTemplate);
+    }
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -801,6 +809,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.fpsSpeedRampStretchAudio = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_after")
                 settings.fpsSpeedRampReturn = (value == "return");
+            else if (key == "clip_name_template")
+                settings.clipNameTemplate = value;
             else if (key == "af_mode")
                 settings.autofocusMode = autofocusModeFromString(value);
             else if (key == "af_range")
@@ -879,6 +889,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_after=" << (s.fpsSpeedRampReturn ? "return" : "stay") << '\n';
+    output << prefix << "clip_name_template=" << s.clipNameTemplate << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
     output << prefix << "af_range=" << toString(s.autofocusRange) << '\n';
     output << prefix << "af_speed=" << toString(s.autofocusSpeed) << '\n';
@@ -1003,6 +1014,106 @@ std::filesystem::path mediaRootPath(const std::string &mediaRoot)
 {
     return mediaRoot.empty() ? std::filesystem::path("/media/RAW")
                              : std::filesystem::path(mediaRoot);
+}
+
+// ---- Clip names (src/util/ClipName.hpp) ----------------------------------------------------------------
+// The {format} token: the prefix the camera always used, without its trailing underscore.
+std::string clipNameFormatToken(const CaptureSettings &settings)
+{
+    switch (settings.recordingFormat) {
+    case RecordingFormat::Mlv: return "MLV";
+    case RecordingFormat::H264: return "H264";
+    case RecordingFormat::LossyDng: return settings.lossyDngRatio == LossyDngRatio::R5 ? "cDNG_5to1" : "cDNG_3to1";
+    case RecordingFormat::Prores: return "ProRes";
+    case RecordingFormat::Cdng: break;
+    }
+    return "cDNG";
+}
+
+// {res}: 8K, 4K, 2K, 1080p, otherwise "<height>p".
+std::string clipNameResolutionLabel(const Resolution &resolution)
+{
+    if (resolution.width >= 7000) return "8K";
+    if (resolution.width >= 3500) return "4K";
+    if (resolution.width >= 1900 && resolution.width < 2000 && resolution.height <= 1100) return "1080p";
+    if (resolution.width >= 2000 && resolution.width < 3500) return "2K";
+    return resolution.height > 0 ? std::to_string(resolution.height) + "p" : std::string();
+}
+
+// The values a take's name is made from. `now` is the take start; {tc} uses the wall clock plus the frame
+// index within that second at the current fps (the FreeRun timecode formula of the DNG TimeCode tag).
+apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const std::string &sensor,
+                                         const std::chrono::system_clock::time_point &now)
+{
+    using namespace apertar::clipname;
+    Values v;
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    const std::time_t seconds = static_cast<std::time_t>(micros / 1000000);
+    std::tm localTime{};
+#if defined(_WIN32)
+    localtime_s(&localTime, &seconds);
+#else
+    localtime_r(&seconds, &localTime);
+#endif
+    v.year = localTime.tm_year % 100;
+    v.month = localTime.tm_mon + 1;
+    v.day = localTime.tm_mday;
+    v.hour = localTime.tm_hour;
+    v.minute = localTime.tm_min;
+    v.second = localTime.tm_sec;
+    const double fps = settings.fps > 0.0 ? settings.fps : 24.0;
+    const int nominalFps = std::max(1, static_cast<int>(std::llround(fps)));
+    v.frame = std::min(nominalFps - 1, static_cast<int>(static_cast<double>(micros % 1000000) * fps / 1000000.0));
+    v.format = clipNameFormatToken(settings);
+    v.cam = "cam0";   // one camera per Apertar
+    v.sensor = sanitize(sensor, 12);
+    std::string model = CdngEncoder::Metadata{}.model;   // "Apertar D1", the Model tag of the DNGs
+    if (model.rfind("Apertar ", 0) == 0) model.erase(0, 8);
+    v.model = sanitize(model, 16);
+    if (v.model.empty()) v.model = "Apertar";
+    const bool processed = settings.recordingFormat == RecordingFormat::H264 ||
+                           settings.recordingFormat == RecordingFormat::Prores;
+    v.res = clipNameResolutionLabel(processed && settings.h264Resolution.width > 0 ? settings.h264Resolution
+                                                                                  : settings.resolution);
+    {
+        const double rounded = std::round(fps);
+        std::ostringstream f;
+        if (std::fabs(fps - rounded) < 0.001) f << static_cast<long>(rounded);
+        else f << std::fixed << std::setprecision(3) << fps;
+        std::string text = f.str();
+        if (text.find('.') != std::string::npos) {
+            while (!text.empty() && text.back() == '0') text.pop_back();
+            if (!text.empty() && text.back() == '.') text.pop_back();
+        }
+        v.fps = text + "fps";
+    }
+    if (settings.recordingFormat != RecordingFormat::H264)
+        v.bits = std::to_string(isFixedTenBitRecordingFormat(settings.recordingFormat) ? 10u : settings.rawBitDepth) + "bit";
+    if (settings.recordingFormat == RecordingFormat::Cdng)
+        v.comp = settings.cdngCompression == CdngCompression::LosslessJpeg ? "lossless" : "none";
+    else if (settings.recordingFormat == RecordingFormat::LossyDng)
+        v.comp = settings.lossyDngRatio == LossyDngRatio::R5 ? "lossy5" : "lossy3";
+    if (settings.cdngLog != CdngLog::Off && cdngLogAvailable(settings.recordingFormat))
+        v.log = "Log";
+    return v;
+}
+
+// The folder name for the next take of these settings; no side effects (nothing is created).
+std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
+                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+{
+    using namespace apertar::clipname;
+    Parsed parsed = parse(settings.clipNameTemplate);
+    if (!parsed.ok)
+        parsed = parse(kDefaultTemplate);
+    const Values values = clipNameValues(settings, sensor, now);
+    const int clip = nextClipNumber(parsed, values, [&](const std::string &name) {
+        std::error_code ec;
+        return std::filesystem::exists(root / name, ec);
+    });
+    if (clip == 0)
+        throw std::runtime_error("Could not allocate a unique clip folder.");
+    return expand(parsed, values, clip);
 }
 
 std::filesystem::path withPhotoExtension(std::filesystem::path basePath, const char *extension)
@@ -4102,9 +4213,10 @@ public:
     }
 
     static std::filesystem::path reserveClipFolder(const std::string &mediaRoot,
-                                                   const CaptureSettings &settings)
+                                                   const CaptureSettings &settings,
+                                                   const std::string &sensor = std::string())
     {
-        return allocateClipFolder(mediaRoot, settings);
+        return allocateClipFolder(mediaRoot, settings, sensor);
     }
 
     // mediumDead: the medium is gone (yank, unmount under us). Nothing that would
@@ -4772,49 +4884,15 @@ private:
         return allocateClipFolder(mediaRoot, settings);
     }
 
+    // `sensor` is the {sensor} token (the session knows it; the DngRecordingQueue does not).
     static std::filesystem::path allocateClipFolder(const std::string &mediaRoot,
-                                                    const CaptureSettings &settings)
+                                                    const CaptureSettings &settings,
+                                                    const std::string &sensor = std::string())
     {
+        // The template decides the name (default {format}_{date}_{clip} = cDNG_26-10-28_C0001, as always);
+        // the number is the lowest C#### whose folder does not exist yet.
         const std::filesystem::path root = mediaRootPath(mediaRoot);
-        const auto now = std::chrono::system_clock::now();
-        const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
-        std::tm localTime{};
-#if defined(_WIN32)
-        localtime_s(&localTime, &seconds);
-#else
-        localtime_r(&seconds, &localTime);
-#endif
-
-        const char *formatPrefix = "cDNG_";
-        switch (settings.recordingFormat) {
-        case RecordingFormat::Mlv:
-            formatPrefix = "MLV_";
-            break;
-        case RecordingFormat::H264:
-            formatPrefix = "H264_";
-            break;
-        case RecordingFormat::LossyDng:
-            formatPrefix = settings.lossyDngRatio == LossyDngRatio::R5 ? "cDNG_5to1_" : "cDNG_3to1_";
-            break;
-        case RecordingFormat::Prores:
-            formatPrefix = "ProRes_";
-            break;
-        case RecordingFormat::Cdng:
-            break;
-        }
-
-        std::ostringstream prefix;
-        prefix << formatPrefix << std::put_time(&localTime, "%y-%m-%d");
-
-        for (int clip = 1; clip <= 9999; ++clip) {
-            std::ostringstream name;
-            name << prefix.str() << "_C" << std::setw(4) << std::setfill('0') << clip;
-            std::filesystem::path candidate = root / name.str();
-            if (!std::filesystem::exists(candidate))
-                return candidate;
-        }
-
-        throw std::runtime_error("Could not allocate a unique clip folder.");
+        return root / nextClipFolderName(root, settings, sensor, std::chrono::system_clock::now());
     }
 
     static std::string frameFilename(const std::string &clipName, uint64_t frameIndex)
@@ -7143,7 +7221,7 @@ public:
 
         std::filesystem::path clipFolder;
         try {
-            clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings);
+            clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings, sensorFamilyName(sensorFamily_));
             std::filesystem::create_directories(clipFolder);
         } catch (const std::exception &e) {
             setError(error, e.what());
@@ -10692,6 +10770,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
             const bool fpsSpeedRampReturn = next.fpsSpeedRampReturn;
             const double conformFps = next.conformFps;
+            const std::string clipNameTemplate = next.clipNameTemplate;   // one naming scheme for the camera
             next = saved->second;
             next.tuningFile = tuningFile;
             next.timecodeMode = timecodeMode;
@@ -10701,6 +10780,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.fpsSpeedRampStretchAudio = fpsSpeedRampStretchAudio;
             next.fpsSpeedRampReturn = fpsSpeedRampReturn;
             next.conformFps = conformFps;
+            next.clipNameTemplate = clipNameTemplate;
             next.fpsPhaseLock = fpsPhaseLock;
             next.cdngLog = cdngLog;
             if (format == RecordingFormat::Cdng)
@@ -11147,6 +11227,67 @@ bool CameraController::setConformFps(double fps)
     CaptureSettings next = settings_;
     next.conformFps = fps;
     return applySettingsLocked(next, false);
+}
+
+std::string CameraController::clipNameSensorLocked() const
+{
+    if (simulateCamera_)
+        return "Simulated";
+    if (!session_)
+        return "Unknown";
+    return sensorFamilyName(session_->sensorFamily());
+}
+
+void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
+{
+    try {
+        out.clipNameExample = nextClipFolderName(mediaRootPath(mediaRoot_), out, clipNameSensorLocked(),
+                                                 std::chrono::system_clock::now());
+    } catch (const std::exception &) {
+        out.clipNameExample.clear();
+    }
+}
+
+bool CameraController::setClipNameTemplate(const std::string &value, std::string *stored)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_ || prerollTake_) {
+        setErrorLocked("Clip names cannot be changed while recording.");
+        return false;
+    }
+    const auto parsed = apertar::clipname::parse(value);
+    if (!parsed.ok) {
+        setErrorLocked(parsed.error);
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.clipNameTemplate = parsed.normalized;
+    if (!applySettingsLocked(next, false))
+        return false;
+    if (stored)
+        *stored = settings_.clipNameTemplate;
+    return true;
+}
+
+bool CameraController::previewClipName(const std::string &value, std::string *example, std::string *error) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto parsed = apertar::clipname::parse(value.empty() ? settings_.clipNameTemplate : value);
+    if (!parsed.ok) {
+        if (error) *error = parsed.error;
+        return false;
+    }
+    CaptureSettings probe = settings_;
+    probe.clipNameTemplate = parsed.normalized;
+    try {
+        const std::string name = nextClipFolderName(mediaRootPath(mediaRoot_), probe, clipNameSensorLocked(),
+                                                    std::chrono::system_clock::now());
+        if (example) *example = name;
+    } catch (const std::exception &e) {
+        if (error) *error = e.what();
+        return false;
+    }
+    return true;
 }
 
 bool CameraController::setFpsPhaseLock(bool enabled)
@@ -11817,6 +11958,7 @@ CaptureSettings CameraController::settings() const
     result.isoMax = maximumIsoForSettings(result, family);
     result.fpsMax = maximumFpsForSettings(result, family);
     fillLadderFieldsLocked(result);
+    fillClipNameExampleLocked(result);
     return result;
 }
 
@@ -12073,6 +12215,7 @@ void CameraController::emitSettingsEventLocked()
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
     fillLadderFieldsLocked(settings_);
+    fillClipNameExampleLocked(settings_);
     settings_.cdngLogApplied = cdngLogApplicableLocked();
     lastEmittedLogApplied_ = settings_.cdngLogApplied;
     if (eventCallback_)

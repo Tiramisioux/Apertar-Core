@@ -148,6 +148,11 @@ struct CaptureSettings {
     // After a ramped take: false = the FPS stays at the value the ramp ended on (it becomes the
     // operator's FPS); true = it returns to the rate the take started with.
     bool fpsSpeedRampReturn = false;
+    // How a take's folder (and the files in it) is named: tokens in braces, other characters literal
+    // (src/util/ClipName.hpp). The default is the name the camera always made, cDNG_26-10-28_C0001.
+    // One setting for the camera as a whole, like the timecode mode.
+    std::string clipNameTemplate = "{format}_{date}_{clip}";
+    std::string clipNameExample;   // Runtime: the next clip's name for clipNameTemplate (filled by the controller), not persisted.
     uint32_t iso = 800;
     bool isoAuto = false;
     bool isoAutoAfterClearHdr = false; // Clear HDR stopped auto ISO; SDR turns it back on.

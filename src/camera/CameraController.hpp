@@ -87,6 +87,12 @@ public:
     bool setH264Resolution(Resolution resolution);
     bool setTimecodeMode(TimecodeMode mode);
     bool setConformFps(double fps);
+    // The clip name template (src/util/ClipName.hpp). Refused while recording. `stored` gets the normalised
+    // template (a missing {clip} is appended); on failure lastError() names the problem.
+    bool setClipNameTemplate(const std::string &value, std::string *stored = nullptr);
+    // The name the NEXT clip would get with `value` (the saved template when empty), real counter and clock.
+    // No side effects; false with `error` set when the template is invalid.
+    bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
     bool setFpsPhaseLock(bool enabled);
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
     // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
@@ -169,6 +175,8 @@ private:
     bool ladderActiveForLocked(const CaptureSettings &base) const;
     bool ladderRewriteLocked(CaptureSettings &next) const;
     void fillLadderFieldsLocked(CaptureSettings &out) const;
+    void fillClipNameExampleLocked(CaptureSettings &out) const;
+    std::string clipNameSensorLocked() const;
     void saveModeLadderLocked() const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,

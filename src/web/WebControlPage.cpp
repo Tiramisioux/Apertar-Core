@@ -1452,6 +1452,142 @@ std::string_view webControlPageHtml()
       color: var(--danger);
     }
 
+    .clip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      min-height: 48px;
+      padding: 8px;
+      border: 1px dashed #3f3f46;
+      border-radius: 16px;
+      background: rgba(9, 9, 11, 0.5);
+    }
+
+    .clip-row.drop-end {
+      box-shadow: inset -3px 0 0 var(--info);
+    }
+
+    .clip-row-hint {
+      font-size: 12px;
+      color: var(--muted-2);
+    }
+
+    .clip-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid #27272a;
+      padding: 6px 10px;
+      font-size: 13px;
+      line-height: 1.2;
+      color: #f4f4f5;
+      background: rgba(9, 9, 11, 0.72);
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    .clip-pill.token {
+      background: rgba(56, 189, 248, 0.14);
+      border-color: rgba(56, 189, 248, 0.45);
+      color: #e0f2fe;
+    }
+
+    .clip-pill.text {
+      background: rgba(52, 211, 153, 0.12);
+      border-color: rgba(52, 211, 153, 0.4);
+      color: #d1fae5;
+    }
+
+    .clip-pill.sep {
+      background: #202024;
+      border-color: rgba(255, 255, 255, 0.12);
+      color: #e4e4e7;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      padding: 6px 12px;
+    }
+
+    .clip-pill.dragging {
+      opacity: 0.4;
+    }
+
+    .clip-pill.drop-before {
+      box-shadow: -3px 0 0 var(--info);
+    }
+
+    .clip-pill .clip-x {
+      border: 0;
+      border-radius: 999px;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .clip-pill .clip-x:hover {
+      color: var(--danger);
+    }
+
+    .clip-pill input {
+      width: 10ch;
+      border: 1px solid #52525b;
+      border-radius: 8px;
+      background: #09090b;
+      color: #ffffff;
+      font: inherit;
+      padding: 2px 6px;
+    }
+
+    .clip-ghost {
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0.92;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    .clip-palette-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .clip-palette-title {
+      width: 74px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .settings-card.locked .clip-pill {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .clip-example {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      word-break: break-all;
+      color: #f4f4f5;
+    }
+
+    .clip-status-ok {
+      color: var(--ok);
+    }
+
+    .clip-status-error {
+      color: var(--danger);
+    }
+
     .pill-button.disabled,
     .pill-button:disabled {
       color: rgba(228, 228, 231, 0.34);
@@ -4722,6 +4858,31 @@ std::string_view webControlPageHtml()
                 <div class="online-pill" id="settingsRawBitDepthValue">12-bit</div>
               </div>
               <div class="pill-grid three-col" id="settingsRawBitDepthOptions"></div>
+            </div>
+
+            <div class="settings-card" id="settingsClipNamesCard" data-search="clip name naming file folder template pills timecode">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Clip names</h3>
+                  <p class="settings-card-copy">How the next clips are named: the folder, and the frames, sound and video inside it. Pick a preset or drag pills to compose your own.</p>
+                </div>
+                <div class="online-pill" id="settingsClipNamesValue">Original</div>
+              </div>
+              <div class="pill-grid" id="clipNamePresets"></div>
+              <div class="field-stack">
+                <span class="input-label">Name</span>
+                <div class="clip-row" id="clipNameRow"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">Pills</span>
+                <div id="clipNamePalette"></div>
+                <p class="settings-card-copy">Drag a pill into the name, or tap it to add it at the end. Drag a pill inside the name to reorder, out of it (or tap the x) to remove. Double-click a text pill to edit it. Empty parts (Log off) drop their separator. The clip number is always kept.</p>
+              </div>
+              <div class="field-stack">
+                <div id="clipNamePreview"></div>
+                <div id="clipNameSaved" class="subtle-note hidden"></div>
+                <div id="clipNameStatus" class="subtle-note"></div>
+              </div>
             </div>
 
             <div class="settings-card" id="settingsModeLadderCard">
@@ -13304,6 +13465,10 @@ std::string_view webControlPageHtml()
         snapshot.fps_speed_ramp_stretch_audio = source.fps_speed_ramp_stretch_audio;
       if (source.fps_speed_ramp_after === "stay" || source.fps_speed_ramp_after === "return")
         snapshot.fps_speed_ramp_after = source.fps_speed_ramp_after;
+      if (typeof source.clip_name_template === "string")
+        snapshot.clip_name_template = source.clip_name_template;
+      if (typeof source.clip_name_example === "string")
+        snapshot.clip_name_example = source.clip_name_example;
     }
 
     function applyCommandSnapshotPatch(payload, result, optimistic) {
@@ -13348,6 +13513,10 @@ std::string_view webControlPageHtml()
             snapshot.fps_speed_ramp_stretch_audio = payload.audio === "stretch";
           if (payload.after === "stay" || payload.after === "return")
             snapshot.fps_speed_ramp_after = payload.after;
+          break;
+        case "set_clip_name_template":
+          if (typeof payload.value === "string")
+            snapshot.clip_name_template = payload.value;
           break;
         case "set_mode_ladder":
           if (typeof payload.enabled === "string")
@@ -13817,6 +13986,578 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // ---- Clip names: the template as draggable pills (Settings > Record) ----------------------------------
+    // The template is ONE string, e.g. "{format}_{date}_{clip}" (src/util/ClipName.hpp). Mouse: HTML5 drag and drop.
+    // Touch / pen: long-press a pill to pick it up (pointer events); tap a palette pill to add it; x removes.
+    const CLIP_DEFAULT_TEMPLATE = "{format}_{date}_{clip}";
+    const CLIP_PRESETS = [
+      { value: "{format}_{date}_{clip}", label: "Original" },
+      { value: "{format}_{date_}_{tc-}_{clip}", label: "Time of day, dashes" },
+      { value: "{format}_{date_}_{tc}_{clip}", label: "Time of day, compact" }
+    ];
+    const CLIP_TOKEN_GROUPS = [
+      { group: "Time", items: [
+        { v: "date", label: "Date", sample: "26-10-28" },
+        { v: "date_", label: "Date _", sample: "26_10_28" },
+        { v: "yy", label: "Year", sample: "26" },
+        { v: "mm", label: "Month", sample: "10" },
+        { v: "dd", label: "Day", sample: "28" },
+        { v: "time", label: "Time", sample: "014008" },
+        { v: "time-", label: "Time -", sample: "01-40-08" },
+        { v: "tc", label: "Timecode", sample: "01400812" },
+        { v: "tc-", label: "Timecode -", sample: "01-40-08-12" }
+      ] },
+      { group: "Camera", items: [
+        { v: "cam", label: "Camera", sample: "cam0" },
+        { v: "sensor", label: "Sensor", sample: "IMX585" },
+        { v: "model", label: "Model", sample: "D1" }
+      ] },
+      { group: "Format", items: [
+        { v: "format", label: "Format", sample: "cDNG" },
+        { v: "res", label: "Resolution", sample: "4K" },
+        { v: "fps", label: "FPS", sample: "25fps" },
+        { v: "bits", label: "Bit depth", sample: "12bit" },
+        { v: "comp", label: "Compression", sample: "lossless" },
+        { v: "log", label: "Log", sample: "Log" },
+        { v: "clip", label: "Clip no.", sample: "C0001" }
+      ] }
+    ];
+    const CLIP_TOKEN_INFO = {};
+    CLIP_TOKEN_GROUPS.forEach((group) => group.items.forEach((item) => { CLIP_TOKEN_INFO[item.v] = item; }));
+    const clipUi = {
+      items: [], savedTemplate: null, dirty: false, saveTimer: 0, seq: 0, dragging: false, editing: -1,
+      ptype: "mouse", dropHandled: false, src: null, lastDrag: null, suppressClickUntil: 0,
+      example: "", error: "", statusText: "", statusKind: "", statusTimer: 0, recording: false, sig: "", bound: false
+    };
+
+    function clipParse(template) {
+      const items = [];
+      const pattern = /\{([^{}]*)\}|([^{}]+)/g;
+      let match;
+      while ((match = pattern.exec(template)) !== null) {
+        if (match[1] !== undefined) {
+          if (match[1].indexOf("text:") === 0)
+            items.push({ t: "txt", v: match[1].slice(5) });
+          else
+            items.push({ t: "tok", v: match[1] });
+          continue;
+        }
+        let run = "";
+        for (const ch of match[2]) {
+          if (ch === "_" || ch === "-" || ch === ".") {
+            if (run)
+              items.push({ t: "txt", v: run });
+            run = "";
+            items.push({ t: "sep", v: ch });
+          } else {
+            run += ch;
+          }
+        }
+        if (run)
+          items.push({ t: "txt", v: run });
+      }
+      return items;
+    }
+
+    function clipSerialize(items) {
+      return items.map((item) => item.t === "tok" ? "{" + item.v + "}"
+        : (item.t === "txt" ? (item.v ? "{text:" + item.v + "}" : "") : item.v)).join("");
+    }
+
+    function clipPillLabel(item) {
+      if (item.t === "tok")
+        return CLIP_TOKEN_INFO[item.v] ? CLIP_TOKEN_INFO[item.v].label : "{" + item.v + "}";
+      return item.t === "txt" ? (item.v || "Text...") : item.v;
+    }
+
+    function clipSetStatus(text, kind, holdMs) {
+      clipUi.statusText = text;
+      clipUi.statusKind = kind;
+      clearTimeout(clipUi.statusTimer);
+      if (holdMs)
+        clipUi.statusTimer = window.setTimeout(() => { clipUi.statusText = ""; clipUi.statusKind = ""; clipUpdateLines(); }, holdMs);
+      clipUpdateLines();
+    }
+
+    function clipUpdateLines() {
+      const snapshot = state.snapshot || {};
+      const savedExample = typeof snapshot.clip_name_example === "string" ? snapshot.clip_name_example : "";
+      const preview = document.getElementById("clipNamePreview");
+      const saved = document.getElementById("clipNameSaved");
+      const status = document.getElementById("clipNameStatus");
+      if (!preview || !saved || !status)
+        return;
+      const showPreview = clipUi.dirty && !clipUi.error && clipUi.example;
+      const example = showPreview ? clipUi.example : savedExample;
+      preview.textContent = "";
+      preview.appendChild(document.createTextNode("Next clip: "));
+      const code = document.createElement("span");
+      code.className = "clip-example";
+      code.textContent = clipUi.error ? "--" : (example || "--");
+      preview.appendChild(code);
+      saved.classList.toggle("hidden", !(clipUi.dirty && savedExample));
+      saved.textContent = "Saved name: " + savedExample;
+      let text = clipUi.statusText;
+      let kind = clipUi.statusKind;
+      if (clipUi.error) {
+        text = clipUi.error;
+        kind = "error";
+      } else if (clipUi.recording) {
+        text = "Clip names cannot be changed while recording.";
+        kind = "";
+      }
+      status.textContent = text;
+      status.className = "subtle-note" + (kind === "error" ? " clip-status-error" : (kind === "ok" ? " clip-status-ok" : ""));
+    }
+
+    async function clipRawCommand(payload) {
+      const response = await fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok)
+        throw new Error(result.error || "Command failed.");
+      return result;
+    }
+
+    function clipChanged() {
+      clipUi.dirty = true;
+      clipUi.statusText = "";
+      clipUi.statusKind = "";
+      clipRenderComposer();
+      clearTimeout(clipUi.saveTimer);
+      clipUi.saveTimer = window.setTimeout(clipPreviewThenSave, 350);
+    }
+
+    async function clipPreviewThenSave() {
+      const value = clipSerialize(clipUi.items);
+      const seq = ++clipUi.seq;
+      if (!value) {
+        clipUi.error = "Add at least one pill.";
+        clipUpdateLines();
+        return;
+      }
+      try {
+        const preview = await clipRawCommand({ cmd: "preview_clip_name", value: value });
+        if (seq !== clipUi.seq)
+          return;
+        clipUi.example = preview.example || "";
+        clipUi.error = "";
+      } catch (error) {
+        if (seq === clipUi.seq) {
+          clipUi.error = error.message || "Invalid clip name.";
+          clipUpdateLines();
+        }
+        return;
+      }
+      if (clipUi.recording) {
+        clipUpdateLines();
+        return;
+      }
+      if (value === clipUi.savedTemplate) {
+        clipUi.dirty = false;
+        clipUpdateLines();
+        return;
+      }
+      try {
+        const reply = await sendCommand({ cmd: "set_clip_name_template", value: value });
+        if (seq !== clipUi.seq)
+          return;
+        const stored = typeof reply.clip_name_template === "string" ? reply.clip_name_template : value;
+        clipUi.savedTemplate = stored;
+        if (stored !== value) {
+          clipUi.items = clipParse(stored);
+          showToast("The clip number was added at the end: every name needs it.", false);
+        }
+        clipUi.dirty = false;
+        clipRenderComposer();
+        clipSetStatus("Saved", "ok", 2500);
+      } catch (error) {
+        if (seq === clipUi.seq) {
+          clipUi.error = error.message || "Could not save the clip name.";
+          clipUpdateLines();
+        }
+      }
+    }
+
+    function clipRowElement() {
+      return document.getElementById("clipNameRow");
+    }
+
+    function clipShowMarker(index) {
+      const row = clipRowElement();
+      if (!row)
+        return;
+      const pills = row.querySelectorAll(".clip-pill");
+      pills.forEach((pill) => pill.classList.remove("drop-before"));
+      row.classList.remove("drop-end");
+      if (index < 0)
+        return;
+      if (index < pills.length)
+        pills[index].classList.add("drop-before");
+      else
+        row.classList.add("drop-end");
+    }
+
+    // Where a pill dropped at (x, y) would land: before the first pill that is below the pointer or right of it.
+    function clipDropIndex(x, y) {
+      const row = clipRowElement();
+      const pills = row ? Array.from(row.querySelectorAll(".clip-pill")) : [];
+      for (let i = 0; i < pills.length; i += 1) {
+        const rect = pills[i].getBoundingClientRect();
+        if (y < rect.top)
+          return i;
+        if (y <= rect.bottom && x < rect.left + rect.width / 2)
+          return i;
+      }
+      return pills.length;
+    }
+
+    function clipOverRow(x, y) {
+      const row = clipRowElement();
+      if (!row)
+        return false;
+      const rect = row.getBoundingClientRect();
+      return x >= rect.left - 12 && x <= rect.right + 12 && y >= rect.top - 12 && y <= rect.bottom + 12;
+    }
+
+    function clipApplyDrop(src, at) {
+      if (clipUi.recording || !src)
+        return;
+      if (src.from === "palette") {
+        const item = { t: src.item.t, v: src.item.v };
+        clipUi.items.splice(at, 0, item);
+        if (item.t === "txt") {
+          clipUi.editing = at;
+          clipRenderComposer();
+          return;
+        }
+      } else if (src.from === "row" && src.index >= 0 && src.index < clipUi.items.length) {
+        const moved = clipUi.items.splice(src.index, 1)[0];
+        clipUi.items.splice(at > src.index ? at - 1 : at, 0, moved);
+      }
+      clipChanged();
+    }
+
+    function clipRemove(index) {
+      if (clipUi.recording || index < 0 || index >= clipUi.items.length)
+        return;
+      clipUi.items.splice(index, 1);
+      clipChanged();
+    }
+
+    function clipEditText(index) {
+      if (clipUi.recording || !clipUi.items[index] || clipUi.items[index].t !== "txt")
+        return;
+      clipUi.editing = index;
+      clipRenderComposer();
+    }
+
+    function clipPointerDrag(startEvent, element, src) {
+      clipUi.dragging = true;
+      const rect = element.getBoundingClientRect();
+      const ghost = element.cloneNode(true);
+      ghost.classList.add("clip-ghost");
+      ghost.style.width = rect.width + "px";
+      document.body.appendChild(ghost);
+      element.classList.add("dragging");
+      try { element.setPointerCapture(startEvent.pointerId); } catch (error) { /* the element may be gone */ }
+      if (navigator.vibrate) {
+        try { navigator.vibrate(15); } catch (error) { /* no haptics */ }
+      }
+      const place = (event) => {
+        ghost.style.transform = "translate(" + (event.clientX - rect.width / 2) + "px," + (event.clientY - rect.height / 2) + "px)";
+        clipShowMarker(clipOverRow(event.clientX, event.clientY) ? clipDropIndex(event.clientX, event.clientY) : -1);
+      };
+      const block = (event) => event.preventDefault();
+      const finish = (event, apply) => {
+        window.removeEventListener("pointermove", place);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("touchmove", block);
+        ghost.remove();
+        element.classList.remove("dragging");
+        clipShowMarker(-1);
+        clipUi.dragging = false;
+        clipUi.suppressClickUntil = performance.now() + 400;
+        if (!apply)
+          return;
+        if (clipOverRow(event.clientX, event.clientY))
+          clipApplyDrop(src, clipDropIndex(event.clientX, event.clientY));
+        else if (src.from === "row")
+          clipRemove(src.index);
+      };
+      const onUp = (event) => finish(event, true);
+      const onCancel = (event) => finish(event, false);
+      window.addEventListener("pointermove", place);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("touchmove", block, { passive: false });
+      place(startEvent);
+    }
+
+    function clipAttachPill(element, src) {
+      element.addEventListener("pointerdown", (event) => {
+        clipUi.ptype = event.pointerType || "mouse";
+        if (clipUi.ptype === "mouse" || clipUi.recording || clipUi.editing >= 0)
+          return;
+        if (event.target.closest && event.target.closest(".clip-x"))
+          return;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let timer = 0;
+        const stop = () => {
+          window.clearTimeout(timer);
+          window.removeEventListener("pointermove", moved);
+          window.removeEventListener("pointerup", stop);
+          window.removeEventListener("pointercancel", stop);
+        };
+        const moved = (moveEvent) => {
+          if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 10)
+            stop();
+        };
+        timer = window.setTimeout(() => {
+          stop();
+          clipPointerDrag(event, element, src);
+        }, 300);
+        window.addEventListener("pointermove", moved);
+        window.addEventListener("pointerup", stop);
+        window.addEventListener("pointercancel", stop);
+      });
+      element.addEventListener("dragstart", (event) => {
+        if (clipUi.ptype !== "mouse" || clipUi.recording || clipUi.editing >= 0) {
+          event.preventDefault();
+          return;
+        }
+        clipUi.dragging = true;
+        clipUi.dropHandled = false;
+        clipUi.src = src;
+        event.dataTransfer.effectAllowed = "copyMove";
+        event.dataTransfer.setData("text/plain", "clip-pill");
+        element.classList.add("dragging");
+      });
+      element.addEventListener("dragend", () => {
+        element.classList.remove("dragging");
+        clipShowMarker(-1);
+        const wasDragging = clipUi.dragging;
+        clipUi.dragging = false;
+        if (wasDragging && src.from === "row" && !clipUi.dropHandled && clipUi.lastDrag) {
+          const row = clipRowElement();
+          const rect = row ? row.getBoundingClientRect() : null;
+          const point = clipUi.lastDrag;
+          if (rect && (point.y < rect.top - 20 || point.y > rect.bottom + 20 || point.x < rect.left - 20 || point.x > rect.right + 20))
+            clipRemove(src.index);
+        }
+        clipUi.src = null;
+      });
+    }
+
+    function clipMakePill(item, index, inRow) {
+      const element = document.createElement("span");
+      element.className = "clip-pill " + (item.t === "tok" ? "token" : (item.t === "txt" ? "text" : "sep"));
+      element.draggable = !clipUi.recording && !(inRow && clipUi.editing === index);
+      if (item.t === "tok" && CLIP_TOKEN_INFO[item.v])
+        element.title = "{" + item.v + "}  e.g. " + CLIP_TOKEN_INFO[item.v].sample;
+      if (inRow && clipUi.editing === index) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.maxLength = 24;
+        input.value = item.v;
+        input.placeholder = "Text";
+        input.setAttribute("aria-label", "Clip name text");
+        const original = item.v;
+        let done = false;
+        const commit = (cancel) => {
+          if (done)
+            return;
+          done = true;
+          const text = cancel ? original : input.value.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 24);
+          clipUi.editing = -1;
+          if (!text) {
+            clipUi.items.splice(index, 1);
+            clipChanged();
+          } else if (text !== original) {
+            item.v = text;
+            clipChanged();
+          } else {
+            clipRenderComposer();
+          }
+        };
+        input.addEventListener("input", () => {
+          const cleaned = input.value.replace(/[^A-Za-z0-9._-]/g, "");
+          if (cleaned !== input.value)
+            input.value = cleaned;
+        });
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter")
+            commit(false);
+          else if (event.key === "Escape")
+            commit(true);
+        });
+        input.addEventListener("blur", () => commit(false));
+        element.appendChild(input);
+        window.setTimeout(() => input.focus(), 0);
+        return element;
+      }
+      const label = document.createElement("span");
+      label.textContent = clipPillLabel(item);
+      element.appendChild(label);
+      if (inRow) {
+        if (!clipUi.recording) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "clip-x";
+          remove.textContent = "×";
+          remove.title = "Remove";
+          remove.setAttribute("aria-label", "Remove " + clipPillLabel(item));
+          remove.addEventListener("click", (event) => {
+            event.stopPropagation();
+            clipRemove(index);
+          });
+          element.appendChild(remove);
+        }
+        if (item.t === "txt") {
+          element.addEventListener("dblclick", () => clipEditText(index));
+          element.addEventListener("click", () => {
+            if (clipUi.ptype !== "mouse" && performance.now() > clipUi.suppressClickUntil)
+              clipEditText(index);
+          });
+        }
+        clipAttachPill(element, { from: "row", index: index });
+      } else {
+        element.tabIndex = 0;
+        element.setAttribute("role", "button");
+        const add = () => {
+          if (clipUi.recording || performance.now() < clipUi.suppressClickUntil)
+            return;
+          clipUi.items.push({ t: item.t, v: item.v });
+          if (item.t === "txt") {
+            clipUi.editing = clipUi.items.length - 1;
+            clipRenderComposer();
+          } else {
+            clipChanged();
+          }
+        };
+        element.addEventListener("click", add);
+        element.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            add();
+          }
+        });
+        clipAttachPill(element, { from: "palette", item: { t: item.t, v: item.v } });
+      }
+      return element;
+    }
+
+    function clipBindRow() {
+      if (clipUi.bound)
+        return;
+      const row = clipRowElement();
+      if (!row)
+        return;
+      clipUi.bound = true;
+      document.addEventListener("dragover", (event) => { clipUi.lastDrag = { x: event.clientX, y: event.clientY }; });
+      row.addEventListener("dragover", (event) => {
+        if (!clipUi.dragging || clipUi.recording)
+          return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = clipUi.src && clipUi.src.from === "row" ? "move" : "copy";
+        clipShowMarker(clipDropIndex(event.clientX, event.clientY));
+      });
+      row.addEventListener("dragleave", (event) => {
+        if (!row.contains(event.relatedTarget))
+          clipShowMarker(-1);
+      });
+      row.addEventListener("drop", (event) => {
+        if (!clipUi.dragging || clipUi.recording)
+          return;
+        event.preventDefault();
+        clipUi.dropHandled = true;
+        clipUi.dragging = false;
+        const src = clipUi.src;
+        const at = clipDropIndex(event.clientX, event.clientY);
+        clipShowMarker(-1);
+        clipApplyDrop(src, at);
+      });
+    }
+
+    function clipRenderComposer() {
+      const card = document.getElementById("settingsClipNamesCard");
+      const row = clipRowElement();
+      if (!card || !row)
+        return;
+      clipBindRow();
+      card.classList.toggle("locked", clipUi.recording);
+      const current = clipSerialize(clipUi.items);
+      let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === current);
+      setText("settingsClipNamesValue", activeIndex >= 0 ? CLIP_PRESETS[activeIndex].label : "Custom");
+      const options = CLIP_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, enabled: !clipUi.recording }));
+      options.push({ value: "", label: "Custom", enabled: false });
+      buildOptionButtons("clipNamePresets", options, activeIndex >= 0 ? CLIP_PRESETS[activeIndex].value : "", (value) => {
+        clipUi.items = clipParse(value);
+        clipUi.editing = -1;
+        clipChanged();
+      }, 4);
+      const customButton = document.getElementById("clipNamePresets").lastElementChild;
+      if (customButton) {
+        customButton.disabled = true;
+        customButton.classList.remove("disabled");
+        customButton.classList.toggle("active", activeIndex < 0);
+      }
+      row.innerHTML = "";
+      if (!clipUi.items.length) {
+        const hint = document.createElement("span");
+        hint.className = "clip-row-hint";
+        hint.textContent = "Drag pills here";
+        row.appendChild(hint);
+      }
+      clipUi.items.forEach((item, index) => row.appendChild(clipMakePill(item, index, true)));
+      const palette = document.getElementById("clipNamePalette");
+      palette.innerHTML = "";
+      const addGroup = (title, items) => {
+        const group = document.createElement("div");
+        group.className = "clip-palette-group";
+        const heading = document.createElement("span");
+        heading.className = "clip-palette-title";
+        heading.textContent = title;
+        group.appendChild(heading);
+        items.forEach((item) => group.appendChild(clipMakePill(item, -1, false)));
+        palette.appendChild(group);
+      };
+      CLIP_TOKEN_GROUPS.forEach((group) => addGroup(group.group, group.items.map((item) => ({ t: "tok", v: item.v }))));
+      addGroup("Text", [{ t: "txt", v: "" }]);
+      addGroup("Separators", [{ t: "sep", v: "_" }, { t: "sep", v: "-" }, { t: "sep", v: "." }]);
+      clipUpdateLines();
+    }
+
+    function renderClipNames(snapshot, isRecording) {
+      if (!document.getElementById("settingsClipNamesCard"))
+        return;
+      const template = typeof snapshot.clip_name_template === "string" && snapshot.clip_name_template
+        ? snapshot.clip_name_template : CLIP_DEFAULT_TEMPLATE;
+      const recordingChanged = clipUi.recording !== !!isRecording;
+      clipUi.recording = !!isRecording;
+      if (clipUi.dragging || clipUi.editing >= 0) {
+        clipUpdateLines();
+        return;
+      }
+      let rebuild = recordingChanged || clipUi.sig === "";
+      if (!clipUi.dirty && clipUi.savedTemplate !== template) {
+        clipUi.savedTemplate = template;
+        clipUi.items = clipParse(template);
+        rebuild = true;
+      }
+      if (rebuild) {
+        clipUi.sig = "built";
+        clipRenderComposer();
+      } else {
+        clipUpdateLines();
+      }
+    }
+
     function buildOptionButtons(containerId, options, currentValue, onClick, columns) {
       buildOptionButtonsInto(document.getElementById(containerId), options, currentValue, onClick, columns);
     }
@@ -14279,6 +15020,7 @@ std::string_view webControlPageHtml()
             ? "RAM buffer in use." + (shortBufferNote ? " " + shortBufferNote + "." : "")
             : "Takes effect at the next take." + (shortBufferNote ? " Last take: " + shortBufferNote + "." : "")));
       }
+      renderClipNames(snapshot, isRecording);
       setText("settingsRawBitDepthValue", rawBitDepthText);
       setText("settingsRawBitDepthNote", rawBitDepthFixedForH264
         ? recordFormatText + (recordingFeatureSupported(snapshot, "h264_hardware") ? " uses 8-bit YUV420 hardware encoding." : " uses processed video output, so capture is fixed to 10-bit here.")
@@ -17562,7 +18304,7 @@ std::string_view webControlPageHtml()
         "cameraRawBitDepth",
         "recordingFrameEnabled", "recordingRedTimecodeEnabled",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
-        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio", "cameraFpsSpeedRampAfter",
+        "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio", "cameraFpsSpeedRampAfter", "cameraClipNameTemplate",
       ];
 
       for (const key of allowedKeys) {
