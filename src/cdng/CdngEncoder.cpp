@@ -84,14 +84,14 @@ DngPageCacheDrop dngPageCacheDrop()
 {
     static const DngPageCacheDrop mode = []() {
         const char *text = std::getenv("APERTAR_DNG_DONTNEED");
-        if (!text || !*text || std::strcmp(text, "writer") == 0 || std::strcmp(text, "1") == 0)
-            return DngPageCacheDrop::Writer;
-        if (std::strcmp(text, "sync") == 0)
+        if (!text || !*text || std::strcmp(text, "sync") == 0)
             return DngPageCacheDrop::Sync;
+        if (std::strcmp(text, "writer") == 0 || std::strcmp(text, "1") == 0)
+            return DngPageCacheDrop::Writer;
         if (std::strcmp(text, "off") == 0 || std::strcmp(text, "0") == 0 || std::strcmp(text, "false") == 0)
             return DngPageCacheDrop::Off;
-        std::cerr << "ApertarCore cdng: APERTAR_DNG_DONTNEED=" << text << " is not writer|sync|off: using writer\n";
-        return DngPageCacheDrop::Writer;
+        std::cerr << "ApertarCore cdng: APERTAR_DNG_DONTNEED=" << text << " is not sync|writer|off: using sync\n";
+        return DngPageCacheDrop::Sync;
     }();
     return mode;
 }

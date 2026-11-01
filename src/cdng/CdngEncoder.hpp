@@ -10,9 +10,9 @@
 
 namespace apertar {
 
-// When the page cache gives a written DNG's pages back (APERTAR_DNG_DONTNEED): "writer" (default) right after the
-// write, as always; "sync" on the sync thread after the file's fsync, when the pages are clean; "off" never (the
-// kernel reclaims them). See the kb, working/dng-chain: after a write the pages are still dirty, so the writer's
+// When the page cache gives a written DNG's pages back (APERTAR_DNG_DONTNEED): "sync" (default) on the sync thread
+// after the file's fsync, when the pages are clean; "writer" right after the write, as before 2026-11-01; "off" never
+// (the kernel reclaims them). See the kb, working/dng-chain: after a write the pages are still dirty, so the writer's
 // call cannot free them and ends in a cross-CPU LRU drain for every frame.
 enum class DngPageCacheDrop { Writer, Sync, Off };
 DngPageCacheDrop dngPageCacheDrop();
