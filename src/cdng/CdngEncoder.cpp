@@ -37,7 +37,6 @@
 namespace apertar {
 namespace {
 
-constexpr int32_t kDngBlackLevel = 200;
 constexpr uint16_t kCinemaDngTagTimeCodes = 0xC763;
 constexpr uint16_t kCinemaDngTagFrameRate = 0xC764;
 constexpr uint16_t kCinemaDngTagReelName = 0xC789;
@@ -86,12 +85,6 @@ uint16_t bitsPerSample(RawBitDepth bitDepth)
     return static_cast<uint16_t>(bitDepth);
 }
 
-uint32_t whiteLevel(RawBitDepth bitDepth)
-{
-    const unsigned int bits = static_cast<unsigned int>(bitDepth);
-    return bits >= 16 ? 65535u : ((1u << bits) - 1u);
-}
-
 uint16_t readLe16(const uint8_t *src)
 {
     return static_cast<uint16_t>(src[0] | (static_cast<uint16_t>(src[1]) << 8));
@@ -108,13 +101,6 @@ void copyUnpacked16ToDng8Row(const uint8_t *src, uint8_t *dst, uint32_t width)
 {
     for (uint32_t x = 0; x < width; ++x)
         dst[x] = static_cast<uint8_t>(readLe16(src + (static_cast<size_t>(x) * 2u)) >> 8);
-}
-
-int32_t blackLevelForEncodedDepth(float sourceBlackLevel, RawBitDepth bitDepth,
-                                 bool onContainerScale)
-{
-    return static_cast<int32_t>(std::lround(blackLevelForSampleBits(
-        sourceBlackLevel, static_cast<unsigned>(bitDepth), onContainerScale)));
 }
 
 const uint8_t *cfaPattern(BayerPattern pattern)
@@ -1357,8 +1343,8 @@ void CdngEncoder::writeDngFile(const std::string &path,
     const auto blackIndices = blackLevelCfaIndices(frame.bayerPattern);
     for (size_t i = 0; i < blackIndices.size(); ++i) {
         const float sourceBlackLevel = metadata.hasBlackLevels
-            ? metadata.blackLevels[blackIndices[i]] : static_cast<float>(kDngBlackLevel);
-        encodedBlackLevels[i * 2] = blackLevelForEncodedDepth(
+            ? metadata.blackLevels[blackIndices[i]] : static_cast<float>(kDefaultSourceBlackLevel);
+        encodedBlackLevels[i * 2] = encodedBlackLevel(
             sourceBlackLevel, layout.bitDepth, metadata.blackLevelsOnContainerScale);
         encodedBlackLevels[i * 2 + 1] = 1;
     }
@@ -1371,7 +1357,7 @@ void CdngEncoder::writeDngFile(const std::string &path,
     const uint32_t imageWidth = frame.width;
     const uint32_t imageHeight = frame.height;
     const uint32_t white = metadata.linearizationTable.empty()
-        ? whiteLevel(layout.bitDepth) : metadata.linearizationTable.back();
+        ? encodedWhiteLevel(layout.bitDepth) : metadata.linearizationTable.back();
     static constexpr uint8_t tiffEpStandardId[4] = { 0, 0, 0, 1 };
     const uint16_t defaultCropOrigin[2] = { 0u, 0u };
     const uint16_t defaultCropSize[2] = {
