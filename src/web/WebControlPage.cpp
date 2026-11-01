@@ -5217,6 +5217,11 @@ std::string_view webControlPageHtml()
                 <span class="input-label">Red timecode while recording</span>
                 <div class="pill-grid" id="settingsRecordingRedTimecodeOptions"></div>
               </div>
+              <div class="field-stack" data-search="audio outline red recording indicator wav">
+                <span class="input-label">Audio recording outline</span>
+                <div class="pill-grid" id="settingsAudioRecordedOutlineOptions"></div>
+                <span class="subtle-note">A faint red outline on the audio meter when sound is recorded with the clips. Touch UI and HDMI only.</span>
+              </div>
             </div>
 
             <div class="settings-card">
@@ -13783,6 +13788,9 @@ std::string_view webControlPageHtml()
         case "set_recording_red_timecode_enabled":
           uiState.recording_red_timecode_enabled = boolValue;
           break;
+        case "set_audio_recorded_outline_enabled":
+          uiState.audio_recorded_outline_enabled = boolValue;
+          break;
         case "set_date_time_overlay_enabled":
           uiState.date_time_overlay_enabled = boolValue;
           break;
@@ -15686,6 +15694,13 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsRecordingRedTimecodeOptions", toggleOptions, formatToggleLabel(recordingRedTimecodeEnabled), async (value) => {
         try {
           await sendCommand({ cmd: "set_recording_red_timecode_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled !== false), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_audio_recorded_outline_enabled", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
           showToast(error.message, true);
         }
@@ -18302,7 +18317,7 @@ std::string_view webControlPageHtml()
         "monitoringOrder", "recordOrder", "audioOrder", "powerOrder", "systemOrder",
         "wifiOrder", "infoOrder", "sidebarOrder", "favoritesOrder",
         "cameraRawBitDepth",
-        "recordingFrameEnabled", "recordingRedTimecodeEnabled",
+        "recordingFrameEnabled", "recordingRedTimecodeEnabled", "audioRecordedOutlineEnabled",
         "cameraClearHdr", "cameraHdrThresholdHigh", "cameraHdrThresholdLow", "cameraHdrBlend", "cameraHdrGainAdder",
         "cameraFpsPhaseLock", "cameraTimecodeMode", "cameraConformFps", "cameraFpsSpeedRamp", "cameraFpsSpeedRampShutter", "cameraFpsSpeedRampAudio", "cameraFpsSpeedRampAfter", "cameraClipNameTemplate",
       ];
