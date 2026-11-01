@@ -499,6 +499,9 @@ struct State {
     size_t cameraAutoDetectLine = 0;
     std::map<std::string, std::map<std::string, uint64_t>> candidateLinks;   // port -> sensor -> Hz on a commented line
     std::vector<std::string> warnings;
+    // Lines the card's controls or the fan mode may change, commented ones included (line, what: cam0, cam1, i2c, i2s,
+    // spi, audio, rp1, display, camera_auto_detect, fan). Every other line is the operator's own.
+    std::vector<std::pair<size_t, std::string>> managed;
 };
 
 inline bool sectionExists(const Document &doc, const std::string &filter)
@@ -585,6 +588,29 @@ inline State readState(const Document &doc, const Board &board)
             for (const auto &overlay : display.overlays) want.insert(lower(overlay));
             if (!want.empty() && want == active) state.display = std::string(display.key);
         }
+    }
+
+    for (size_t i = 0; i < doc.lines.size(); ++i) {
+        const Line &line = doc.lines[i];
+        std::string what;
+        if (line.fenced) {
+            what = "fan";
+        } else if (!line.applies || line.header || line.key.empty()) {
+            continue;
+        } else if (line.key == "dtoverlay") {
+            if (const auto overlay = overlayOf(line)) {
+                if (isCameraOverlay(overlay->name)) what = portOf(*overlay);
+                else if (isRp1ClockOverlay(overlay->name)) what = "rp1";
+                else if (isDpiOverlay(overlay->name)) what = "display";
+            }
+        } else if (line.key == "dtparam") {
+            for (const auto &item : dtparamItems(line.value))
+                for (const auto &toggle : toggles())
+                    if (what.empty() && itemIs(item, toggle)) what = std::string(toggle.key);
+        } else if (line.key == "camera_auto_detect") {
+            what = "camera_auto_detect";
+        }
+        if (!what.empty()) state.managed.emplace_back(i + 1, what);
     }
 
     const std::string section = boardSection(board);
@@ -1294,6 +1320,9 @@ inline std::string stateJson(const State &state, const Facts &facts)
     }
     out += "],\"warnings\":[";
     for (size_t i = 0; i < state.warnings.size(); ++i) out += (i ? "," : "") + jsonString(state.warnings[i]);
+    out += "],\"managed\":[";
+    for (size_t i = 0; i < state.managed.size(); ++i)
+        out += std::string(i ? "," : "") + "{\"line\":" + std::to_string(state.managed[i].first) + ",\"what\":" + jsonString(state.managed[i].second) + "}";
     out += "]}";
     return out;
 }

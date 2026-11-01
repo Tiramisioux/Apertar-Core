@@ -3104,6 +3104,13 @@ std::string_view webControlPageHtml()
       user-select: none;
     }
 
+    /* Boot Config: a line the card's controls or the fan mode set (italic, as other system values) */
+    .config-gutter .managed,
+    .config-diff .diff-managed {
+      color: var(--text);
+      font-style: italic;
+    }
+
     .config-editor-wrap .config-editor {
       border-radius: 0 18px 18px 0;
     }
@@ -5846,7 +5853,8 @@ std::string_view webControlPageHtml()
                   <pre class="config-gutter" id="bootConfigGutter" aria-hidden="true">1</pre>
                   <textarea class="settings-input config-editor" id="bootConfigEditor" spellcheck="false" wrap="off" aria-label="config.txt"></textarea>
                 </div>
-                <span class="subtle-note">Any line, the ones above included. Use This Text puts it on the card; Save then shows every line that changes before it writes.</span>
+                <span class="subtle-note" id="bootConfigEditorLegend"></span>
+                <span class="subtle-note">Use This Text puts it on the card; Save then shows every line that changes before it writes.</span>
                 <div class="settings-action-row">
                   <button class="primary-button" id="useBootConfigTextButton" type="button">Use This Text</button>
                   <button class="secondary-button" id="closeBootConfigEditorButton" type="button">Close</button>
@@ -18114,15 +18122,31 @@ std::string_view webControlPageHtml()
       updateEditorGutter("settingsConfigEditor", "settingsConfigGutter");
     }
 
-    function updateEditorGutter(editorId, gutterId) {
+    // marks: optional Map line -> title; those numbers are drawn as .managed
+    function updateEditorGutter(editorId, gutterId, marks) {
       const editor = document.getElementById(editorId);
       const gutter = document.getElementById(gutterId);
       if (!editor || !gutter)
         return;
       const count = editor.value.split("\n").length;
-      if (gutter.dataset.count !== String(count)) {
-        gutter.textContent = Array.from({ length: count }, (_, index) => String(index + 1)).join("\n");
-        gutter.dataset.count = String(count);
+      const key = count + (marks ? ":" + Array.from(marks.keys()).join(",") : "");
+      if (gutter.dataset.count !== key) {
+        gutter.textContent = "";
+        for (let line = 1; line <= count; ++line) {
+          const title = marks && marks.get(line);
+          if (title) {
+            const span = document.createElement("span");
+            span.className = "managed";
+            span.title = title;
+            span.textContent = String(line);
+            gutter.appendChild(span);
+          } else {
+            gutter.appendChild(document.createTextNode(String(line)));
+          }
+          if (line < count)
+            gutter.appendChild(document.createTextNode("\n"));
+        }
+        gutter.dataset.count = key;
       }
       gutter.scrollTop = editor.scrollTop;
     }
@@ -19216,8 +19240,49 @@ std::string_view webControlPageHtml()
       savedPendingReboot: false,
       review: null,           // the last dry run shown in the diff box
       text: null,             // the file as edited by hand (Edit file); Save sends it and the choices go on top
+      previewState: null,     // the state of the last text shown (View file, Edit file)
+      editorMarks: null,      // Edit file: Map line -> control, re-read while typing
+      editorTimer: 0,
     };
     const BOOT_CONFIG_TOGGLES = [["i2c", "bootConfigI2cOptions"], ["i2s", "bootConfigI2sOptions"], ["spi", "bootConfigSpiOptions"], ["audio", "bootConfigAudioOptions"]];
+    // what Core's state.managed names: the control that sets that line
+    const BOOT_CONFIG_MANAGED = { cam0: "Camera 0 sensor", cam1: "Camera 1 sensor", i2c: "I²C", i2s: "I²S", spi: "SPI",
+      audio: "Onboard audio", rp1: "RP1 overclock", display: "Display", camera_auto_detect: "camera detection (kept at 0)",
+      fan: "Fan mode (Thermal card)" };
+
+    function bootConfigManagedMap(bootState) {
+      const marks = new Map();
+      ((bootState && bootState.managed) || []).forEach((entry) => marks.set(entry.line, BOOT_CONFIG_MANAGED[entry.what] || entry.what));
+      return marks;
+    }
+
+    // "30 I²C · 31 I²S · 41-43 Camera 0 sensor": runs of lines set by the same control
+    function bootConfigManagedSummary(marks) {
+      const runs = [];
+      Array.from(marks.keys()).sort((a, b) => a - b).forEach((line) => {
+        const last = runs[runs.length - 1];
+        if (last && last.to === line - 1 && last.title === marks.get(line))
+          last.to = line;
+        else
+          runs.push({ from: line, to: line, title: marks.get(line) });
+      });
+      return runs.map((run) => (run.from === run.to ? run.from : run.from + "-" + run.to) + " " + run.title).join(" · ");
+    }
+
+    // Where an operator's own line goes: the end of the file when it is in [all], else under a new [all] there.
+    function bootConfigOwnLinesHint(text, bootState) {
+      let last = "";
+      text.split("\n").forEach((line) => {
+        const match = line.match(/^\s*\[([^\]]*)\]/);
+        if (match)
+          last = match[1].trim().toLowerCase();
+      });
+      const board = (bootState && bootState.board && bootState.board.section) || "pi5";
+      const end = last === "all" ? "at the end of the file (it is in [all], so every Pi reads it)"
+        : "at the end of the file under an [all] line (the end is in [" + last + "] now)";
+      return "Your own lines: any line not in italics is yours and Save keeps it as typed. Add new ones " + end
+        + ", or in the [" + board + "] section for this kind of Pi only.";
+    }
 
     function bootConfigFormFrom(bootState) {
       const form = { sensors: {}, links: {}, toggles: {}, rp1: !!(bootState.rp1 && bootState.rp1.on),
@@ -19700,6 +19765,7 @@ std::string_view webControlPageHtml()
     }
 
     async function bootConfigPreviewText() {
+      bootConfig.previewState = bootConfig.payload ? bootConfig.payload.state : null;
       if (!bootConfig.form)
         return bootConfig.payload ? bootConfig.payload.text : "";
       const result = await bootConfigPost(bootConfigRequestBody({ dry_run: true }));
@@ -19707,6 +19773,7 @@ std::string_view webControlPageHtml()
         showToast(result.error || "Core refused the change; showing the file as it is.", true);
         return bootConfig.payload ? bootConfig.payload.text : "";
       }
+      bootConfig.previewState = result.state;
       return result.text;
     }
 
@@ -19719,9 +19786,13 @@ std::string_view webControlPageHtml()
       const text = await bootConfigPreviewText();
       box.textContent = "";
       bootConfigDiffLine(box, "diff-gap", (bootConfigDirty() ? "config.txt as Save would write it" : "config.txt") + " ("
-        + ((bootConfig.payload && bootConfig.payload.path) || "/boot/firmware/config.txt") + "):");
+        + ((bootConfig.payload && bootConfig.payload.path) || "/boot/firmware/config.txt") + "). Italic lines are set by the card or the fan mode:");
+      const marks = bootConfigManagedMap(bootConfig.previewState);
       text.replace(/\n$/, "").split("\n").forEach((line, index) => {
-        bootConfigDiffLine(box, "", String(index + 1).padStart(4, " ") + "  " + line);
+        const title = marks.get(index + 1);
+        const row = bootConfigDiffLine(box, title ? "diff-managed" : "", String(index + 1).padStart(4, " ") + "  " + line);
+        if (title)
+          row.title = title;
       });
       box.hidden = false;
     }
@@ -19773,8 +19844,36 @@ std::string_view webControlPageHtml()
       editor.dataset.opened = text;
       document.getElementById("bootConfigFileView").hidden = true;
       field.classList.remove("hidden");
-      updateEditorGutter("bootConfigEditor", "bootConfigGutter");
+      showBootConfigEditorMarks(bootConfig.previewState);
       editor.focus();
+    }
+
+    // The italic line numbers and the legend: which lines the card sets, and where the operator's own go.
+    function showBootConfigEditorMarks(bootState) {
+      const editor = document.getElementById("bootConfigEditor");
+      bootConfig.editorMarks = bootConfigManagedMap(bootState);
+      updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks);
+      const summary = bootConfigManagedSummary(bootConfig.editorMarks);
+      setText("bootConfigEditorLegend", (summary ? "Italic line numbers are set by the card's controls (hover for which): " + summary
+        + ". Change those with the controls above; edited here, they move the controls when you use the text. " : "")
+        + bootConfigOwnLinesHint(editor.value, bootState));
+    }
+
+    // While typing, lines move: Core reads the text again (no save) so the marks follow it.
+    function bootConfigEditorEdited() {
+      updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks);
+      window.clearTimeout(bootConfig.editorTimer);
+      bootConfig.editorTimer = window.setTimeout(async () => {
+        const text = document.getElementById("bootConfigEditor").value;
+        try {
+          const response = await fetch("/api/boot-config/parse", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+          const result = await response.json();
+          if (result.ok && document.getElementById("bootConfigEditor").value === text)
+            showBootConfigEditorMarks(result.state);
+        } catch (error) {
+          // the marks stay as they were; Use This Text reports a real problem
+        }
+      }, 500);
     }
 
     function closeBootConfigEditor(force) {
@@ -19855,9 +19954,8 @@ std::string_view webControlPageHtml()
       document.getElementById("useBootConfigTextButton").addEventListener("click", () => { void useBootConfigText(); });
       document.getElementById("closeBootConfigEditorButton").addEventListener("click", () => closeBootConfigEditor(false));
       const bootConfigEditor = document.getElementById("bootConfigEditor");
-      ["input", "scroll"].forEach((name) => {
-        bootConfigEditor.addEventListener(name, () => updateEditorGutter("bootConfigEditor", "bootConfigGutter"));
-      });
+      bootConfigEditor.addEventListener("input", bootConfigEditorEdited);
+      bootConfigEditor.addEventListener("scroll", () => updateEditorGutter("bootConfigEditor", "bootConfigGutter", bootConfig.editorMarks));
       document.getElementById("downloadBootConfigButton").addEventListener("click", () => { void downloadBootConfig(); });
       document.getElementById("uploadBootConfigButton").addEventListener("click", () => {
         document.getElementById("bootConfigUploadInput").click();

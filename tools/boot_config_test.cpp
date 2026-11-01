@@ -363,6 +363,18 @@ int main()
 
     // ---- the file edited as text ----
     {
+        auto managedAt = [&](size_t line) {
+            for (const auto &[n, what] : s.managed) if (n == line) return what;
+            return std::string();
+        };
+        check(managedAt(30) == "i2c" && managedAt(31) == "i2s" && managedAt(32) == "spi" && managedAt(41) == "cam0" &&
+                  managedAt(42) == "cam0" && managedAt(56) == "audio" && managedAt(65) == "rp1" && managedAt(73) == "display" &&
+                  managedAt(77) == "display",
+              "managed: the card's lines, commented ones included");
+        check(managedAt(11).empty() && managedAt(23).empty() && managedAt(34).empty() && managedAt(59).empty(),
+              "managed: [pi4] on a Pi 5, dwc2, pciex1 and vc4-kms-v3d are the operator's");
+    }
+    {
         check(lineChanges(kApertar, kApertar).empty(), "text: no edit, no changes");
         std::string edited = kApertar;
         edited.replace(edited.find("dtparam=pciex1_gen=3\n"), 21, "dtparam=pciex1_gen=2\n");
