@@ -3657,7 +3657,7 @@ std::optional<bool> boolFieldValue(const std::string &value)
 }
 
 // Fields: cam0_sensor, cam1_sensor, cam0_link_frequency, cam1_link_frequency (Hz or null), i2c, i2s, spi, audio, rp1,
-// display. A field left out is left as config.txt has it.
+// display. A field left out is left as config.txt has it. (text, the hand-edited file, is read by bootConfigSet.)
 bool bootConfigRequestFrom(const ControlCommand &command, bootconf::Request *request, std::string *error)
 {
     for (const std::string port : {"cam0", "cam1"}) {
@@ -3737,9 +3737,22 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
                                         "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current))};
     }
 
-    const bootconf::ApplyResult result = bootconf::applyRequest(text, request, facts);
+    // text: the file as the operator edited it on the card. The card's choices go on top of that text, and the result
+    // is reviewed against the file on disk, so a hand edit gets the same review, display tick and read-back as a choice.
+    const std::optional<std::string> edited = command.string("text");
+    if (edited) {
+        const std::string problem = bootconf::textProblem(*edited);
+        if (!problem.empty())
+            return {400, errorReplyBody(command.id, problem, "\"code\":\"invalid\"")};
+    }
+    bootconf::ApplyResult result = bootconf::applyRequest(edited ? *edited : text, request, facts);
     if (!result.ok)
         return {400, errorReplyBody(command.id, result.error, "\"code\":\"refused\"")};
+    if (edited) {
+        result.before = bootconf::readState(bootconf::parseDocument(text, facts.board), facts.board);
+        result.changes = bootconf::lineChanges(text, result.text);
+        result.displayChanged = bootconf::displayDiffers(result.before, result.after);
+    }
     const std::string body = "\"changes\":" + bootconf::changesJson(result.changes) +
         ",\"display_changed\":" + (result.displayChanged ? "true" : "false") +
         ",\"text\":" + bootconf::jsonString(result.text) + ",\"state\":" + bootconf::stateJson(result.after, facts);

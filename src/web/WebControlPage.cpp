@@ -5832,6 +5832,7 @@ std::string_view webControlPageHtml()
               <div class="settings-action-row">
                 <button class="secondary-button" id="reloadBootConfigButton" type="button">Reload</button>
                 <button class="secondary-button" id="viewBootConfigButton" type="button">View file</button>
+                <button class="secondary-button" id="editBootConfigButton" type="button">Edit file</button>
                 <button class="secondary-button" id="downloadBootConfigButton" type="button">Download</button>
                 <button class="secondary-button" id="uploadBootConfigButton" type="button">Upload</button>
                 <input id="bootConfigUploadInput" type="file" accept=".txt,text/plain" style="display:none;" />
@@ -5839,6 +5840,18 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="bootConfigFootNote">Save shows the lines that change first. The previous file is kept as config.txt.apertar.bak.</span>
               </div>
               <div class="config-diff" id="bootConfigFileView" hidden></div>
+              <div class="field-stack hidden" id="bootConfigEditField">
+                <span class="input-label">config.txt as text</span>
+                <div class="config-editor-wrap">
+                  <pre class="config-gutter" id="bootConfigGutter" aria-hidden="true">1</pre>
+                  <textarea class="settings-input config-editor" id="bootConfigEditor" spellcheck="false" wrap="off" aria-label="config.txt"></textarea>
+                </div>
+                <span class="subtle-note">Any line, the ones above included. Use This Text puts it on the card; Save then shows every line that changes before it writes.</span>
+                <div class="settings-action-row">
+                  <button class="primary-button" id="useBootConfigTextButton" type="button">Use This Text</button>
+                  <button class="secondary-button" id="closeBootConfigEditorButton" type="button">Close</button>
+                </div>
+              </div>
             </div>
 
             <div class="settings-card" id="settingsPowerActionsCard">
@@ -18098,8 +18111,12 @@ std::string_view webControlPageHtml()
 
     // T43: line numbers beside the editor, scrolled with it.
     function updateConfigGutter() {
-      const editor = document.getElementById("settingsConfigEditor");
-      const gutter = document.getElementById("settingsConfigGutter");
+      updateEditorGutter("settingsConfigEditor", "settingsConfigGutter");
+    }
+
+    function updateEditorGutter(editorId, gutterId) {
+      const editor = document.getElementById(editorId);
+      const gutter = document.getElementById(gutterId);
       if (!editor || !gutter)
         return;
       const count = editor.value.split("\n").length;
@@ -19198,6 +19215,7 @@ std::string_view webControlPageHtml()
       waiting: false,
       savedPendingReboot: false,
       review: null,           // the last dry run shown in the diff box
+      text: null,             // the file as edited by hand (Edit file); Save sends it and the choices go on top
     };
     const BOOT_CONFIG_TOGGLES = [["i2c", "bootConfigI2cOptions"], ["i2s", "bootConfigI2sOptions"], ["spi", "bootConfigSpiOptions"], ["audio", "bootConfigAudioOptions"]];
 
@@ -19245,6 +19263,8 @@ std::string_view webControlPageHtml()
     function bootConfigDirty() {
       if (!bootConfig.payload || !bootConfig.form)
         return false;
+      if (bootConfig.text !== null && bootConfig.text !== bootConfig.payload.text)
+        return true;
       const loaded = bootConfigFormFrom(bootConfig.payload.state);
       const form = bootConfig.form;
       for (const port of bootConfigPorts()) {
@@ -19273,6 +19293,8 @@ std::string_view webControlPageHtml()
       if (bootConfigRp1Available())
         body.rp1 = form.rp1;
       body.display = form.display;
+      if (bootConfig.text !== null)
+        body.text = bootConfig.text;
       return Object.assign(body, extra || {});
     }
 
@@ -19407,7 +19429,8 @@ std::string_view webControlPageHtml()
       setText("bootConfigStatePill", bootConfig.loading ? "Loading" : bootConfig.saving ? "Saving" : bootConfig.waiting ? "Rebooting"
         : !payload ? "Not Loaded" : !editable ? "Read Only" : dirty ? "Unsaved" : bootConfig.savedPendingReboot ? "Reboot to Apply" : "Ready");
       document.getElementById("saveBootConfigButton").disabled = !editable || !dirty || bootConfigBusy();
-      ["reloadBootConfigButton", "viewBootConfigButton", "downloadBootConfigButton", "uploadBootConfigButton"].forEach((id) => {
+      ["reloadBootConfigButton", "viewBootConfigButton", "editBootConfigButton", "downloadBootConfigButton", "uploadBootConfigButton",
+        "useBootConfigTextButton"].forEach((id) => {
         document.getElementById(id).disabled = bootConfigBusy();
       });
       if (!payload || !bootConfig.form || !bootState)
@@ -19478,8 +19501,11 @@ std::string_view webControlPageHtml()
         if (!result.ok)
           throw new Error(result.error || "Could not read config.txt.");
         bootConfig.payload = result.boot_config;
-        if (!keepForm || !bootConfig.form)
+        if (!keepForm || !bootConfig.form) {
           bootConfig.form = bootConfigFormFrom(bootConfig.payload.state);
+          bootConfig.text = null;
+          closeBootConfigEditor(true);
+        }
         hideBootConfigPanels();
         if (!keepForm)
           showBootConfigMessage("");
@@ -19526,7 +19552,9 @@ std::string_view webControlPageHtml()
       const changes = Array.isArray(result.changes) ? result.changes : [];
       bootConfigDiffLine(box, "", changes.length ? "What Save changes in config.txt:" : "Nothing changes in config.txt.");
       changes.forEach((change) => {
-        if (change.line > 0) {
+        if (change.removed) {
+          bootConfigDiffLine(box, "diff-del", String(change.line).padStart(4, " ") + " - " + change.before + "   (removed)");
+        } else if (change.line > 0) {
           bootConfigDiffLine(box, "diff-del", String(change.line).padStart(4, " ") + " - " + change.before);
           bootConfigDiffLine(box, "diff-add", String(change.line).padStart(4, " ") + " + " + change.now);
         } else {
@@ -19732,6 +19760,59 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // Edit file: the whole file as text, the card's current choices already in it. Nothing is saved until Save.
+    async function openBootConfigEditor() {
+      const field = document.getElementById("bootConfigEditField");
+      const editor = document.getElementById("bootConfigEditor");
+      if (!field.classList.contains("hidden")) {
+        editor.focus();
+        return;
+      }
+      const text = await bootConfigPreviewText();
+      editor.value = text;
+      editor.dataset.opened = text;
+      document.getElementById("bootConfigFileView").hidden = true;
+      field.classList.remove("hidden");
+      updateEditorGutter("bootConfigEditor", "bootConfigGutter");
+      editor.focus();
+    }
+
+    function closeBootConfigEditor(force) {
+      const field = document.getElementById("bootConfigEditField");
+      const editor = document.getElementById("bootConfigEditor");
+      if (!field || field.classList.contains("hidden"))
+        return;
+      if (!force && editor.value !== editor.dataset.opened && !window.confirm("Close the text and drop the edits in it?"))
+        return;
+      field.classList.add("hidden");
+      editor.value = "";
+    }
+
+    // Use This Text: Core reads the text with this Pi's board rules (as for Upload), the card shows what it says,
+    // and Save sends the text itself, so lines the card has no control for are kept as typed.
+    async function useBootConfigText() {
+      const text = document.getElementById("bootConfigEditor").value;
+      try {
+        const response = await fetch("/api/boot-config/parse", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+        const result = await response.json();
+        if (!result.ok)
+          throw new Error(result.error || "Could not read that text.");
+        if (!result.state.editable)
+          throw new Error(result.state.problem || "That text is not a config.txt this card can save.");
+        const typed = bootConfigFormFrom(result.state);
+        if (!bootConfigRp1Available())
+          typed.rp1 = bootConfig.form.rp1;
+        bootConfig.form = typed;
+        bootConfig.text = text;
+        closeBootConfigEditor(true);
+        bootConfigChanged();
+        showBootConfigMessage(bootConfigDirty() ? "Your text is on the card, not saved yet: Save shows every line that changes."
+          : "The text says what config.txt already says.", true);
+      } catch (error) {
+        showToast((error && error.message) || "Could not read that text.", true);
+      }
+    }
+
     function installBootConfigInteractions() {
       ["cam0", "cam1"].forEach((port) => {
         const prefix = port === "cam0" ? "bootConfigCam0" : "bootConfigCam1";
@@ -19765,6 +19846,13 @@ std::string_view webControlPageHtml()
       document.getElementById("reloadBootConfigButton").addEventListener("click", () => { void loadBootConfig(false, true); });
       document.getElementById("saveBootConfigButton").addEventListener("click", () => { void reviewBootConfig(); });
       document.getElementById("viewBootConfigButton").addEventListener("click", () => { void toggleBootConfigFile(); });
+      document.getElementById("editBootConfigButton").addEventListener("click", () => { void openBootConfigEditor(); });
+      document.getElementById("useBootConfigTextButton").addEventListener("click", () => { void useBootConfigText(); });
+      document.getElementById("closeBootConfigEditorButton").addEventListener("click", () => closeBootConfigEditor(false));
+      const bootConfigEditor = document.getElementById("bootConfigEditor");
+      ["input", "scroll"].forEach((name) => {
+        bootConfigEditor.addEventListener(name, () => updateEditorGutter("bootConfigEditor", "bootConfigGutter"));
+      });
       document.getElementById("downloadBootConfigButton").addEventListener("click", () => { void downloadBootConfig(); });
       document.getElementById("uploadBootConfigButton").addEventListener("click", () => {
         document.getElementById("bootConfigUploadInput").click();

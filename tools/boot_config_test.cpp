@@ -128,6 +128,13 @@ static std::string lineOf(const std::string &text, size_t number)
     return text.substr(start, end == std::string::npos ? std::string::npos : end - start);
 }
 
+static size_t countLines(const std::string &text)
+{
+    size_t n = 0;
+    for (const char ch : text) n += ch == '\n';
+    return n + (!text.empty() && text.back() != '\n');
+}
+
 int main()
 {
     const Board board5 = pi5();
@@ -352,6 +359,46 @@ int main()
         check(st.cameras.at("cam0").extraLines.size() == 1 && !st.warnings.empty(), "two sensors on cam0: a warning");
         const auto r = applyRequest(twice, same(st), facts(board5));
         check(r.ok && lineOf(r.text, 3) == "#dtoverlay=imx477,cam0" && r.after.cameras.at("cam0").extraLines.empty(), "saving keeps one");
+    }
+
+    // ---- the file edited as text ----
+    {
+        check(lineChanges(kApertar, kApertar).empty(), "text: no edit, no changes");
+        std::string edited = kApertar;
+        edited.replace(edited.find("dtparam=pciex1_gen=3\n"), 21, "dtparam=pciex1_gen=2\n");
+        auto c = lineChanges(kApertar, edited);
+        check(c.size() == 1 && c[0].line == 36 && c[0].before == "dtparam=pciex1_gen=3" && c[0].after_text == "dtparam=pciex1_gen=2" && !c[0].removed,
+              "text: a changed line, by its number");
+        edited = kApertar;
+        edited.erase(edited.find("dtparam=pciex1\n"), 15);
+        c = lineChanges(kApertar, edited);
+        check(c.size() == 1 && c[0].line == 35 && c[0].removed, "text: a removed line");
+        edited = kApertar + "usb_max_current_enable=1\n";
+        c = lineChanges(kApertar, edited);
+        check(c.size() == 1 && c[0].line == 0 && c[0].after == countLines(kApertar) && c[0].after_text == "usb_max_current_enable=1",
+              "text: an added line at the end, after the last old line");
+        edited = kApertar;
+        edited.insert(edited.find("dtparam=pciex1\n"), "dtparam=nvme\n");
+        c = lineChanges(kApertar, edited);
+        check(c.size() == 1 && c[0].line == 0 && c[0].after == 34, "text: an added line in the middle, after line 34");
+        check(changesJson(lineChanges(kApertar, kApertar.substr(0, kApertar.find("dtparam=pciex1\n")) +
+                                                   kApertar.substr(kApertar.find("dtparam=pciex1\n") + 15)))
+                  .find("\"removed\":true") != std::string::npos, "text: JSON marks a removed line");
+
+        // the card's choices go on top of the hand-edited text
+        edited = kApertar + "usb_max_current_enable=1\n";
+        Request q = same(s);
+        q.toggles["i2s"] = true;
+        const auto r = applyRequest(edited, q, facts(board5));
+        c = lineChanges(kApertar, r.text);
+        check(r.ok && c.size() == 2 && lineOf(r.text, 31) == "dtparam=i2s=on", "text + a choice: both in the result, two changes");
+        check(!displayDiffers(s, r.after), "text without a DPI edit: no display change");
+        edited = kApertar;
+        edited.replace(edited.find("#dtoverlay=vc4-kms-dpi-hyperpixel4sq"), 36, "dtoverlay=vc4-kms-dpi-hyperpixel4sq");
+        const State dpi = readState(parseDocument(edited, board5), board5);
+        check(displayDiffers(s, dpi), "a DPI overlay uncommented by hand: a display change");
+        check(textProblem(kApertar).empty() && !textProblem("").empty() && !textProblem(std::string(65537, '#')).empty() &&
+                  !textProblem(std::string("a\0b", 3)).empty(), "text: empty, over 64 KiB and NUL are refused");
     }
 
     // ---- JSON and revision ----

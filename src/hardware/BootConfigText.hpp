@@ -631,6 +631,7 @@ struct Change {
     size_t after = 0;         // for an added line: the old line it follows (0 = the top)
     std::string before;
     std::string after_text;
+    bool removed = false;     // `line` is deleted (only from lineChanges: the card's own edits never delete)
 };
 
 struct ApplyResult {
@@ -1097,6 +1098,102 @@ inline ApplyResult applyRequest(const std::string &text, const Request &request,
     return result;
 }
 
+// ---- the file edited as text (the card's Edit file) ---------------------------------------------
+//
+// The operator may edit any line by hand; the card's choices are then applied on top of that text by applyRequest,
+// so the read-back checks above still hold. What is reviewed and written is that result against the file on disk.
+
+// Why `text` cannot be written as config.txt; empty when it can. The root helper refuses the same.
+inline std::string textProblem(const std::string &text)
+{
+    if (trimmed(text).empty()) return "config.txt cannot be empty.";
+    if (text.size() > 65536) return "config.txt is at most 64 KiB.";
+    if (text.find('\0') != std::string::npos) return "config.txt is text: it has a NUL byte.";
+    return {};
+}
+
+namespace detail {
+
+inline std::vector<std::string> splitLines(const std::string &text)
+{
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start < text.size()) {
+        const size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            lines.push_back(text.substr(start));
+            break;
+        }
+        lines.push_back(text.substr(start, end - start));
+        start = end + 1;
+    }
+    return lines;
+}
+
+} // namespace detail
+
+// What turns `from` into `to`, line by line (longest common subsequence after the common head and tail): a changed
+// line, a removed line, or an added line after an old one, numbered as in `from`. A middle too long to compare is
+// shown as all of it removed and added.
+inline std::vector<Change> lineChanges(const std::string &from, const std::string &to)
+{
+    const std::vector<std::string> a = detail::splitLines(from);
+    const std::vector<std::string> b = detail::splitLines(to);
+    size_t head = 0;
+    while (head < a.size() && head < b.size() && a[head] == b[head]) ++head;
+    size_t tail = 0;
+    while (tail < a.size() - head && tail < b.size() - head && a[a.size() - 1 - tail] == b[b.size() - 1 - tail]) ++tail;
+    const size_t n = a.size() - head - tail;
+    const size_t m = b.size() - head - tail;
+
+    // keep[i][j]: length of the common subsequence of a[head+i..] and b[head+j..]
+    std::vector<std::vector<uint32_t>> keep;
+    const bool compare = n * m <= 4000000;
+    if (compare) {
+        keep.assign(n + 1, std::vector<uint32_t>(m + 1, 0));
+        for (size_t i = n; i-- > 0;)
+            for (size_t j = m; j-- > 0;)
+                keep[i][j] = a[head + i] == b[head + j] ? keep[i + 1][j + 1] + 1 : std::max(keep[i + 1][j], keep[i][j + 1]);
+    }
+
+    std::vector<Change> changes;
+    std::vector<size_t> dels, adds;   // the current run between two kept lines (indexes into a and b)
+    size_t before = head;             // 1-based number of the old line the run follows (0 = the top)
+    auto flush = [&]() {
+        const size_t paired = std::min(dels.size(), adds.size());
+        for (size_t k = 0; k < paired; ++k) changes.push_back({dels[k] + 1, 0, a[dels[k]], b[adds[k]]});
+        for (size_t k = paired; k < dels.size(); ++k) changes.push_back({dels[k] + 1, 0, a[dels[k]], {}, true});
+        const size_t after = dels.empty() ? before : dels.back() + 1;
+        for (size_t k = paired; k < adds.size(); ++k) changes.push_back({0, after, {}, b[adds[k]]});
+        dels.clear();
+        adds.clear();
+    };
+    size_t i = 0, j = 0;
+    while (i < n || j < m) {
+        if (compare && i < n && j < m && a[head + i] == b[head + j]) {
+            flush();
+            ++i;
+            ++j;
+            before = head + i;
+        } else if (i < n && (j == m || !compare || keep[i + 1][j] >= keep[i][j + 1])) {
+            dels.push_back(head + i++);
+        } else {
+            adds.push_back(head + j++);
+        }
+    }
+    flush();
+    return changes;
+}
+
+// The display overlays differ between two readings (what needs the confirm_display tick).
+inline bool displayDiffers(const State &a, const State &b)
+{
+    std::vector<std::string> x = a.dpiOverlays, y = b.dpiOverlays;
+    std::sort(x.begin(), x.end());
+    std::sort(y.begin(), y.end());
+    return a.display != b.display || x != y;
+}
+
 // ---- JSON for the page --------------------------------------------------------------------------
 
 inline std::string jsonString(std::string_view text)
@@ -1207,7 +1304,8 @@ inline std::string changesJson(const std::vector<Change> &changes)
     for (size_t i = 0; i < changes.size(); ++i) {
         const Change &c = changes[i];
         out += std::string(i ? "," : "") + "{\"line\":" + std::to_string(c.line) + ",\"after\":" + std::to_string(c.after) +
-               ",\"before\":" + jsonString(trimmed(c.before)) + ",\"now\":" + jsonString(trimmed(c.after_text)) + "}";
+               ",\"before\":" + jsonString(trimmed(c.before)) + ",\"now\":" + jsonString(trimmed(c.after_text)) +
+               (c.removed ? ",\"removed\":true}" : "}");
     }
     return out + "]";
 }

@@ -192,6 +192,8 @@ The card edits the file the way its own comments say: it comments and uncomments
 | Onboard audio | `dtparam=audio=on` in `[all]` |
 | Display | the DPI overlays at the end of the file |
 
+**Edit file** opens the whole file as text, for the lines the card has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup.
+
 A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included.
 
 `/boot/firmware` belongs to root. Install the small root helper the card and the fan mode write through:
@@ -206,7 +208,7 @@ Without it, Core falls back to `sudo -n install`, as the fan mode always has.
 
 If the camera does not come back after a change, put the card in a reader and copy `config.txt.apertar.bak` over `config.txt` on the boot partition.
 
-Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`.
+Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and optionally `text` (the whole file as edited; the other fields go on top of it).
 
 ## Building From Source
 
