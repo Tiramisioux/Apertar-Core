@@ -19821,13 +19821,18 @@ std::string_view webControlPageHtml()
             return;
           const sensor = event.target.value;
           bootConfig.form.sensors[port] = sensor;
-          // a newly picked sensor starts at the rate config.txt already has for it, else its default
+          // a newly picked sensor keeps the rate the card has when it offers it (IMX585 colour <-> mono), else starts at
+          // the rate config.txt already has for it, else its default
           const bootState = bootConfigState();
           const loaded = bootConfigFormFrom(bootState);
           const camera = bootState.cameras && bootState.cameras[port];
           const candidates = bootState.candidates && bootState.candidates[port];
+          const info = bootConfigSensorInfo(sensor);
+          const current = bootConfig.form.links[port];
+          const offered = current !== null && current !== undefined && info && info.link
+            && info.link.options.some((option) => option.hz === Number(current));
           bootConfig.form.links[port] = sensor === loaded.sensors[port] && camera ? camera.link_frequency
-            : (candidates && candidates[sensor]) || null;
+            : offered ? Number(current) : (candidates && candidates[sensor]) || null;
           bootConfigChanged();
         });
         document.getElementById(prefix + "LinkSelect").addEventListener("change", (event) => {
