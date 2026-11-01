@@ -3863,11 +3863,11 @@ def mount_partition(device_path):
         return False
 
     if fs_type == "ntfs":
-        command = ["mount", "-t", "ntfs3", "-o", "uid=1000,gid=1000", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "ntfs3", "-o", "uid=1000,gid=1000,umask=0002,noatime", device_path, MOUNT_PATH]
     elif fs_type == "ext4":
-        command = ["mount", "-t", "ext4", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "ext4", "-o", "noatime", device_path, MOUNT_PATH]
     elif fs_type == "exfat":
-        command = ["mount", "-t", "exfat", "-o", "uid=1000,gid=1000", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "exfat", "-o", "uid=1000,gid=1000,umask=0002,noatime", device_path, MOUNT_PATH]
     else:
         return False
 
@@ -10464,6 +10464,13 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        // A delete made outside Core (the touch UI removes clips itself) frees space without a trim: when the
+        // mounted medium gains 1 GiB or more between two polls while nothing records, ask for one. Core's own
+        // deletes already request theirs; repeated requests coalesce (kb working/dng-chain, R4).
+        if (havePrevious && current.mounted() && previous.mounted() && current.sameMedium(previous) &&
+            current.freeBytes > previous.freeBytes && current.freeBytes - previous.freeBytes >= (1ULL << 30) &&
+            !camera_.isRecording() && !mediaDeleteActive_.load())
+            trimMedia("free-space");
         if (!havePrevious || !current.sameMedium(previous)) {
             std::cerr << "ApertarCore media: state=" << current.stateName()
                       << " device=" << current.device << " fstype=" << current.fstype
