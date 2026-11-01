@@ -3928,6 +3928,7 @@ public:
     ~DngRecordingQueue()
     {
         stop();
+        unregisterFlushAbort();
     }
 
     bool start(const std::string &mediaRoot, const CaptureSettings &settings, std::string *error)
@@ -3987,6 +3988,7 @@ public:
         active_.store(false, std::memory_order_release);
         frameBufferGauge().active.store(false, std::memory_order_release);
         stopping_ = false;
+        registerFlushAbort();
 
         try {
             folderPath_ = folderPath;
@@ -4260,6 +4262,7 @@ public:
                       << "\n";
         }
 
+        unregisterFlushAbort();   // before mutex_: abortSafetyFlush takes the registry mutex first, then mutex_
         std::lock_guard<std::mutex> lock(mutex_);
         assert(!queue_.empty() || queuedBytes_ == 0);
         queue_.clear();
@@ -4270,6 +4273,37 @@ public:
         // otherwise allocate and page in 16.6 MB each on libcamera's completion thread.
         workerCount_ = 0;
         stopping_ = false;
+    }
+
+    // The safety-stop flush can be cut short by a new record press (ApertarCoreApp::handleCommand, no controller
+    // lock): only while this queue is stopping because the safety stop fired. Takes only mutex_ (the queue's own,
+    // which stop() does not hold while it waits for the writers). Frames a writer already popped finish; the rest
+    // of the queue is discarded and counted in discarded_on_stop. -1 = nothing to abort.
+    int64_t abortSafetyFlush()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!stopping_ || !safetyStopFired_ || !bufferbudget::safetyStopState().active.load(std::memory_order_acquire))
+            return -1;
+        const uint64_t discarded = queue_.size();
+        discardedOnStopFrames_ += discarded;
+        queue_.clear();   // the raw buffers go back to the allocator with the jobs
+        queuedBytes_ = 0;
+        publishQueueLevel();   // used = 0 and, stopping_ with an empty queue, the safety flag falls
+        bufferbudget::safetyStopState().flushDiscarded.store(discarded, std::memory_order_release);
+        cv_.notify_all();      // idle writers see an empty queue + stopping_ and exit
+        return static_cast<int64_t>(discarded);
+    }
+
+    void registerFlushAbort()
+    {
+        std::lock_guard<std::mutex> lock(bufferbudget::flushAbortMutex());
+        bufferbudget::flushAbortFunction() = [this] { return abortSafetyFlush(); };
+    }
+
+    void unregisterFlushAbort()
+    {
+        std::lock_guard<std::mutex> lock(bufferbudget::flushAbortMutex());
+        bufferbudget::flushAbortFunction() = nullptr;
     }
 
     bool active() const
@@ -4553,6 +4587,7 @@ public:
         if (!safetyStopFired_ && bufferbudget::safetyStopReached(ramMode_ ? queuedBytes_ : queue_.size(),
                                                                  ramMode_ ? queueBudgetBytes_ : maxQueuedFrames_, stopPercent_)) {
             safetyStopFired_ = true;
+            bufferbudget::safetyStopState().flushDiscarded.store(0, std::memory_order_release);
             bufferbudget::safetyStopState().active.store(true, std::memory_order_release);
             if (const auto &hook = bufferbudget::safetyStopHook())
                 hook({ramMode_ ? queuedBytes_ : queue_.size(), ramMode_ ? queueBudgetBytes_ : maxQueuedFrames_, stopPercent_, ramMode_});
@@ -11635,6 +11670,11 @@ bool CameraController::stopRecording()
 
     recording_ = false;
     state_ = CameraState::Ready;
+    // A buffer safety stop: the take is over now, but the drain below can take seconds with this mutex held. Tell the
+    // UIs recording=false at once (REC off, tally off); the drain's own event is then only sent if it brings an error.
+    const bool announcedEarly = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
+    if (announcedEarly)
+        emitRecordingEventLocked();
     if (!simulateCamera_ && session_)
         session_->stopRecording();
     restoreFpsAfterRampLocked();
@@ -11642,7 +11682,8 @@ bool CameraController::stopRecording()
     recordingFaultName_ = !simulateCamera_ && session_ ? mediaFaultName(session_->recordingFault()) : "";
     recordingFailureReported_ = !lastError_.empty();
     recordingFailureMessage_ = lastError_;
-    emitRecordingEventLocked();
+    if (!announcedEarly || !lastError_.empty())
+        emitRecordingEventLocked();
     return lastError_.empty();
 }
 

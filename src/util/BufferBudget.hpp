@@ -212,11 +212,32 @@ inline bool safetyStopReached(uint64_t used, uint64_t capacity, unsigned percent
 struct SafetyStopState {
     std::atomic<unsigned> stopPercent{0};
     std::atomic<bool> active{false};
+    // Frames of the previous clip thrown away because record was pressed during the safety-stop flush
+    // (see abortSafetyStopFlush). 0 normally; reset at the next safety stop.
+    std::atomic<uint64_t> flushDiscarded{0};
 };
 inline SafetyStopState &safetyStopState()
 {
     static SafetyStopState state;
     return state;
+}
+// The running write queue registers here (under flushAbortMutex) while it can drain; the command path calls it
+// without any controller lock. Returns the number of queued frames it discarded (frames already inside a writer
+// still finish), or -1 when no queue is draining after a stop.
+inline std::mutex &flushAbortMutex()
+{
+    static std::mutex m;
+    return m;
+}
+inline std::function<int64_t()> &flushAbortFunction()
+{
+    static std::function<int64_t()> fn;
+    return fn;
+}
+inline int64_t abortSafetyStopFlush()
+{
+    std::lock_guard<std::mutex> lock(flushAbortMutex());
+    return flushAbortFunction() ? flushAbortFunction()() : -1;
 }
 // Called by the write queue under its own mutex, right after the push that reached the threshold. Must be
 // lock-free and must never stop anything itself: ApertarCoreApp sets an atomic and notifies a condition variable.

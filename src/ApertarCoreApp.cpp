@@ -220,7 +220,8 @@ std::string bufferFillText(uint64_t used, uint64_t capacity)
 // plan line when ram was asked for ("" otherwise). buffer_mode above stays the active mode. Both are in the "buffer"
 // event, GET /api/buffer, the web state and (settingsBody) get_state. buffer_stop_percent = the safety stop threshold of
 // the active/last take (0 = off); buffer_safety_stop = true from the safety stop until the queue has drained or the
-// next take starts. Both are atomics: no lock. storage_preroll_active / storage_preroll_fps (the fps the pre-roll applied, 0 when none) / storage_preroll_last: the storage pre-roll's
+// next take starts. buffer_flush_discarded = frames of the previous clip thrown away because record was pressed during
+// the safety-stop flush (0 normally, kept until the next safety stop). All atomics: no lock. storage_preroll_active / storage_preroll_fps (the fps the pre-roll applied, 0 when none) / storage_preroll_last: the storage pre-roll's
 // state (see runStoragePreroll), an atomic and a short string under a tiny mutex: no controller lock either.
 std::string bufferSettingMembers()
 {
@@ -229,6 +230,7 @@ std::string bufferSettingMembers()
     return "\"buffer_setting\":\"" + escapeJson(snapshot.setting) + "\",\"buffer_note\":\"" + escapeJson(snapshot.note) + "\""
         + ",\"buffer_safety_stop\":" + (stop.active.load(std::memory_order_acquire) ? "true" : "false")
         + ",\"buffer_stop_percent\":" + std::to_string(stop.stopPercent.load(std::memory_order_acquire))
+        + ",\"buffer_flush_discarded\":" + std::to_string(stop.flushDiscarded.load(std::memory_order_acquire))
         + ",\"storage_preroll_active\":" + (storagepreroll::prerollActive() ? "true" : "false")
         + ",\"storage_preroll_auto\":" + (storagepreroll::prerollAutomatic() ? "true" : "false")
         + ",\"storage_preroll_auto_env\":" + (storagepreroll::prerollAutomaticFromEnv() ? "true" : "false")
@@ -245,6 +247,19 @@ void refreshBufferRequest()
     // The automatic pre-roll switch rides on the same refresh: published as atomics, so no reader parses the file.
     storagepreroll::publishAutomatic(std::getenv("APERTAR_STORAGE_PREROLL"),
         storagepreroll::parsePrerollConf(hardware::configStore().currentText()));
+}
+
+// Record pressed while the safety-stop thread drains the previous take: cut that flush short, lock-free. Called before
+// ANY lock the drain holds (hardwareActionMutex_ for the buttons, commandMutex_ for everything) so it cannot wait on them.
+// Only the safety-stop flush is affected; a normal stop's drain and the pre-roll never set the flag.
+void abortSafetyStopFlushForRecord(const std::string &commandName)
+{
+    if (commandName != "record_start" || !bufferbudget::safetyStopState().active.load(std::memory_order_acquire))
+        return;
+    const int64_t discarded = bufferbudget::abortSafetyStopFlush();
+    if (discarded >= 0)
+        std::cerr << "ApertarCore buffer: flush aborted by record, " << discarded
+                  << " unwritten frames of the previous clip discarded\n";
 }
 
 std::string bufferMembers(uint64_t used, uint64_t capacity, const std::string &mode)
@@ -8037,7 +8052,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.contentType = "application/json; charset=utf-8";
         const auto buffer = camera_.frameBufferStatus();
         response.body = "{" + bufferMembers(buffer.used, buffer.capacity, buffer.mode) +
-            ",\"recording\":" + (buffer.recording ? "true" : "false") + "}";
+            ",\"recording\":" + (buffer.recording && !bufferbudget::safetyStopState().active.load(std::memory_order_acquire) ? "true" : "false") + "}";
         return response;
     }
 
@@ -9662,6 +9677,7 @@ double analogMappedValue(const GroveAnalogInput::AnalogEvent &event,
 
 std::string ApertarCoreApp::dispatchHardwareInputCommand(ControlCommand command)
 {
+    abortSafetyStopFlushForRecord(command.name);   // before hardwareActionMutex_: the safety-stop thread holds it while draining
     std::lock_guard<std::mutex> lock(hardwareActionMutex_);
     command.id = -1;
     const std::string reply = handleCommand(command);
@@ -10533,6 +10549,7 @@ void ApertarCoreApp::runBufferEvents()
     auto sentSetting = bufferbudget::bufferSettingSnapshot();
     bool sentSafety = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
     unsigned sentStopPercent = bufferbudget::safetyStopState().stopPercent.load(std::memory_order_acquire);
+    uint64_t sentFlushDiscarded = bufferbudget::safetyStopState().flushDiscarded.load(std::memory_order_acquire);
     bool sentPrerollActive = storagepreroll::prerollActive();
     bool sentPrerollAuto = storagepreroll::prerollAutomatic();
     std::string sentPrerollLast = storagepreroll::prerollLast();
@@ -10544,15 +10561,17 @@ void ApertarCoreApp::runBufferEvents()
         const auto setting = bufferbudget::bufferSettingSnapshot();
         const bool safety = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
         const unsigned stopPercent = bufferbudget::safetyStopState().stopPercent.load(std::memory_order_acquire);
+        const uint64_t flushDiscarded = bufferbudget::safetyStopState().flushDiscarded.load(std::memory_order_acquire);
         const bool prerollActive = storagepreroll::prerollActive();
         const bool prerollAuto = storagepreroll::prerollAutomatic();
         std::string prerollLast = storagepreroll::prerollLast();
         const double prerollFps = storagepreroll::prerollFps();
-        if (!(setting == sentSetting) || safety != sentSafety || stopPercent != sentStopPercent ||
+        if (!(setting == sentSetting) || safety != sentSafety || stopPercent != sentStopPercent || flushDiscarded != sentFlushDiscarded ||
             prerollActive != sentPrerollActive || prerollAuto != sentPrerollAuto || prerollLast != sentPrerollLast || prerollFps != sentPrerollFps) {
             sentSetting = setting;
             sentSafety = safety;
             sentStopPercent = stopPercent;
+            sentFlushDiscarded = flushDiscarded;
             sentPrerollActive = prerollActive;
             sentPrerollAuto = prerollAuto;
             sentPrerollFps = prerollFps;
@@ -11735,6 +11754,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
     if (const auto reply = handleReadOnlyHardwareCommand(command))
         return *reply;
+    // Record pressed while the safety-stop thread drains the previous take (it holds commandMutex_ and the controller
+    // mutex for that): cut the flush short BEFORE waiting for the lock. The queue's own mutex is all this needs, so the
+    // drain ends as soon as the writers have finished the frames they already hold, and the lock below frees up.
+    abortSafetyStopFlushForRecord(command.name);
     std::lock_guard<std::mutex> commandLock(commandMutex_);
     // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
     // first, so a playback decode in flight stops before the take's first frame is written (design §2.7).

@@ -13745,7 +13745,12 @@ std::string_view webControlPageHtml()
           }
           break;
         case "record_start":
-          if (optimistic || result && result.recording === true) {
+          if (optimistic && frameBufferBar.safetyStop === true) {
+            // Pressed during a safety-stop flush: the old take is over (the snapshot may still say recording), the new
+            // one is REC only when Core answers that it started.
+            snapshot.recording = false;
+            snapshot.state = "ready";
+          } else if (optimistic || result && result.recording === true) {
             snapshot.recording = true;
             snapshot.sound_recording = payload.sound_only === "true" || !!(result && result.sound_recording);
             snapshot.state = "recording";
@@ -14175,8 +14180,11 @@ std::string_view webControlPageHtml()
       setText("networkHost", snapshot.network_host || window.location.host || window.location.hostname);
       setText("networkTransport", snapshot.network_transport || "Wi-Fi / Ethernet");
       setText("webDateTimePill", formatWebDateTimePill(localDateTimeValue));
-      const prerollShown = snapshot.storage_preroll_active === true && !isRecording && !isTimelapse;
-      setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (isRecording ? "REC" : snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true ? "WRITING" : "READY"))));
+      // A buffer safety stop is no take any more, though `recording` stays true until the buffer has drained.
+      const bufferStopped = snapshot.buffer_safety_stop === true || frameBufferBar.safetyStop === true;
+      const pillRecording = isRecording && !bufferStopped;
+      const prerollShown = snapshot.storage_preroll_active === true && !pillRecording && !isTimelapse;
+      setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (pillRecording ? "REC" : snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true ? "WRITING" : "READY"))));
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
@@ -14537,27 +14545,28 @@ std::string_view webControlPageHtml()
 
       const statusPill = document.querySelector(".status-pill");
       const statusDot = document.getElementById("statusDot");
-      statusPill.classList.toggle("recording", (isRecording || isTimelapse) && hasMedia);
+      statusPill.classList.toggle("recording", (pillRecording || isTimelapse) && hasMedia);
       statusPill.classList.toggle("timelapse", isTimelapse && hasMedia);
       statusPill.classList.toggle("no-media", !hasMedia);
       updateFrameBufferBar(snapshot, statusPill);
       // frameBufferBar.preroll is the fresher of the 4 Hz poll and this snapshot.
-      const prerollNow = frameBufferBar.preroll && !isRecording && !isTimelapse;
+      const prerollNow = frameBufferBar.preroll && !pillRecording && !isTimelapse;
       statusPill.classList.toggle("preroll", prerollNow);
       statusDot.classList.toggle("preroll", prerollNow);
       if (prerollNow && !prerollShown)
         setText("recordingStatus", "PRE-ROLL");
-      statusDot.classList.toggle("recording", (isRecording || isTimelapse) && hasMedia);
+      statusDot.classList.toggle("recording", (pillRecording || isTimelapse) && hasMedia);
       statusDot.classList.toggle("timelapse", isTimelapse && hasMedia);
       statusDot.classList.toggle("no-media", !hasMedia);
       // A safety stop is not a take any more: the pill is READY green while the buffer empties.
       statusDot.classList.toggle("writing", !!snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true && !isRecording && !isTimelapse);
 
       const recordButton = document.getElementById("recordButton");
+      // During a safety-stop flush the button stays live: record then cuts the flush short and starts at once.
       recordButton.disabled = !(isRecording || isTimelapse || isSoundRecording) &&
-        (!hasMedia || !!snapshot.media_writes_pending || state.photoCaptureInProgress || state.commandInFlightCount > 0);
+        (!hasMedia || (!!snapshot.media_writes_pending && !bufferStopped) || state.photoCaptureInProgress || state.commandInFlightCount > 0);
       const recordIcon = document.getElementById("recordIcon");
-      recordButton.classList.toggle("recording", isRecording && hasMedia && !stillModeEnabled);
+      recordButton.classList.toggle("recording", pillRecording && hasMedia && !stillModeEnabled);
       recordButton.classList.toggle("photo-mode", stillModeEnabled);
       recordButton.classList.toggle("sound-recorder", soundRecorderEnabled && !stillModeEnabled);
       recordButton.classList.toggle("timelapse", isTimelapse && hasMedia);
@@ -15129,7 +15138,7 @@ std::string_view webControlPageHtml()
     // the baseline; /api/buffer is polled at ~4 Hz only while the option is on and the
     // camera is recording or the buffer has not yet drained back to 0.
     const frameBufferBar = { fill: 0, fillAtMs: 0, timer: 0, inFlight: false, recording: false,
-      active: false, safetyStop: false, stopPercent: 0, stopSeen: false,
+      active: false, safetyStop: false, stopPercent: 0, stopSeen: false, discardedSeen: -1,
       preroll: false, prerollFps: 0, prerollAtMs: 0, prerollUntilMs: 0 };
 
     // Storage pre-roll: the same /api/buffer poll also carries storage_preroll_active, so the
@@ -15167,8 +15176,12 @@ std::string_view webControlPageHtml()
         label.textContent = "READY"; // the 1 Hz render sets the real text
     }
 
-    function noteBufferSafetyStop(flag, percent) {
+    function noteBufferSafetyStop(flag, percent, discarded) {
       frameBufferBar.safetyStop = flag === true;
+      if (Number.isFinite(discarded) && discarded > 0 && frameBufferBar.discardedSeen >= 0 && discarded !== frameBufferBar.discardedSeen)
+        showToast("Record pressed during the flush: " + discarded + " unwritten frames at the end of the previous clip were discarded.", true);
+      if (Number.isFinite(discarded))
+        frameBufferBar.discardedSeen = discarded;
       if (Number.isFinite(percent))
         frameBufferBar.stopPercent = percent;
       if (frameBufferBar.safetyStop && !frameBufferBar.stopSeen) {
@@ -15184,6 +15197,16 @@ std::string_view webControlPageHtml()
       const drain = frameBufferBar.active && frameBufferBar.safetyStop && !frameBufferBar.recording
         && frameBufferBar.fill > 0;
       pill.classList.toggle("buffer-drain", drain);
+      if (frameBufferBar.safetyStop === true) {
+        // The take has ended: the pill is READY green while the buffer empties, before `recording` turns false.
+        const dot = document.getElementById("statusDot");
+        const label = document.getElementById("recordingStatus");
+        pill.classList.remove("recording");
+        if (dot)
+          dot.classList.remove("recording", "writing");
+        if (label && label.textContent === "REC")
+          label.textContent = "READY";
+      }
     }
 
     function pollFrameBufferBar() {
@@ -15217,11 +15240,12 @@ std::string_view webControlPageHtml()
             frameBufferBar.fill = Math.min(1, Math.max(0, fill));
             frameBufferBar.fillAtMs = performance.now();
             frameBufferBar.recording = !!payload.recording;
-            noteBufferSafetyStop(payload.buffer_safety_stop, Number(payload.buffer_stop_percent));
+            noteBufferSafetyStop(payload.buffer_safety_stop, Number(payload.buffer_stop_percent), Number(payload.buffer_flush_discarded));
             const pill = document.querySelector(".status-pill");
-            if (pill && pill.classList.contains("buffer-bar")) {
-              pill.style.setProperty("--buffer-fill", (frameBufferBar.fill * 100).toFixed(1) + "%");
-              applyFrameBufferPillClasses(pill);
+            if (pill) {
+              if (pill.classList.contains("buffer-bar"))
+                pill.style.setProperty("--buffer-fill", (frameBufferBar.fill * 100).toFixed(1) + "%");
+              applyFrameBufferPillClasses(pill);   // also with the bar option off: the safety stop must drop the red pill
             }
           }
         })
@@ -15256,13 +15280,20 @@ std::string_view webControlPageHtml()
         startFrameBufferTimer();
       const polledStop = performance.now() - frameBufferBar.fillAtMs < 1000;
       if (!polledStop || !frameBufferBar.timer)
-        noteBufferSafetyStop(snapshot.buffer_safety_stop, Number(snapshot.buffer_stop_percent));
+        noteBufferSafetyStop(snapshot.buffer_safety_stop, Number(snapshot.buffer_stop_percent), Number(snapshot.buffer_flush_discarded));
       if (!active) {
-        if (!prerollPollWanted())
+        // Bar option off: /api/state blocks while a stopped take drains, so a take in a queue-backed mode still polls
+        // the lock-free /api/buffer to see a safety stop (the poll stops itself when idle).
+        const watchStop = (mode === "frames" || mode === "ram") && (snapshot.recording === true || frameBufferBar.safetyStop);
+        if (watchStop)
+          startFrameBufferTimer();
+        else if (!prerollPollWanted())
           stopFrameBufferPolling();
-        frameBufferBar.fill = 0;
+        if (!watchStop)
+          frameBufferBar.fill = 0;
         pill.classList.remove("buffer-drain");
         pill.style.removeProperty("--buffer-fill");
+        applyFrameBufferPillClasses(pill);
         return;
       }
       const polledFresh = performance.now() - frameBufferBar.fillAtMs < 1000;
@@ -17619,7 +17650,10 @@ std::string_view webControlPageHtml()
     async function toggleRecord() {
       if (!state.snapshot)
         return;
-      if (!state.snapshot.recording && !state.snapshot.timelapse_active &&
+      // A safety stop ended the take: the snapshot may still say recording (it is stale while the buffer drains), but
+      // a press now means "new take", and Core cuts the flush short.
+      const flushing = frameBufferBar.safetyStop === true && !state.snapshot.timelapse_active;
+      if (!flushing && !state.snapshot.recording && !state.snapshot.timelapse_active &&
           (state.snapshot.media_writes_pending || state.photoCaptureInProgress || state.commandInFlightCount > 0))
         return;
       try {
@@ -17657,7 +17691,7 @@ std::string_view webControlPageHtml()
           return;
         }
 
-        if (state.snapshot.recording) {
+        if (state.snapshot.recording && !flushing) {
           await sendCommand({ cmd: "record_stop" });
           showToast(state.snapshot.sound_recording ? "Sound recording stopped." : "Recording stopped.", false);
         } else {
