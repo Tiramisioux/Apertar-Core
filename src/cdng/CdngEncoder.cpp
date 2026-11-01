@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -77,6 +78,26 @@ bool detailedLosslessProfilingEnabled()
     }();
     return enabled;
 }
+
+} // namespace
+
+DngPageCacheDrop dngPageCacheDrop()
+{
+    static const DngPageCacheDrop mode = []() {
+        const char *text = std::getenv("APERTAR_DNG_DONTNEED");
+        if (!text || !*text || std::strcmp(text, "writer") == 0 || std::strcmp(text, "1") == 0)
+            return DngPageCacheDrop::Writer;
+        if (std::strcmp(text, "sync") == 0)
+            return DngPageCacheDrop::Sync;
+        if (std::strcmp(text, "off") == 0 || std::strcmp(text, "0") == 0 || std::strcmp(text, "false") == 0)
+            return DngPageCacheDrop::Off;
+        std::cerr << "ApertarCore cdng: APERTAR_DNG_DONTNEED=" << text << " is not writer|sync|off: using writer\n";
+        return DngPageCacheDrop::Writer;
+    }();
+    return mode;
+}
+
+namespace {
 
 // Rows per write() when the payload is packed through the scratch buffer (APERTAR_DNG_WRITE_ROWS,
 // default 64: 491,520 bytes for a 16-bit 4K row, 34 writes a frame). The row packers decide the
@@ -1876,7 +1897,8 @@ void CdngEncoder::writeDngFile(const std::string &path,
     if (ok)
         ok = writeAll(fd, ifdBytes.data(), ifdBytes.size());
     int writeErrno = ok ? 0 : errno;
-    ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    if (dngPageCacheDrop() == DngPageCacheDrop::Writer)
+        ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
     if (!output.borrowed && ::close(fd) != 0 && ok) {
         ok = false;
         writeErrno = errno;

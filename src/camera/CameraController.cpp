@@ -4165,6 +4165,13 @@ public:
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
                 spawnWorker([this, syncMs, fd = mediaDirFd_] { syncLoop(fd, std::chrono::milliseconds(syncMs)); });
+        } else if (dngPageCacheDrop() == DngPageCacheDrop::Sync) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::cerr << "ApertarCore recording: APERTAR_DNG_DONTNEED=sync needs the sync thread (APERTAR_MEDIA_SYNC_MS > 0); "
+                             "written frames stay in the page cache until the kernel reclaims them\n";
+            }
         }
         for (unsigned int i = 0; i < workerCount; ++i)
             spawnWorker([this] { workerLoop(); });
@@ -4309,6 +4316,7 @@ public:
                       << " write_failures=" << summary.writeFailures
                       << " discarded_on_failure=" << summary.discardedOnFailure
                       << " skipped_after_failure=" << summary.skippedAfterFailure
+                      << " dropped_copy_slot=" << droppedNoRequestSlot_.load(std::memory_order_relaxed)
                       << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
                       << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth;
             if (summary.ramMode)
@@ -4542,6 +4550,10 @@ public:
                 const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
                 if (fd >= 0) {
                     ::fsync(fd);
+                    // APERTAR_DNG_DONTNEED=sync: the pages are clean now, so this call frees them without
+                    // the cross-CPU drain the writer's call pays on dirty pages.
+                    if (dngPageCacheDrop() == DngPageCacheDrop::Sync)
+                        ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
                     ::close(fd);
                 }
             }
