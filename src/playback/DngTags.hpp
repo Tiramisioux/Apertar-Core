@@ -22,8 +22,26 @@
 
 namespace apertar::playback {
 
-constexpr uint32_t kMaxDngWidth = 4096;
-constexpr uint32_t kMaxDngHeight = 3072;
+// The largest DNG Core writes is the IMX283's 5472 x 3648 active area (20.0 Mpx; its crops and binned
+// modes are smaller). The other sensors stay below it: IMX477 4056 x 3040, IMX294 4176 x 2176 and
+// 3792 x 2824 (10.7 Mpx), IMX585 3840 x 2200. These are the caps readDngInfo enforces BEFORE any buffer is
+// allocated, so a hostile file cannot ask for more than kMaxDngPixels samples.
+constexpr uint32_t kMaxDngWidth = 5472;
+constexpr uint32_t kMaxDngHeight = 3648;
+constexpr uint64_t kMaxDngPixels = uint64_t(kMaxDngWidth) * kMaxDngHeight;
+// Memory cost: every decode slot (DecodeSlots.hpp) keeps one 16-bit sample buffer sized to the frame it
+// last decoded, so up to 5472 x 3648 x 2 B = 38 MiB per slot, 76 MiB with the default 2 slots and 152 MiB
+// at the 4-slot maximum (APERTAR_PLAYBACK_WORKERS). The slots give it back after 30 s idle or in a hold.
+// Raising a cap above means raising this; the assert keeps it a decision, not an accident.
+constexpr uint64_t kMaxDngSampleBytes = kMaxDngPixels * sizeof(uint16_t);
+static_assert(kMaxDngSampleBytes <= (40u << 20), "A decode slot would hold more than 40 MiB of samples.");
+
+// The size gate for a frame's tags: both sides and the product, so neither one alone sizes a buffer.
+inline bool dngSizeSupported(uint32_t width, uint32_t height)
+{
+    return width >= 2 && height >= 2 && width <= kMaxDngWidth && height <= kMaxDngHeight &&
+           uint64_t(width) * height <= kMaxDngPixels;
+}
 
 enum class Cfa { RGGB = 0, BGGR = 1, GRBG = 2, GBRG = 3 };  // touch UI RawFrame order
 
@@ -284,11 +302,9 @@ inline bool readDngInfo(int fd, DngInfo &info, std::string &error)
         for (int i = 0; i < 3; ++i) info.analog[i] = float(number(*a, i));
         info.hasAnalog = true;
     }
-    // Size cap before anything is allocated (critic M9). The largest frame Core writes is the
-    // IMX477's 4056 x 3040 (CameraController.cpp:417, :471-472); IMX585 4K is 3856 x 2180 and the
-    // 16-bit Clear HDR readout 3840 x 2200 (:393-395). 4096 x 3072 covers all with room.
-    if (info.width < 2 || info.height < 2 || info.width > kMaxDngWidth || info.height > kMaxDngHeight ||
-        uint64_t(info.width) * info.height > uint64_t(kMaxDngWidth) * kMaxDngHeight ||
+    // Size cap before anything is allocated (critic M9): kMaxDngWidth x kMaxDngHeight, covering every
+    // frame Core writes (the largest is the IMX283's 5472 x 3648).
+    if (!dngSizeSupported(info.width, info.height) ||
         (info.bits != 10 && info.bits != 12 && info.bits != 16) ||
         (info.compression != 1 && info.compression != 7)) {
         error = "Unsupported DNG layout (size, bit depth or compression).";

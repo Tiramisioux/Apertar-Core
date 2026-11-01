@@ -1,6 +1,7 @@
 #include "util/MediaFault.hpp"
 #include "mlv/MlvEncoder.hpp"
 #include "audio/RecordingClock.hpp"
+#include "cdng/BlackLevel.hpp"
 #include "cdng/CdngEncoder.hpp"
 #include "color/ColorProfileConfig.hpp"
 
@@ -157,24 +158,6 @@ private:
     std::array<uint8_t, N> &bytes_;
     size_t offset_ = 0;
 };
-
-uint32_t whiteLevel(RawBitDepth bitDepth)
-{
-    const unsigned int bits = static_cast<unsigned int>(bitDepth);
-    return bits >= 16 ? 65535u : ((1u << bits) - 1u);
-}
-
-int32_t blackLevelForEncodedDepth(float sourceBlackLevel, RawBitDepth bitDepth)
-{
-    float black = sourceBlackLevel;
-    if (bitDepth == RawBitDepth::Bits8)
-        black *= 255.0f / 4095.0f;
-    else if (bitDepth == RawBitDepth::Bits10)
-        black *= 1023.0f / 4095.0f;
-
-    const float maxBlack = static_cast<float>(std::max<uint32_t>(1u, whiteLevel(bitDepth)) - 1u);
-    return static_cast<int32_t>(std::lround(std::clamp(black, 0.0f, maxBlack)));
-}
 
 uint32_t cfaPatternCode(BayerPattern pattern)
 {
@@ -1166,10 +1149,12 @@ void MlvEncoder::writeRawInfoBlock(const RawFrameView &frame,
     if (!colorMatrix)
         colorMatrix = dngColorMatrixFromCcm(ccm, {metadata.colourGains[0], metadata.colourGains[1]});
 
-    const int32_t black = blackLevelForEncodedDepth(
-        metadata.hasBlackLevels ? metadata.blackLevels[0] : 200.0f,
-        rawLayout_.bitDepth);
-    const int32_t white = static_cast<int32_t>(whiteLevel(rawLayout_.bitDepth));
+    // The same black and white the cDNG of this take declares (shared helpers, every bit depth). RAWI holds
+    // one black for all four channels, so it takes the first (R) entry.
+    const int32_t black = encodedBlackLevel(
+        metadata.hasBlackLevels ? metadata.blackLevels[0] : static_cast<float>(kDefaultSourceBlackLevel),
+        rawLayout_.bitDepth, metadata.blackLevelsOnContainerScale);
+    const int32_t white = static_cast<int32_t>(encodedWhiteLevel(rawLayout_.bitDepth));
     const int32_t bitDepth = static_cast<int32_t>(rawLayout_.bitDepth);
     const int32_t pitch = static_cast<int32_t>(rawLayout_.rowBytes);
     const int32_t frameSize = static_cast<int32_t>(std::min<uint64_t>(
