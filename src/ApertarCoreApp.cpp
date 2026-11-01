@@ -9420,6 +9420,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording\":" << (recording ? "true" : "false")
         << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
         << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
+        << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
         << ",\"controls_errors\":" << controlsErrors_.load()
         << ",\"controls_warnings\":" << controlsWarnings_.load()
         << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
@@ -10795,9 +10796,11 @@ std::string mediaEventJson(const MediaSnapshot &snapshot)
 }
 
 // {"event":"buffer",...}: small and rare, because every socket client receives every event.
-std::string bufferEventJson(uint64_t used, uint64_t capacity, const std::string &mode)
+// recording_dropped_frames rides along so the UIs' dropped-frames count follows the take without an event of its own.
+std::string bufferEventJson(uint64_t used, uint64_t capacity, const std::string &mode, uint64_t droppedFrames)
 {
-    return "{\"event\":\"buffer\"," + bufferMembers(used, capacity, mode) + "}";
+    return "{\"event\":\"buffer\"," + bufferMembers(used, capacity, mode)
+        + ",\"recording_dropped_frames\":" + std::to_string(droppedFrames) + "}";
 }
 } // namespace
 
@@ -10942,7 +10945,8 @@ void ApertarCoreApp::runMediaWatcher()
 
 // The "buffer" event for the touch UI and HDMI. Its own thread because the media watcher also calls things that
 // wait for the controller mutex, which a stopping take holds for the whole drain, exactly when the bar must fall.
-// This thread touches only camera_.frameBufferStatus() (atomics and one try_lock that never waits) and publishEvent
+// This thread touches only camera_.frameBufferStatus() (atomics and one try_lock that never waits),
+// camera_.recordingDroppedFrames() (one atomic; a change sends an event too) and publishEvent
 // (no controller lock). Sent when the level changed while a take runs or the queue holds frames: once at the start,
 // on every change (the loop turns every 250 ms, so at most 4 a second), and once with 0 when drained. Never in mode
 // "none". 1 s sleep while idle.
@@ -10960,6 +10964,7 @@ void ApertarCoreApp::runBufferEvents()
     bool sentPrerollAuto = storagepreroll::prerollAutomatic();
     std::string sentPrerollLast = storagepreroll::prerollLast();
     double sentPrerollFps = storagepreroll::prerollFps();
+    uint64_t sentDropped = camera_.recordingDroppedFrames();
     while (bufferEventsRunning_.load(std::memory_order_acquire)) {
         const auto buffer = camera_.frameBufferStatus();
         // The request, the plan note, the safety stop flag or its threshold changed (a button, a save, a take's plan,
@@ -10972,7 +10977,9 @@ void ApertarCoreApp::runBufferEvents()
         const bool prerollAuto = storagepreroll::prerollAutomatic();
         std::string prerollLast = storagepreroll::prerollLast();
         const double prerollFps = storagepreroll::prerollFps();
-        if (!(setting == sentSetting) || safety != sentSafety || stopPercent != sentStopPercent || flushDiscarded != sentFlushDiscarded ||
+        const uint64_t dropped = camera_.recordingDroppedFrames();
+        if (dropped != sentDropped
+            || !(setting == sentSetting) || safety != sentSafety || stopPercent != sentStopPercent || flushDiscarded != sentFlushDiscarded ||
             prerollActive != sentPrerollActive || prerollAuto != sentPrerollAuto || prerollLast != sentPrerollLast || prerollFps != sentPrerollFps) {
             sentSetting = setting;
             sentSafety = safety;
@@ -10982,19 +10989,20 @@ void ApertarCoreApp::runBufferEvents()
             sentPrerollAuto = prerollAuto;
             sentPrerollFps = prerollFps;
             sentPrerollLast = std::move(prerollLast);
-            publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode));
+            sentDropped = dropped;
+            publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode, camera_.recordingDroppedFrames()));
         }
         const bool busy = buffer.mode != "none" && (buffer.recording || buffer.used > 0);
         if (busy) {
             if (!open || buffer.used != sentUsed || buffer.capacity != sentCapacity) {
-                publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode));
+                publishEvent(bufferEventJson(buffer.used, buffer.capacity, buffer.mode, camera_.recordingDroppedFrames()));
                 sentUsed = buffer.used;
                 sentCapacity = buffer.capacity;
                 sentMode = buffer.mode;
             }
             open = true;
         } else if (open) {
-            publishEvent(bufferEventJson(0, sentCapacity, sentMode));   // drained (or the format left the queue)
+            publishEvent(bufferEventJson(0, sentCapacity, sentMode, camera_.recordingDroppedFrames()));   // drained (or the format left the queue)
             open = false;
         }
         std::unique_lock<std::mutex> lock(bufferEventMutex_);
@@ -12495,6 +12503,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
              << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
+             << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
              << ",\"controls_errors\":" << controlsErrors_.load()
              << ",\"controls_warnings\":" << controlsWarnings_.load()
              << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
@@ -14288,7 +14297,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, camera_.lastError());
         syncRecordingTracking(true);
         return okReply(command.id, std::string("\"recording\":true,\"recording_has_dropped_frames\":")
-                       + (camera_.recordingHasDroppedFrames() ? "true" : "false"));
+                       + (camera_.recordingHasDroppedFrames() ? "true" : "false")
+                       + ",\"recording_dropped_frames\":" + std::to_string(camera_.recordingDroppedFrames()));
     }
 
     if (command.name == "capture_photo") {
@@ -14372,7 +14382,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, camera_.lastError());
         syncRecordingTracking(false);
         return okReply(command.id, std::string("\"recording\":false,\"recording_has_dropped_frames\":")
-                       + (camera_.recordingHasDroppedFrames() ? "true" : "false"));
+                       + (camera_.recordingHasDroppedFrames() ? "true" : "false")
+                       + ",\"recording_dropped_frames\":" + std::to_string(camera_.recordingDroppedFrames()));
     }
 
     if (command.name == "preview_subscribe") {

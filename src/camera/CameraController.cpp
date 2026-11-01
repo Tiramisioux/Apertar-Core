@@ -9912,7 +9912,7 @@ private:
 
             const uint64_t droppedEstimate = static_cast<uint64_t>(estimate);
             recordingGapEstimate_ += droppedEstimate;
-            dropWarning_.markDropped();
+            dropWarning_.markDropped(droppedEstimate);
             if (recordingGapEstimate_ == 1 || (recordingGapEstimate_ % 30) == 0 || droppedEstimate > 1) {
                 std::cerr << "ApertarCore drop[capture-gap]: +"
                           << droppedEstimate
@@ -10353,7 +10353,8 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
     , recordingDropWarning_([this](bool dropped) {
           if (eventCallback_)
               eventCallback_(std::string("{\"event\":\"recording_health\",\"recording_has_dropped_frames\":")
-                             + (dropped ? "true}" : "false}"));
+                             + (dropped ? "true" : "false") + ",\"recording_dropped_frames\":"
+                             + std::to_string(recordingDropWarning_.droppedFrames()) + "}");
       })
     , session_(std::make_unique<CameraSession>(
           previewCallback_,
@@ -12703,6 +12704,7 @@ void CameraController::emitRecordingEventLocked()
     std::ostringstream out;
     out << "{\"event\":\"recording\",\"active\":" << (recording_ ? "true" : "false")
         << ",\"recording_has_dropped_frames\":" << (recordingDropWarning_.dropped() ? "true" : "false")
+        << ",\"recording_dropped_frames\":" << recordingDropWarning_.droppedFrames()
         << ",\"error\":\"" << apertar::escapeJson(lastError_) << "\""
         << ",\"fault\":\"" << recordingFaultName_ << "\"}";
     eventCallback_(out.str());
