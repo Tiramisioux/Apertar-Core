@@ -913,7 +913,7 @@ std::string_view webControlPageHtml()
       position: relative;
       flex: 0 0 auto;
       width: 78px;
-      height: 48px;
+      height: 44px;     /* 16:9, the sensor area (3840x2160) the window is drawn in */
       border: 1px solid #8a8a8a;
       background: #131210;
       overflow: hidden;
@@ -921,12 +921,12 @@ std::string_view webControlPageHtml()
 
     .crop-frame.large {
       width: 160px;
-      height: 98px;
+      height: 90px;
     }
 
     .crop-frame.small {
-      width: 65px;
-      height: 40px;
+      width: 64px;
+      height: 36px;
     }
 
     .crop-window {
