@@ -1363,6 +1363,8 @@ double maximumPcfFpsForSettings(const CaptureSettings &settings, const std::stri
 std::vector<double> builtInFpsSteps(const std::string &sensorName)
 {
     const std::string sensor = lowerAscii(sensorName);
+    if (sensor.find("imx585") != std::string::npos)      // the windowed modes run past 60 (cut at the mode's fps_max)
+        return std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0, 120.0};
     return sensor.find("imx477") != std::string::npos || sensor.find("imx577") != std::string::npos
         ? std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0, 100.0}
         : std::vector<double>{24.0, 25.0, 30.0, 50.0, 60.0};
@@ -9395,6 +9397,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"backend_name\":\"Apertar-Core / libcamera\""
         << ",\"sensor\":\"" << escapeJson(sensorName) << "\""
         << "," << sensorBinningBody(sensorBinning)
+        << ",\"sensor_mono\":" << (camera_.sensorMono() ? "true" : "false")
         << ",\"resolution\":\"" << settings.resolution.toString() << "\""
         << ",\"width\":" << settings.resolution.width
         << ",\"height\":" << settings.resolution.height
@@ -12449,6 +12452,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_write_revision\":" << mediaWrite.revision
              << ",\"sensor\":\"" << escapeJson(camera_.sensorName()) << "\""
              << "," << sensorBinningBody(camera_.sensorBinning())
+             << ",\"sensor_mono\":" << (camera_.sensorMono() ? "true" : "false")
              << ",\"media_state\":\"" << mediaState.stateName() << "\""
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << "," << settingsBody(camera_.settings());

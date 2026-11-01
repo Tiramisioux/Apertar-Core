@@ -158,6 +158,7 @@ public:
     std::string sensorName() const;
     std::vector<SensorMode> sensorModes() const;
     SensorBinning sensorBinning() const;
+    bool sensorMono() const;       // the sensor reads out monochrome (IMX585 mono)
     bool isRecording() const;
     std::string lastError() const;
     std::string recordingError() const;

@@ -60,6 +60,8 @@ struct RungState {
     uint32_t windowWidth = 0;
     uint32_t windowHeight = 0;
     uint32_t binning = 0;
+    uint32_t rawWidth = 0;      // the frame the sensor delivers for the mode (the probe's size); 0 = the rung's own size
+    uint32_t rawHeight = 0;
     double ceilingBy[4] = { 0.0, 0.0, 0.0, 0.0 };
 };
 
@@ -288,7 +290,9 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"log_bits\":" + std::to_string(logBits(r)) +
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling) +
                ",\"window_w\":" + std::to_string(st.windowWidth) + ",\"window_h\":" + std::to_string(st.windowHeight) +
-               ",\"binning\":" + std::to_string(st.binning) + ",\"ceilings\":{\"none\":" + number(st.ceilingBy[0]) +
+               ",\"binning\":" + std::to_string(st.binning) +
+               ",\"raw_width\":" + std::to_string(st.rawWidth ? st.rawWidth : r.width) +
+               ",\"raw_height\":" + std::to_string(st.rawHeight ? st.rawHeight : r.height) + ",\"ceilings\":{\"none\":" + number(st.ceilingBy[0]) +
                ",\"lossless_jpeg\":" + number(st.ceilingBy[1]) + ",\"lossy_3to1\":" + number(st.ceilingBy[2]) +
                ",\"lossy_5to1\":" + number(st.ceilingBy[3]) + "}";
     };
