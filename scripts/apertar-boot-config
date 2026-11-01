@@ -1,0 +1,71 @@
+#!/bin/sh
+# apertar-boot-config
+#
+# Root helper that replaces /boot/firmware/config.txt with the text on stdin. Called by apertar-core (as
+# `sudo -n /usr/local/libexec/apertar-boot-config < new-config.txt`) when the WebUI's System -> Boot config card
+# saves, and for the fan mode. /boot/firmware belongs to root; Core runs as pi.
+#
+# The sudoers rule pins this path with no arguments, so the destination is fixed here and only the input is
+# checked: not empty, at most 64 KiB, no NUL bytes, and still a config.txt with a [pi5], [pi4] or [all] section, so
+# a cut-off or wrong stream cannot replace the boot config.
+#
+# The current file is first copied to config.txt.apertar.bak. The new text is written next to it, synced and renamed
+# over it, so a power cut leaves the old file or the new one, never half of one.
+#
+# Exit codes: 0 replaced, 1 write failed, 2 bad input, 3 config.txt missing.
+set -u
+
+DEST=/boot/firmware/config.txt
+BACKUP=/boot/firmware/config.txt.apertar.bak
+MAX=65536
+
+log() { echo "apertar-boot-config: $*" >&2; }
+
+if [ $# -ne 0 ]; then
+    log "takes no arguments (the new text comes on stdin)"
+    exit 2
+fi
+if [ ! -f "$DEST" ]; then
+    log "$DEST: not found"
+    exit 3
+fi
+
+DIR=$(dirname "$DEST")
+TMP=$(mktemp "$DIR/.config.txt.XXXXXX") || { log "mktemp in $DIR failed"; exit 1; }
+trap 'rm -f "$TMP"' EXIT
+
+head -c $((MAX + 1)) >"$TMP" || { log "could not read stdin"; exit 1; }
+SIZE=$(wc -c <"$TMP")
+if [ "$SIZE" -eq 0 ]; then
+    log "empty input"
+    exit 2
+fi
+if [ "$SIZE" -gt "$MAX" ]; then
+    log "input larger than $MAX bytes"
+    exit 2
+fi
+if [ "$(tr -d '\000' <"$TMP" | wc -c)" -ne "$SIZE" ]; then
+    log "input holds NUL bytes"
+    exit 2
+fi
+if ! grep -Eq '^[[:space:]]*\[(pi5|pi4|all)\]' "$TMP"; then
+    log "input has no [pi5], [pi4] or [all] section: not the Apertar config.txt"
+    exit 2
+fi
+
+if ! cp "$DEST" "$BACKUP"; then
+    log "could not back up $DEST to $BACKUP"
+    exit 1
+fi
+# /boot/firmware is FAT: owner and mode come from the mount, so these may do nothing. A copy elsewhere keeps them.
+chown --reference="$DEST" "$TMP" 2>/dev/null || true
+chmod --reference="$DEST" "$TMP" 2>/dev/null || true
+sync "$TMP" 2>/dev/null || sync
+if ! mv -f "$TMP" "$DEST"; then
+    log "could not replace $DEST"
+    exit 1
+fi
+trap - EXIT
+sync "$DIR" 2>/dev/null || sync
+echo "apertar-boot-config: $DEST replaced ($SIZE bytes), previous copy in $BACKUP"
+exit 0
