@@ -166,6 +166,7 @@ public:
     std::string recordingError() const;
     PhaseLockStatus phaseLockStatus() const;
     bool recordingHasDroppedFrames() const { return recordingDropWarning_.dropped(); }
+    uint64_t recordingDroppedFrames() const { return recordingDropWarning_.droppedFrames(); }
 
 private:
     class CameraSession;
