@@ -69,6 +69,7 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <sched.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -1342,6 +1343,8 @@ unsigned int unsignedEnvValue(const char *name,
     return defaultValue;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
+
 bool boolEnvValue(const char *name, bool defaultValue)
 {
     if (const char *value = std::getenv(name); value && *value) {
@@ -1364,6 +1367,9 @@ bool boolEnvValue(const char *name, bool defaultValue)
     return defaultValue;
 }
 
+// Pure helpers shared with the build without libcamera (--simulate): the tuning file checks and,
+// further down in the other unguarded spans, the sensor model (families, modes, fps and ISO limits and the
+// settings sanitiser) that the CameraController methods outside the libcamera half call.
 std::string normalizeTuningFilePath(std::string value)
 {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -1425,6 +1431,7 @@ void applyProcessTuningFile(const std::string &path)
 }
 
 
+#if APERTARCORE_HAS_LIBCAMERA
 unsigned int h264CameraBufferCount()
 {
     const unsigned int defaultCount = recordingCapabilities().hardwareH264 ? 4u : 6u;
@@ -2245,6 +2252,7 @@ bool encodeProcessedTiff(const ProcessedRgbStill &image, std::vector<uint8_t> *t
     return true;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 enum class SensorFamily {
     Unknown,
     Imx294,
@@ -2285,12 +2293,15 @@ Resolution processedVideoCaptureResolutionForSensor(const CaptureSettings &setti
 struct SensorModeSelection
 {
     Resolution rawResolution{};
+#if APERTARCORE_HAS_LIBCAMERA
     libcamera::PixelFormat rawPixelFormat = libcamera::formats::SRGGB12_CSI2P;
+#endif
     uint32_t bitDepth = 12;
     std::string dngModel;
 };
 
 
+#if APERTARCORE_HAS_LIBCAMERA
 bool controlInfoHas(const libcamera::ControlInfoMap &controlInfo, const libcamera::ControlId &control)
 {
     return controlInfo.find(&control) != controlInfo.end();
@@ -2549,6 +2560,7 @@ SensorFamily detectSensorFamily(const std::string &cameraId)
     return SensorFamily::Unknown;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 const char *sensorFamilyName(SensorFamily sensorFamily)
 {
     switch (sensorFamily) {
@@ -2562,6 +2574,7 @@ const char *sensorFamilyName(SensorFamily sensorFamily)
     return "Unknown";
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
 {
     switch (normalizeRawBitDepth(bitDepth)) {
@@ -2576,6 +2589,7 @@ libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
     }
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 Resolution imx294ReadoutForActiveResolution(Resolution active, uint32_t bitDepth)
 {
     active = normalizedImx294ResolutionForBitDepth(active, bitDepth);
@@ -2594,7 +2608,9 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
 {
     SensorModeSelection selection;
     selection.rawResolution = requested;
+#if APERTARCORE_HAS_LIBCAMERA
     selection.rawPixelFormat = rawPixelFormatForBitDepth(rawBitDepth);
+#endif
     selection.bitDepth = normalizeRawBitDepth(rawBitDepth);
     selection.dngModel = "Generic";
 
@@ -2605,7 +2621,9 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
         break;
     case SensorFamily::Imx283:
         selection.bitDepth = selection.bitDepth == 10 ? 10u : 12u;
+#if APERTARCORE_HAS_LIBCAMERA
         selection.rawPixelFormat = rawPixelFormatForBitDepth(selection.bitDepth);
+#endif
         selection.rawResolution = imx283TransportForActiveResolution(requested, selection.bitDepth);
         selection.dngModel = "IMX283";
         break;
@@ -2653,6 +2671,7 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
     return selection;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 SensorModeSelection imx577ModeSelection(Resolution resolution, uint32_t bitDepth)
 {
     SensorModeSelection selection;
@@ -2754,6 +2773,7 @@ std::vector<SensorModeSelection> sensorModeCandidatesForRequestedResolution(Sens
     return candidates;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 // rawBitDepth and clearHdr pick the IMX585 class (they matter to no other sensor): a size the class
 // lacks takes its nearest row.
 Resolution normalizedResolutionForSensor(SensorFamily sensorFamily, Resolution requested,
@@ -2858,6 +2878,7 @@ bool isLosslessTwoKCapture(const CaptureSettings &settings, SensorFamily sensorF
 
 // The ISO that keeps the sensor on the gain code it is measured at. The gain-to-code step rounds
 // down (0.3 dB per code), so ISO 794 for a measured 7.94x lands one code lower; rounding up keeps it.
+#if APERTARCORE_HAS_LIBCAMERA
 // Sample rate from a WAV's fmt chunk (Core's WAVs carry a bext chunk first); 0 if unreadable.
 uint32_t wavSampleRate(const std::filesystem::path &path)
 {
@@ -2889,6 +2910,7 @@ std::string shellQuote(const std::string &text)
         quoted += ch == '\'' ? std::string("'\\''") : std::string(1, ch);
     return quoted + "'";
 }
+#endif
 
 uint32_t isoForMeasuredGain(float gain)
 {
@@ -2948,6 +2970,7 @@ CameraSection loadCameraSection()
     return limits;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 // The write-buffer keys of [storage], read from the hardware file at the start of each take, so a save in the
 // Config pane applies to the next take. Bad or missing keys are unset (see bufferbudget::bufferConfProblem).
 bufferbudget::BufferConf loadBufferConf()
@@ -2968,6 +2991,7 @@ bufferbudget::BufferConf loadBufferConf()
     }
     return {};
 }
+#endif
 
 // Read once: a change in the file takes effect at the next Core start.
 const CameraSection &cameraSection()
@@ -3269,7 +3293,9 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
 // Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
 std::mutex probedSensorModesMutex;
 std::vector<CameraController::SensorMode> probedSensorModes;
+#if APERTARCORE_HAS_LIBCAMERA
 bool sensorModesProbed = false;
+#endif
 
 std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
 {
@@ -3510,6 +3536,7 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     return settings;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 bool parseSizeEnv(const char *value, uint32_t &width, uint32_t &height)
 {
     if (!value || !*value)
@@ -4125,6 +4152,7 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
     return out;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 // The write queue's live level, readable without any lock: the controller's main mutex is held for the whole
 // drain after a take stops, which is exactly when the buffer bar is needed. Written by DngRecordingQueue under
 // its own mutex; read by CameraController::frameBufferStatus().
@@ -4144,6 +4172,7 @@ FrameBufferGauge &frameBufferGauge()
     return gauge;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 class DngRecordingQueue {
 public:
     explicit DngRecordingQueue(RecordingDropWarning *warning = nullptr) : dropWarning_(warning) {}
@@ -4277,6 +4306,7 @@ public:
                           : normalWorkerCount));
         workerCount_ = workerCount;
         workers_.reserve(workerCount);
+        warmRawPool();   // the idle pool, allocated before any writer or copy worker runs
         // Once a second, fsync the files written since the last tick and then the
         // clip folder, so a pull or a crash leaves readable frames up to about a
         // second before it; the data is already on its way (startWriteback). syncfs
@@ -4291,6 +4321,13 @@ public:
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
                 spawnWorker([this, syncMs, fd = mediaDirFd_] { syncLoop(fd, std::chrono::milliseconds(syncMs)); });
+        } else if (dngPageCacheDrop() == DngPageCacheDrop::Sync) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::cerr << "ApertarCore recording: APERTAR_DNG_DONTNEED=sync needs the sync thread (APERTAR_MEDIA_SYNC_MS > 0); "
+                             "written frames stay in the page cache until the kernel reclaims them\n";
+            }
         }
         for (unsigned int i = 0; i < workerCount; ++i)
             spawnWorker([this] { workerLoop(); });
@@ -4409,12 +4446,11 @@ public:
             }
         }
         workers_.clear();
+        trimRawPoolToIdle();
         // A sync thread left behind may still use its descriptor.
         if (mediaDirFd_ >= 0 && joinAll)
             ::close(mediaDirFd_);
         mediaDirFd_ = -1;
-        if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
-            std::cerr << "ApertarCore recording stats: dropped_copy_slot=" << dropped << "\n";
         if (recordingFormat_ == RecordingFormat::LossyDng) {
             if (mediumGone_.load(std::memory_order_acquire))
                 LossyDngEncoder::abandonWrites();
@@ -4434,6 +4470,7 @@ public:
                       << " write_failures=" << summary.writeFailures
                       << " discarded_on_failure=" << summary.discardedOnFailure
                       << " skipped_after_failure=" << summary.skippedAfterFailure
+                      << " dropped_copy_slot=" << droppedNoRequestSlot_.load(std::memory_order_relaxed)
                       << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
                       << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth;
             if (summary.ramMode)
@@ -4667,6 +4704,10 @@ public:
                 const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
                 if (fd >= 0) {
                     ::fsync(fd);
+                    // APERTAR_DNG_DONTNEED=sync: the pages are clean now, so this call frees them without
+                    // the cross-CPU drain the writer's call pays on dirty pages.
+                    if (dngPageCacheDrop() == DngPageCacheDrop::Sync)
+                        ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
                     ::close(fd);
                 }
             }
@@ -4749,26 +4790,84 @@ public:
 
     std::vector<uint8_t> acquireRawBuffer(size_t size)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        expectedRawBufferSize_ = size;
-        auto reusable = std::min_element(rawPool_.begin(), rawPool_.end(), [size](const std::vector<uint8_t> &lhs,
-                                                                                   const std::vector<uint8_t> &rhs) {
-            const bool lhsFits = lhs.capacity() >= size;
-            const bool rhsFits = rhs.capacity() >= size;
-            if (lhsFits != rhsFits)
-                return lhsFits;
-            return lhs.capacity() < rhs.capacity();
-        });
-        if (reusable == rawPool_.end() || reusable->capacity() < size)
-            return std::vector<uint8_t>(size);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            expectedRawBufferSize_ = size;
+            auto reusable = std::min_element(rawPool_.begin(), rawPool_.end(), [size](const std::vector<uint8_t> &lhs,
+                                                                                       const std::vector<uint8_t> &rhs) {
+                const bool lhsFits = lhs.capacity() >= size;
+                const bool rhsFits = rhs.capacity() >= size;
+                if (lhsFits != rhsFits)
+                    return lhsFits;
+                return lhs.capacity() < rhs.capacity();
+            });
+            if (reusable != rawPool_.end() && reusable->capacity() >= size) {
+                std::vector<uint8_t> buffer = std::move(*reusable);
+                rawPool_.erase(reusable);
+                pooledRawBytes_ = pooledRawBytes_ > buffer.capacity()
+                    ? (pooledRawBytes_ - buffer.capacity())
+                    : 0;
+                buffer.resize(size);
+                return buffer;
+            }
+        }
+        // A pool miss allocates without the lock: libcamera's completion thread takes mutex_ for every frame
+        // (hasCapacityForFrame), and a 16.6 MB zero-fill under it held that thread up (kb dng-chain, R3/R7).
+        return std::vector<uint8_t>(size);
+    }
 
-        std::vector<uint8_t> buffer = std::move(*reusable);
-        rawPool_.erase(reusable);
-        pooledRawBytes_ = pooledRawBytes_ > buffer.capacity()
-            ? (pooledRawBytes_ - buffer.capacity())
-            : 0;
-        buffer.resize(size);
-        return buffer;
+    // APERTAR_RAW_POOL_WARM=0 restores the old pool rule for the A/B: no copies allocated before the take
+    // starts, and at most workers + 2 pooled copies while it runs (a deep queue then frees and allocates
+    // 16.6 MB vectors frame after frame).
+    static bool rawPoolWarmEnabled()
+    {
+        static const bool enabled = boolEnvValue("APERTAR_RAW_POOL_WARM", true);
+        return enabled;
+    }
+
+    // The first take after a (re)configure found the pool empty. Allocate the idle pool before the writers
+    // start, outside the lock, so the copy worker never allocates its first copies with mutex_ held.
+    void warmRawPool()
+    {
+        if (!rawPoolWarmEnabled())
+            return;
+        const size_t frameBytes = static_cast<size_t>(frameBytesHint_);
+        if (frameBytes == 0)
+            return;
+        size_t missing = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            expectedRawBufferSize_ = frameBytes;
+            size_t fitting = 0;
+            for (const std::vector<uint8_t> &buffer : rawPool_)
+                if (buffer.capacity() >= frameBytes)
+                    ++fitting;
+            const size_t want = idleRawPoolSize();
+            missing = fitting < want ? want - fitting : 0;
+        }
+        if (missing == 0)
+            return;
+        std::vector<std::vector<uint8_t>> fresh;
+        fresh.reserve(missing);
+        for (size_t i = 0; i < missing; ++i)
+            fresh.emplace_back(frameBytes);
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (std::vector<uint8_t> &buffer : fresh) {
+            pooledRawBytes_ += buffer.capacity();
+            rawPool_.push_back(std::move(buffer));
+        }
+    }
+
+    // Between takes the pool keeps the idle number of copies; what a take grew beyond that is freed here.
+    void trimRawPoolToIdle()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const size_t keep = idleRawPoolSize();
+        while (rawPool_.size() > keep) {
+            const size_t capacity = rawPool_.back().capacity();
+            pooledRawBytes_ = pooledRawBytes_ > capacity ? pooledRawBytes_ - capacity : 0;
+            rawPool_.pop_back();
+        }
     }
 
     // Drop the pooled raw copy buffers. The pool survives takes, so the camera
@@ -5265,7 +5364,7 @@ private:
 
         const size_t expectedSize = expectedRawBufferSize_;
         const size_t maxRetainedBuffers = preferredRawPoolSize();
-        const size_t maxRetainedBytes = expectedSize > 0 ? expectedSize * maxRetainedBuffers : 0;
+        const size_t maxRetainedBytes = expectedSize > 0 && maxRetainedBuffers <= 4096u ? expectedSize * maxRetainedBuffers : 0;
         const size_t oversizeThreshold = expectedSize > 0 ? expectedSize + (expectedSize / 2) : 0;
 
         if ((expectedSize > 0 && capacity > oversizeThreshold)
@@ -5356,9 +5455,19 @@ private:
         std::cerr << "ApertarCore buffer: " << plan.reason << (plan.ram ? (fromEnv ? " source=env" : " source=conf") : "") << "\n";
     }
 
-    size_t preferredRawPoolSize() const
+    // Pooled copies kept between takes (the rule since db17860).
+    size_t idleRawPoolSize() const
     {
         return std::min(maxQueuedFrames_, std::max<size_t>(workerCount_ + 2u, 4u));
+    }
+
+    // While a take runs: room for every frame the queue and the writers can hold at once, so a copy is never
+    // freed and allocated again mid-take (in ram mode the byte budget in recycleRawBuffer is the bound).
+    size_t preferredRawPoolSize() const
+    {
+        if (rawPoolWarmEnabled() && active_.load(std::memory_order_acquire))
+            return ramMode_ ? std::numeric_limits<size_t>::max() : maxQueuedFrames_ + workerCount_ + 2u;
+        return idleRawPoolSize();
     }
 
     CaptureSettings settings_{};
@@ -8860,14 +8969,33 @@ private:
         noteFrameForPreroll(request);
         if (!capturePriorityAdjusted_) {
             capturePriorityAdjusted_ = true;
-            // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
             // Only this callback thread changes priority, not encoder workers.
             const int tid = static_cast<int>(::syscall(SYS_gettid));
-            if (::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), -5) == 0)
-                std::cerr << "ApertarCore capture scheduling: thread=" << tid << " nice=-5\n";
-            else
-                std::cerr << "ApertarCore capture scheduling: normal priority retained ("
-                          << std::strerror(errno) << ")\n";
+            // APERTAR_RT_CAPTURE_PRIORITY=1..99: SCHED_FIFO for this thread alone (needs LimitRTPRIO on the
+            // unit). The capture callback then preempts every SCHED_OTHER thread of Core (writers, copy worker,
+            // WebUI) instead of competing with them under CFS; the writers keep their priorities, unlike the
+            // whole-process chrt of APERTAR_RT=1 (kb working/dng-chain, V/H15). Off by default.
+            const unsigned int rtPriority = unsignedEnvValue("APERTAR_RT_CAPTURE_PRIORITY", 0, 0, 99);
+            bool realtime = false;
+            if (rtPriority > 0) {
+                sched_param param{};
+                param.sched_priority = static_cast<int>(rtPriority);
+                if (::sched_setscheduler(tid, SCHED_FIFO, &param) == 0) {
+                    realtime = true;
+                    std::cerr << "ApertarCore capture scheduling: thread=" << tid << " SCHED_FIFO priority=" << rtPriority << "\n";
+                } else {
+                    std::cerr << "ApertarCore capture scheduling: SCHED_FIFO refused (" << std::strerror(errno)
+                              << "); is LimitRTPRIO set on the unit? falling back to nice\n";
+                }
+            }
+            // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
+            if (!realtime) {
+                if (::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), -5) == 0)
+                    std::cerr << "ApertarCore capture scheduling: thread=" << tid << " nice=-5\n";
+                else
+                    std::cerr << "ApertarCore capture scheduling: normal priority retained ("
+                              << std::strerror(errno) << ")\n";
+            }
         }
 
         WhiteBalanceMeasurement whiteBalance;
@@ -10177,6 +10305,12 @@ private:
     const size_t maxPendingPhotoCaptures_ = 12;
     bool acquired_ = false;
     bool started_ = false;
+#else
+    // Without libcamera there is no camera to open: the session never starts, so these keep their defaults
+    // and the shared accessors (currentSettings, sensorFamily) answer for an idle, unknown sensor.
+    CaptureSettings settings_;
+    mutable std::shared_mutex sessionSettingsMutex_;
+    SensorFamily sensorFamily_ = SensorFamily::Unknown;
 #endif
 
     PreviewCallback previewCallback_;
@@ -12232,6 +12366,11 @@ CameraController::FrameBufferStatus CameraController::frameBufferStatus() const
     out.mode = gauge.ram.load(std::memory_order_relaxed) ? "ram" : "frames";
     out.used = std::min(out.used, out.capacity);
     return out;
+}
+
+bool CameraController::rawTakeActive() const
+{
+    return frameBufferGauge().active.load(std::memory_order_acquire);
 }
 
 CameraController::StillExposureStatus CameraController::stillExposureStatus() const

@@ -123,6 +123,8 @@ public:
         bool recording = false;  // frames are being accepted (false as soon as the take stops, while it drains)
     };
     FrameBufferStatus frameBufferStatus() const;
+    // Lock-free: true while the write queue accepts frames (a raw take runs). Safe on libcamera's thread.
+    bool rawTakeActive() const;
     // True when CineMate Log is on and the CURRENT configured raw stream can really carry it (same test as
     // the take: buildCdngLogTake). cdng_log_bits keeps meaning what the setting asks for.
     bool cdngLogApplicable() const;

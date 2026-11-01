@@ -80,6 +80,25 @@ constexpr uint32_t kWebPreviewMaxWidth = 640;
 constexpr uint32_t kWebPreviewMaxHeight = 360;
 constexpr double kWebPreviewMaxFps = 30.0;
 constexpr int kWebPreviewJpegQuality = 75;
+
+// The web preview's rate while a raw take runs (APERTAR_WEB_PREVIEW_RECORDING_FPS): default the normal 30,
+// 0 = no web preview frames while recording. The downsample for it runs on libcamera's completion thread
+// (about 0.2 to 0.5 ms per frame measured idle in the kb), so this is the A/B knob for its share of the
+// WebUI-open drops (kb working/dng-chain, V/H4).
+double webPreviewRecordingFps()
+{
+    static const double fps = []() {
+        const char *text = std::getenv("APERTAR_WEB_PREVIEW_RECORDING_FPS");
+        if (!text || !*text)
+            return kWebPreviewMaxFps;
+        char *end = nullptr;
+        const double parsed = std::strtod(text, &end);
+        if (end == text || *end != '\0' || !std::isfinite(parsed) || parsed < 0.0 || parsed > kWebPreviewMaxFps)
+            return kWebPreviewMaxFps;
+        return parsed < 0.5 ? 0.0 : parsed;
+    }();
+    return fps;
+}
 constexpr size_t kMaxEditableHardwareConfigBytes = 256 * 1024;
 
 std::string resolveExecutablePath(std::initializer_list<const char *> candidates,
@@ -4170,11 +4189,11 @@ def mount_partition(device_path):
         return False
 
     if fs_type == "ntfs":
-        command = ["mount", "-t", "ntfs3", "-o", "uid=1000,gid=1000", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "ntfs3", "-o", "uid=1000,gid=1000,umask=0002,noatime", device_path, MOUNT_PATH]
     elif fs_type == "ext4":
-        command = ["mount", "-t", "ext4", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "ext4", "-o", "noatime", device_path, MOUNT_PATH]
     elif fs_type == "exfat":
-        command = ["mount", "-t", "exfat", "-o", "uid=1000,gid=1000", device_path, MOUNT_PATH]
+        command = ["mount", "-t", "exfat", "-o", "uid=1000,gid=1000,umask=0002,noatime", device_path, MOUNT_PATH]
     else:
         return False
 
@@ -9716,9 +9735,13 @@ void ApertarCoreApp::captureWebPreviewFrame(const PreviewFrameDescriptor &frame)
         return;
 
     // This runs on libcamera's completion thread. Camera stop/reconfigure holds
-    // the control mutex while waiting for that thread, so never query it here.
+    // the control mutex while waiting for that thread, so never query it here
+    // (rawTakeActive reads one atomic).
+    const double maxFps = camera_.rawTakeActive() ? webPreviewRecordingFps() : kWebPreviewMaxFps;
+    if (maxFps <= 0.0)
+        return;
     const auto minInterval = std::chrono::microseconds(
-        static_cast<int64_t>(1'000'000.0 / kWebPreviewMaxFps));
+        static_cast<int64_t>(1'000'000.0 / maxFps));
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(mjpegMutex_);
@@ -10827,6 +10850,13 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        // A delete made outside Core (the touch UI removes clips itself) frees space without a trim: when the
+        // mounted medium gains 1 GiB or more between two polls while nothing records, ask for one. Core's own
+        // deletes already request theirs; repeated requests coalesce (kb working/dng-chain, R4).
+        if (havePrevious && current.mounted() && previous.mounted() && current.sameMedium(previous) &&
+            current.freeBytes > previous.freeBytes && current.freeBytes - previous.freeBytes >= (1ULL << 30) &&
+            !camera_.isRecording() && !mediaDeleteActive_.load())
+            trimMedia("free-space");
         if (!havePrevious || !current.sameMedium(previous)) {
             std::cerr << "ApertarCore media: state=" << current.stateName()
                       << " device=" << current.device << " fstype=" << current.fstype
@@ -11229,8 +11259,9 @@ void ApertarCoreApp::runStoragePrerollOnce(storagepreroll::Trigger trigger, unsi
     }
     storagepreroll::prerollState().fps.store(0.0, std::memory_order_release);
     storagepreroll::prerollState().active.store(false, std::memory_order_release);
-    if (result.bytes >= (1ULL << 30))
-        trimMedia("delete");   // the delete freed 1 GiB or more: the usual trim, now that the medium is free again
+    // The deleted clip (0.7 GB at 4K lossless, 1.4 GB at 4K 12-bit 60 fps) would otherwise sit untrimmed under the
+    // next take; the trim is quick (927 GB in 0.47 s measured) and runs only while the medium is idle.
+    trimMedia("delete");
 }
 
 MediaSnapshot ApertarCoreApp::mediaSnapshot() const
