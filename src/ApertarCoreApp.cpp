@@ -1392,7 +1392,9 @@ uint64_t resolutionDistance(const Resolution &left, const Resolution &right)
     return static_cast<uint64_t>(widthDelta * widthDelta + heightDelta * heightDelta);
 }
 
-std::vector<Resolution> availablePcfResolutionOptions(const std::string &sensorName)
+// settings: the running mode, for the sensors whose sizes depend on it (the IMX283's bit depth and, in ProRes/H.264
+// video, the single size Core allows).
+std::vector<Resolution> availablePcfResolutionOptions(const std::string &sensorName, const CaptureSettings &settings)
 {
     const std::string sensor = lowerAscii(sensorName);
     if (sensor.find("imx577") != std::string::npos) {
@@ -1450,6 +1452,28 @@ std::vector<Resolution> availablePcfResolutionOptions(const std::string &sensorN
             { 3792, 2824 },
             { 3792, 2528 },
             { 3392, 2824 },
+        };
+    }
+
+    if (sensor.find("imx283") != std::string::npos) {
+        // ProRes and H.264 video are 10-bit and capped to the 3840x2160 window (the sanitiser forces it).
+        if (!settings.photoModeEnabled &&
+            (settings.recordingFormat == RecordingFormat::Prores || settings.recordingFormat == RecordingFormat::H264))
+            return { { 3840, 2160 } };
+        if (settings.rawBitDepth == 10) {
+            return {
+                { 5472, 3648 },
+                { 5472, 3076 },
+                { 3840, 2160 },
+            };
+        }
+        return {
+            { 5472, 3648 },
+            { 5472, 3080 },
+            { 2736, 1824 },
+            { 2736, 1540 },
+            { 1824, 1216 },
+            { 1820, 1024 },
         };
     }
 
@@ -5593,6 +5617,7 @@ double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::st
     const bool imx477 = sensor.find("imx477") != std::string::npos;
     const bool imx577 = sensor.find("imx577") != std::string::npos;
     const bool imx294 = sensor.find("imx294") != std::string::npos;
+    const bool imx283 = sensor.find("imx283") != std::string::npos;
     const bool imx585 = sensor.find("imx585") != std::string::npos;
 
     auto bitsPerPixelForEstimate = [&settings]() {
@@ -5605,7 +5630,7 @@ double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::st
         return 12.0;
     };
 
-    if (imx294) {
+    if (imx294 || imx283) {     // the IMX283 resolution is the active picture, up to 5472x3648
         const double bitsPerPixel = bitsPerPixelForEstimate();
         const double bytes =
             static_cast<double>(std::max(1, width)) *
@@ -10093,7 +10118,7 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
     if (target == "resolution") {
         if (cameraSettings.ladderActive)    // T34: the ladder picks the resolution; no refusal spam
             return;
-        const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName());
+        const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName(), cameraSettings);
         const size_t index = analogPresetIndex(event.normalized, options.size());
         const Resolution resolution = options[index];
         if (sameResolution(cameraSettings.resolution, resolution))
@@ -10380,7 +10405,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     if (const auto mode = pcfSettingStepMode(action, "resolution")) {
         if (cameraSettings.ladderActive)    // T34: the ladder picks the resolution
             return;
-        const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName());
+        const std::vector<Resolution> options = availablePcfResolutionOptions(camera_.sensorName(), cameraSettings);
         const size_t currentIndex = nearestPcfResolutionIndex(options, cameraSettings.resolution);
         const size_t nextIndex = nextPcfPresetIndex(currentIndex, options.size(), *mode);
         dispatch("set_resolution", {
@@ -12048,7 +12073,7 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
         holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
         static const std::map<int, const char *> known = {
-            {0x04, "Grove ADC"}, {0x1a, "IMX585 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
             {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
             {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
             {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
@@ -12079,7 +12104,7 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
         const CaptureSettings cameraSettings = camera_.settings();
         std::vector<std::string> resolutions;
-        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName()))
+        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName(), cameraSettings))
             resolutions.push_back(resolution.toString());
         std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
         body = body.substr(1, body.size() - 2);

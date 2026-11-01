@@ -10,6 +10,7 @@
 #include "color/StillSrgbProfile.hpp"
 #include "color/ProresIspProfile.hpp"
 #include "camera/ScalerCropGeometry.hpp"
+#include "camera/Imx283Modes.hpp"
 #include "camera/Imx585Modes.hpp"
 #include "util/SettingsFile.hpp"
 #include "util/AtomicStillFile.hpp"
@@ -648,6 +649,38 @@ Resolution normalizedImx294ResolutionForBitDepth(Resolution requested, uint32_t 
     return Resolution{ 4176, 2176 };
 }
 
+// IMX283: Core's resolution is the active picture of one of the 57 driver modes (Imx283Modes.hpp);
+// the driver's frame is larger by the optical-black columns (left) and rows (bottom).
+bool isImx283Resolution(const Resolution &resolution)
+{
+    return imx283::isActiveSize(resolution.width, resolution.height);
+}
+
+Resolution normalizedImx283ResolutionForBitDepth(Resolution requested, uint32_t rawBitDepth)
+{
+    const imx283::Size size = imx283::normalise({ requested.width, requested.height }, rawBitDepth);
+    return Resolution{ size.width, size.height };
+}
+
+// The frame the driver delivers for an active size at a bit depth (the active size normalised first).
+Resolution imx283TransportForActiveResolution(Resolution active, uint32_t rawBitDepth)
+{
+    const uint32_t bits = rawBitDepth == 10 ? 10u : 12u;
+    active = normalizedImx283ResolutionForBitDepth(active, bits);
+    if (const imx283::Mode *mode = imx283::find(bits, active.width, active.height)) {
+        const imx283::Size transport = imx283::transportOf(*mode);
+        return Resolution{ transport.width, transport.height };
+    }
+    return active;
+}
+
+// The probe lists transport sizes; Core's ladder and clients speak the active picture.
+Resolution imx283ActiveForTransport(Resolution transport, uint32_t bitDepth)
+{
+    const imx283::Size active = imx283::activeOfTransport(bitDepth, transport.width, transport.height);
+    return active.width ? Resolution{ active.width, active.height } : transport;
+}
+
 CaptureSettings clampCaptureSettings(CaptureSettings settings)
 {
     const auto metering = normalizeExposureMetering(settings.exposureMetering);
@@ -672,7 +705,8 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         (settings.resolution.width == 4056 && settings.resolution.height == 3040) ||
         isImx477Resolution(settings.resolution) ||
         isImx585KnownResolution(settings.resolution) ||
-        isImx294Resolution(settings.resolution);
+        isImx294Resolution(settings.resolution) ||
+        isImx283Resolution(settings.resolution);
     if (!supportedResolution) {
         settings.resolution = CaptureSettings{}.resolution;
     }
@@ -2214,6 +2248,7 @@ bool encodeProcessedTiff(const ProcessedRgbStill &image, std::vector<uint8_t> *t
 enum class SensorFamily {
     Unknown,
     Imx294,
+    Imx283,
     Imx477,
     Imx577,
     Imx585
@@ -2224,6 +2259,8 @@ Resolution h264CaptureResolutionForSensor(SensorFamily sensorFamily)
     switch (sensorFamily) {
     case SensorFamily::Imx294:
         return Resolution{ 4144, 2176 };
+    case SensorFamily::Imx283:
+        return Resolution{ 3840, 2160 };    // the 10-bit MODE_1C window
     case SensorFamily::Imx585:
         return Resolution{ 3840, 2160 };
     case SensorFamily::Imx577:
@@ -2422,10 +2459,22 @@ libcamera::ControlList controlsForSettings(const CaptureSettings &settings,
             }
             const auto cropFunction = sensorFamily == SensorFamily::Imx294 && !hardwareH264
                 ? centeredRawWindowScalerCrop : centeredPreviewScalerCrop;
-            if (const auto crop = cropFunction(
-                    configuredResolution.width, configuredResolution.height,
-                    cropResolution.width, cropResolution.height,
-                    {maximum->x, maximum->y, maximum->width, maximum->height})) {
+            const NativeScalerCrop nativeMaximum{maximum->x, maximum->y, maximum->width, maximum->height};
+            std::optional<NativeScalerCrop> crop;
+            if (sensorFamily == SensorFamily::Imx283) {
+                // The delivered frame is the active picture plus leading-left optical-black columns and
+                // trailing-bottom rows: crop to the active part of the runtime maximum, then centre the
+                // output aspect inside it.
+                crop = activeAreaScalerCrop(configuredResolution.width, configuredResolution.height,
+                                            settings.resolution.width, settings.resolution.height, nativeMaximum);
+                if (crop)
+                    crop = centeredPreviewScalerCrop(settings.resolution.width, settings.resolution.height,
+                                                     cropResolution.width, cropResolution.height, *crop);
+            } else {
+                crop = cropFunction(configuredResolution.width, configuredResolution.height,
+                                    cropResolution.width, cropResolution.height, nativeMaximum);
+            }
+            if (crop) {
                 controls.set(libcamera::controls::ScalerCrop,
                     libcamera::Rectangle(crop->x, crop->y, crop->width, crop->height).boundedTo(*maximum));
             }
@@ -2493,6 +2542,8 @@ SensorFamily detectSensorFamily(const std::string &cameraId)
         return SensorFamily::Imx477;
     if (lower.find("imx294") != std::string::npos)
         return SensorFamily::Imx294;
+    if (lower.find("imx283") != std::string::npos)
+        return SensorFamily::Imx283;
     if (lower.find("imx585") != std::string::npos)
         return SensorFamily::Imx585;
     return SensorFamily::Unknown;
@@ -2502,6 +2553,7 @@ const char *sensorFamilyName(SensorFamily sensorFamily)
 {
     switch (sensorFamily) {
     case SensorFamily::Imx294: return "IMX294";
+    case SensorFamily::Imx283: return "IMX283";
     case SensorFamily::Imx477: return "IMX477";
     case SensorFamily::Imx577: return "IMX577";
     case SensorFamily::Imx585: return "IMX585";
@@ -2550,6 +2602,12 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
     case SensorFamily::Imx294:
         selection.rawResolution = imx294ReadoutForActiveResolution(requested, selection.bitDepth);
         selection.dngModel = "IMX294";
+        break;
+    case SensorFamily::Imx283:
+        selection.bitDepth = selection.bitDepth == 10 ? 10u : 12u;
+        selection.rawPixelFormat = rawPixelFormatForBitDepth(selection.bitDepth);
+        selection.rawResolution = imx283TransportForActiveResolution(requested, selection.bitDepth);
+        selection.dngModel = "IMX283";
         break;
     case SensorFamily::Imx477:
         selection.rawResolution = normalizedImx477Resolution(requested);
@@ -2629,7 +2687,7 @@ std::vector<SensorModeSelection> sensorModeCandidatesForRequestedResolution(Sens
 
     addCandidate(sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth));
 
-    if (sensorFamily == SensorFamily::Imx294)
+    if (sensorFamily == SensorFamily::Imx294 || sensorFamily == SensorFamily::Imx283)
         return candidates;
 
     if (sensorFamily == SensorFamily::Imx477) {
@@ -2715,6 +2773,12 @@ Resolution normalizedResolutionForSensor(SensorFamily sensorFamily, Resolution r
             resolutionMatches(requested, 2028, 1520))
             return Resolution{ 4144, 2176 };
         return Resolution{ 4144, 2176 };
+    case SensorFamily::Imx283:
+        // The bit depth is not known here: a mode of either depth and the generic full HD / UHD aliases
+        // stay as they are (normalizedImx283ResolutionForBitDepth settles them once the depth is).
+        if (isImx283Resolution(requested) || imx283::isGenericAlias(requested.width, requested.height))
+            return requested;
+        return normalizedImx283ResolutionForBitDepth(requested, 12);
     case SensorFamily::Imx477:
         return normalizedImx477Resolution(requested);
     case SensorFamily::Imx577:
@@ -2758,6 +2822,8 @@ bool isFourKCaptureResolution(SensorFamily sensorFamily, Resolution requested, u
         return resolution.width == 3840;
     case SensorFamily::Imx294:
         return resolution.width >= 3392;
+    case SensorFamily::Imx283:
+        return resolution.width >= 3840;
     case SensorFamily::Unknown:
         return resolution.width >= 3840;
     }
@@ -3224,6 +3290,14 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     const Resolution normalized = normalizedResolutionForSensor(sensorFamily, requested, rawBitDepth, clearHdr);
 
     switch (sensorFamily) {
+    case SensorFamily::Imx283: {
+        // The driver's floor with crop_vmax=0 for the active size at this bit depth.
+        const uint32_t bits = normalizeRawBitDepth(rawBitDepth) == 10 ? 10u : 12u;
+        const Resolution active = normalizedImx283ResolutionForBitDepth(requested, bits);
+        if (const double floor = imx283::floorFps(bits, active.width, active.height); floor > 0.0)
+            return floor;
+        break;
+    }
     case SensorFamily::Imx294:
         if (normalized.width == 3792 && normalized.height == 2824)
             return 34.70;
@@ -3273,6 +3347,14 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     return 120.0;
 }
 
+// APERTAR_IMX283_PROBE_FPS=1: the IMX283 fps ceiling is the probe alone; unset, it is min(probe, the driver's
+// crop_vmax=0 floor), because the probe can report more than the sensor delivers.
+bool imx283ProbeFpsOnly()
+{
+    static const bool probeOnly = boolEnvValue("APERTAR_IMX283_PROBE_FPS", false);
+    return probeOnly;
+}
+
 // APERTAR_FPS_LIMIT=table: the old behaviour, min(table, probed). Default: the probe is the limit.
 bool fpsLimitTableOnly()
 {
@@ -3293,7 +3375,12 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    return fpsceiling::resolveSensorMaxFps(probed, table, fpsLimitTableOnly());
+    // IMX283: min(probe, the driver's floor) unless APERTAR_IMX283_PROBE_FPS=1, which is the probe alone and wins
+    // over APERTAR_FPS_LIMIT=table.
+    const bool minWithTable = sensorFamily == SensorFamily::Imx283
+        ? !imx283ProbeFpsOnly()
+        : fpsLimitTableOnly();
+    return fpsceiling::resolveSensorMaxFps(probed, table, minWithTable);
 }
 
 // Back-end limits that are not the sensor's, applied after the sensor value; nullopt = none.
@@ -3318,6 +3405,7 @@ uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t reque
             return bitDepth;
         break;
     case SensorFamily::Imx294:
+    case SensorFamily::Imx283:
         if (bitDepth == 10 || bitDepth == 12)
             return bitDepth;
         break;
@@ -3406,6 +3494,14 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
 
     if (sensorFamily == SensorFamily::Imx294)
         settings.resolution = normalizedImx294ResolutionForBitDepth(settings.resolution, settings.rawBitDepth);
+    if (sensorFamily == SensorFamily::Imx283) {
+        settings.resolution = normalizedImx283ResolutionForBitDepth(settings.resolution, settings.rawBitDepth);
+        // ProRes is capped to 3840x2160: its ISP output is RGB48 at the active size. The only mode that small
+        // is the 10-bit 3840x2160 window.
+        if (!settings.photoModeEnabled && settings.recordingFormat == RecordingFormat::Prores &&
+            (settings.resolution.width > 3840 || settings.resolution.height > 2160))
+            settings.resolution = Resolution{ 3840, 2160 };
+    }
 
     const double maxFps = modeMaximumFps(settings, sensorFamily);
     if (settings.fps > maxFps)
@@ -3526,12 +3622,13 @@ bool shouldUseRequestedActiveRawCrop(SensorFamily sensorFamily,
 {
     const bool imx585Clear16 = sensorFamily == SensorFamily::Imx585 && settings.rawBitDepth == 16;
     if (sensorFamily != SensorFamily::Imx477 && sensorFamily != SensorFamily::Imx577 &&
-        sensorFamily != SensorFamily::Imx294 && !imx585Clear16)
+        sensorFamily != SensorFamily::Imx294 && sensorFamily != SensorFamily::Imx283 && !imx585Clear16)
         return false;
     if (settings.resolution.width == 0 || settings.resolution.height == 0)
         return false;
     if (settings.resolution.width > configuredWidth ||
-        (sensorFamily != SensorFamily::Imx294 && settings.resolution.width != configuredWidth))
+        (sensorFamily != SensorFamily::Imx294 && sensorFamily != SensorFamily::Imx283 &&
+         settings.resolution.width != configuredWidth))
         return false;
     if (settings.resolution.height > configuredHeight)
         return false;
@@ -3552,8 +3649,12 @@ uint32_t activeRawLeftPixelsForConfiguredStream(SensorFamily sensorFamily,
                                                uint32_t configuredWidth,
                                                uint32_t configuredHeight)
 {
-    if (shouldUseRequestedActiveRawCrop(sensorFamily, settings, configuredWidth, configuredHeight))
+    if (shouldUseRequestedActiveRawCrop(sensorFamily, settings, configuredWidth, configuredHeight)) {
+        // IMX283: the optical-black columns lead the line, so the active picture is all of them in from the left.
+        if (sensorFamily == SensorFamily::Imx283)
+            return configuredWidth - settings.resolution.width;
         return ((configuredWidth - settings.resolution.width) / 2u) & ~1u;
+    }
     return 0;
 }
 
@@ -3589,6 +3690,9 @@ uint32_t activeRawTopRowsForConfiguredStream(SensorFamily sensorFamily,
                                              uint32_t configuredHeight)
 {
     if (shouldUseRequestedActiveRawCrop(sensorFamily, settings, configuredWidth, configuredHeight)) {
+        // IMX283: the optical-black rows trail the picture, so it starts at the top.
+        if (sensorFamily == SensorFamily::Imx283)
+            return 0;
         const uint32_t activeHeight = settings.resolution.height & ~1u;
         return ((configuredHeight - activeHeight) / 2u) & ~1u;
     }
@@ -6664,6 +6768,35 @@ int openImx585Subdev()
     return -1;
 }
 
+bool imx585SubdevPresent()
+{
+    const int fd = openImx585Subdev();
+    if (fd < 0)
+        return false;
+    ::close(fd);
+    return true;
+}
+
+// True when a sensor subdev of another known family (IMX283, IMX294, IMX477, IMX577) is on the bus: the sensor is
+// positively not an IMX585. A missing imx585 subdev alone proves nothing (the driver may still be binding at boot).
+bool otherSensorSubdevPresent()
+{
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
+        if (ec)
+            break;
+        if (entry.path().filename().string().rfind("v4l-subdev", 0) != 0)
+            continue;
+        std::ifstream nameFile(entry.path() / "name");
+        std::string name;
+        std::getline(nameFile, name);
+        const SensorFamily family = detectSensorFamily(name);
+        if (family != SensorFamily::Unknown && family != SensorFamily::Imx585)
+            return true;
+    }
+    return false;
+}
+
 // Writes wide_dynamic_range and reads it back. Must run before libcamera's
 // CameraManager starts: libcamera reads the sensor mode list at that point.
 bool setSensorWideDynamicRange(bool enabled, std::string *error)
@@ -6935,9 +7068,22 @@ public:
 #endif
     }
 
-    bool start(const CaptureSettings &settings, std::string *error)
+    bool start(const CaptureSettings &requestedSettings, std::string *error)
     {
 #if APERTARCORE_HAS_LIBCAMERA
+        CaptureSettings settings = requestedSettings;
+        // Clear HDR is an IMX585 feature. The sensor family is only known once libcamera has picked the camera,
+        // below, but the IMX585 subdev is touched before that: with another sensor positively on the bus (an IMX283,
+        // IMX294, IMX477 or IMX577 carrying a Clear HDR setting over from an IMX585) Clear HDR is cleared here, as the
+        // sanitiser does for the family later. A subdev that is merely not found yet (the driver still binding at
+        // boot, or an open() failure) keeps the setting: setSensorWideDynamicRange fails the start with its error
+        // and the saved choice is not rewritten.
+        const bool otherSensor = (sensorFamily_ != SensorFamily::Unknown && sensorFamily_ != SensorFamily::Imx585) ||
+                                 otherSensorSubdevPresent();
+        if (settings.clearHdr && otherSensor && !imx585SubdevPresent()) {
+            std::cerr << "ApertarCore Clear HDR cleared: no imx585 sensor on the bus.\n";
+            settings.clearHdr = false;
+        }
         settings_ = settings;
         {
             std::lock_guard<std::mutex> lock(whiteBalanceMutex_);
@@ -7090,7 +7236,7 @@ public:
 
         return true;
 #else
-        (void)settings;
+        (void)requestedSettings;
         setError(error, "ApertarCore was built without libcamera support.");
         return false;
 #endif
@@ -8141,6 +8287,36 @@ private:
                                      << (includeRawStream ? "raw-stream=on " : "raw-stream=off ")
                                      << "adjusted by the driver (" << adjusted << ") for "
                                      << sanitized.resolution.toString() << "; ";
+                        continue;
+                    }
+                }
+
+                if (sensorFamily_ == SensorFamily::Imx283) {
+                    // Explicit configuration only: the driver must deliver exactly the requested transport frame
+                    // at the requested bit depth. A different size would put the optical black in the picture.
+                    const bool sensorConfigExact = candidateConfig->sensorConfig &&
+                        candidateConfig->sensorConfig->outputSize == rawSize &&
+                        candidateConfig->sensorConfig->bitDepth == sensorMode.bitDepth;
+                    bool rawExact = true;
+                    if (includeRawStream) {
+                        const libcamera::StreamConfiguration &candidateRawConfig = candidateConfig->at(rawStreamIndex);
+                        RawBitDepth configuredDepth{};
+                        PixelPacking configuredPacking{};
+                        BayerPattern configuredPattern;
+                        // On the Pi 5 the pipeline turns the requested SRGGB10/12_CSI2P into RGGB_PISP_COMP1, which
+                        // formatToRawView reports as 16-bit: the stream depth says nothing about the sensor mode
+                        // there (sensorConfig->bitDepth above pins it).
+                        rawExact = candidateRawConfig.size == rawSize &&
+                            formatToRawView(candidateRawConfig.pixelFormat, &configuredDepth, &configuredPacking,
+                                            &configuredPattern) &&
+                            (configuredPacking == PixelPacking::PispCompressed1 ||
+                             static_cast<uint32_t>(rawBitDepthValue(configuredDepth)) == sensorMode.bitDepth);
+                    }
+                    if (!sensorConfigExact || !rawExact) {
+                        rejectionLog << sensorMode.rawResolution.toString()
+                                     << " " << sensorMode.bitDepth << "-bit "
+                                     << (includeRawStream ? "raw-stream=on " : "raw-stream=off ")
+                                     << "adjusted by the pipeline (not the exact IMX283 mode); ";
                         continue;
                     }
                 }
@@ -10520,7 +10696,9 @@ void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladd
             wire = Resolution{ transport->width, transport->height };
     }
     for (const SensorMode &mode : sensorModes()) {
-        if (mode.size.width != wire.width || mode.size.height != wire.height ||
+        // IMX283: the probe lists transport sizes, the rung is the active picture
+        const Resolution modeSize = family == SensorFamily::Imx283 ? imx283ActiveForTransport(mode.size, mode.bitDepth) : mode.size;
+        if (modeSize.width != wire.width || modeSize.height != wire.height ||
             mode.clearHdr != rung.clearHdr || mode.bitDepth != rung.bits)
             continue;
         state.rawWidth = mode.size.width;
@@ -10564,6 +10742,10 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
                 continue;
             rung.width = active->width;
             rung.height = active->height;
+        } else if (poolFamily == SensorFamily::Imx283) {
+            const Resolution active = imx283ActiveForTransport(mode.size, mode.bitDepth);   // the probe lists transport sizes
+            rung.width = active.width;
+            rung.height = active.height;
         }
         rung.bits = mode.bitDepth;
         rung.clearHdr = mode.clearHdr;
@@ -12317,6 +12499,11 @@ void CameraController::restoreModeGeometryLocked(CaptureSettings &next) const
 
 bool CameraController::validateResolution(Resolution resolution)
 {
+    // The IMX283 sizes are offered on an IMX283 (or while the sensor is still unknown or simulated), not on the others.
+    const SensorFamily sensorFamily = (!simulateCamera_ && session_)
+        ? session_->sensorFamily()
+        : SensorFamily::Unknown;
+    const bool imx283Possible = sensorFamily == SensorFamily::Imx283 || sensorFamily == SensorFamily::Unknown;
     if ((resolution.width == 1332 && resolution.height == 990) ||
         (resolution.width == 2028 && resolution.height == 1080) ||
         (resolution.width == 2028 && resolution.height == 1520) ||
@@ -12324,6 +12511,7 @@ bool CameraController::validateResolution(Resolution resolution)
         (resolution.width == 4056 && resolution.height == 3040) ||
         isImx477Resolution(resolution) ||
         isImx294Resolution(resolution) ||
+        (imx283Possible && isImx283Resolution(resolution)) ||
         isImx585LowResolutionAlias(resolution) ||
         isImx585HighResolutionAlias(resolution) ||
         isImx585LegacyCropResolution(resolution)) {
@@ -12331,8 +12519,7 @@ bool CameraController::validateResolution(Resolution resolution)
     }
 
     // The rest of the IMX585 tables (2880x2160, 2048x1152 ...) is for an IMX585, or while the sensor is unknown.
-    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
-    if ((family == SensorFamily::Imx585 || family == SensorFamily::Unknown) && isImx585KnownResolution(resolution))
+    if ((sensorFamily == SensorFamily::Imx585 || sensorFamily == SensorFamily::Unknown) && isImx585KnownResolution(resolution))
         return true;
 
     setErrorLocked("Unsupported resolution.");

@@ -7349,6 +7349,9 @@ std::string_view webControlPageHtml()
           return 44.17;
       }
 
+      if (sensorLower.indexOf("imx283") !== -1)
+        return imx283MaximumSupportedFps(snapshot, width, height);
+
       if (sensorLower.indexOf("imx585") !== -1) {
         // Clear HDR 16-bit stops at 25, as in Core's tableMaximumFpsForResolution().
         if ((width === 3856 && height === 2180) || (width === 3840 && height === 2160))
@@ -8638,6 +8641,119 @@ std::string_view webControlPageHtml()
         .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
     }
 
+    // IMX283 (cinemate-port driver): Core's resolution is the active picture, so these are the sizes of
+    // Imx283Modes.hpp, not the transport frames. A base is one sensor mode (5.5K, 2.7K 2x2, 1.8K 3x3 at
+    // 12-bit; 5.5K, 4K UHD at 10-bit); its ratio row is the base plus the aspect crops of the same readout.
+    // groups: [driver fps floor, the active sizes at that floor]. The floor is Core's fps fallback.
+    const imx283Bases = {
+      12: [
+        { value: "5472x3648", label: "5.5K", groups: [[21.401, "5472x3648 3648x3648 4864x3648 5016x3648 5472x3080 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144"]] },
+        { value: "2736x1824", label: "2.7K 2×2", groups: [[51.796, "2736x1824 1824x1824 2432x1824 2508x1824"], [60.271, "2736x1540 2736x1478 2736x1440 2736x1368 2736x1244 2736x1232 2736x1164 2736x1144 2736x1094 2736x1072"]] },
+        { value: "1824x1216", label: "1.8K 3×3", groups: [[60.362, "1824x1216 1216x1216 1620x1216 1672x1216 1820x1024 1824x984 1824x960 1824x912 1824x828 1824x820 1824x776 1824x764 1820x728 1824x716"]] },
+      ],
+      10: [
+        { value: "5472x3648", label: "5.5K", groups: [[25.48, "5472x3648 3648x3648 4864x3648 5016x3648"], [30.173, "5472x3076 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144"]] },
+        { value: "3840x2160", label: "4K UHD", groups: [[60.16, "3840x2160"]] },
+      ],
+    };
+    // Core's table order (Imx283Modes.hpp kModes): normalise() takes the nearest mode, the first row on a tie.
+    const imx283ModeOrder = {
+      12: "5472x3648 2736x1824 1824x1216 3648x3648 4864x3648 5016x3648 5472x3080 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144 1824x1824 2432x1824 2508x1824 2736x1540 2736x1478 2736x1440 2736x1368 2736x1244 2736x1232 2736x1164 2736x1144 2736x1094 2736x1072 1216x1216 1620x1216 1672x1216 1820x1024 1824x984 1824x960 1824x912 1824x828 1824x820 1824x776 1824x764 1820x728 1824x716".split(" "),
+      10: "5472x3648 5472x3076 3840x2160 3648x3648 4864x3648 5016x3648 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144".split(" "),
+    };
+    const imx283RatioOrder = ["1:1", "4:3", "1.37:1", "3:2", "16:9", "1.85:1", "1.90:1", "2.00:1", "2.20:1", "2.22:1", "2.35:1", "2.39:1", "2.50:1", "2.55:1"];
+    const imx283RatioValues = [1, 4 / 3, 1.375, 1.5, 16 / 9, 1.85, 1.9, 2.0, 2.2, 2.2222, 2.35, 2.39, 2.5, 2.55];
+
+    function imx283BitDepth(snapshot) {
+      return rawBitDepthNumber(snapshot && snapshot.raw_bit_depth) === 10 ? 10 : 12;
+    }
+
+    // Core caps ProRes video to 3840x2160 (sanitizeSettingsForSensor): the 10-bit 4K UHD window is all there is.
+    function imx283ProresVideo(snapshot) {
+      return !stillCaptureForSnapshot(snapshot)
+        && String((snapshot && snapshot.recording_format) || "").toLowerCase() === "prores";
+    }
+
+    function imx283BasesForSnapshot(snapshot) {
+      return imx283ProresVideo(snapshot) ? [imx283Bases[10][1]] : imx283Bases[imx283BitDepth(snapshot)];
+    }
+
+    function imx283Sizes(base) {
+      return base.groups.reduce((sizes, group) => sizes.concat(group[1].split(" ")), []);
+    }
+
+    // The ratio label of an IMX283 size: the nearest of the 14 labels (every table size is within 0.3% of one).
+    function imx283CropRatioLabel(resolution) {
+      const parts = String(resolution || "").split("x");
+      const ratio = (Number(parts[0]) || 0) / (Number(parts[1]) || 1);
+      const known = [12, 10].some(bits => imx283Bases[bits].some(base => imx283Sizes(base).indexOf(resolution) !== -1));
+      if (!known)
+        return "";
+      let best = 0;
+      imx283RatioValues.forEach((value, index) => {
+        if (Math.abs(value - ratio) < Math.abs(imx283RatioValues[best] - ratio))
+          best = index;
+      });
+      return imx283RatioOrder[best];
+    }
+
+    function imx283ResolutionOptionsForSnapshot(snapshot) {
+      return imx283BasesForSnapshot(snapshot).reduce((sizes, base) => sizes.concat(imx283Sizes(base)), [])
+        .filter((value, index, all) => all.indexOf(value) === index);
+    }
+
+    function imx283BaseResolutionOptions(snapshot) {
+      return imx283BasesForSnapshot(snapshot).map(base => ({ value: base.value, label: base.label }));
+    }
+
+    function imx283BaseValueForResolution(snapshot, resolution) {
+      const bases = imx283BasesForSnapshot(snapshot);
+      return (bases.find(base => imx283Sizes(base).indexOf(resolution) !== -1) || bases[0]).value;
+    }
+
+    function imx283CropOptionsForBase(snapshot, baseValue, enabled = true) {
+      const base = imx283BasesForSnapshot(snapshot).find(item => item.value === baseValue);
+      return (base ? imx283Sizes(base) : []).map(value => ({ value, label: imx283CropRatioLabel(value), enabled }))
+        .sort((a, b) => imx283RatioOrder.indexOf(a.label) - imx283RatioOrder.indexOf(b.label));
+    }
+
+    // Core's table floor for a size at the snapshot's bit depth (before the probe's fps_max arrives).
+    function imx283MaximumSupportedFps(snapshot, width, height) {
+      const resolution = formatResolutionValue(width, height);
+      for (const base of imx283BasesForSnapshot(snapshot))
+        for (const group of base.groups)
+          if (group[1].split(" ").indexOf(resolution) !== -1)
+            return group[0];
+      return 60.0;
+    }
+
+    // Core's apertar::imx283::normalise: a size that is a mode at the depth stays; the generic full HD / UHD
+    // aliases become 2736x1540 at 12-bit and 3840x2160 at 10-bit; any other size takes the nearest mode of the
+    // depth (squared distance, the first row of the table on a tie). ProRes video is always 3840x2160.
+    function imx283NormalizedResolution(snapshot, value) {
+      if (imx283ProresVideo(snapshot))
+        return "3840x2160";
+      const sizes = imx283ModeOrder[imx283BitDepth(snapshot)];
+      if (sizes.indexOf(value) !== -1)
+        return value;
+      if (value === "1920x1080" || value === "1928x1090" || value === "3840x2160" || value === "3856x2180")
+        return imx283BitDepth(snapshot) === 10 ? "3840x2160" : "2736x1540";
+      const parts = String(value || "").split("x");
+      const width = Number(parts[0]) || 0;
+      const height = Number(parts[1]) || 0;
+      let best = sizes[0];
+      let bestDistance = Infinity;
+      sizes.forEach(size => {
+        const mode = size.split("x");
+        const distance = (Number(mode[0]) - width) ** 2 + (Number(mode[1]) - height) ** 2;
+        if (distance < bestDistance) {
+          best = size;
+          bestDistance = distance;
+        }
+      });
+      return best;
+    }
+
     function imx477ResolutionOptions() {
       return ["1332x990", "2028x1080", "2028x1140", "2028x1096", "2028x1068", "2028x1014", "2028x922", "2028x914", "2028x864", "2028x848", "2028x812", "2028x796", "2028x1520", "4056x2160", "4056x2280", "4056x2192", "4056x2136", "4056x2028", "4056x1844", "4056x1828", "4056x1728", "4056x1696", "4056x1624", "4056x1592", "4056x3040"];
     }
@@ -8897,6 +9013,8 @@ std::string_view webControlPageHtml()
         return imx477ResolutionOptions();
       if (sensorLower.indexOf("imx294") !== -1)
         return imx294ResolutionOptionsForSnapshot(snapshot);
+      if (sensorLower.indexOf("imx283") !== -1)
+        return imx283ResolutionOptionsForSnapshot(snapshot);
       return fallbackResolutionOptions;
     }
 
@@ -8949,6 +9067,9 @@ std::string_view webControlPageHtml()
         return options[0] || "4144x2176";
       }
 
+      if (sensorLower.indexOf("imx283") !== -1)
+        return imx283NormalizedResolution(snapshot, value);
+
       return value || fallbackResolutionOptions[0];
     }
 
@@ -9000,7 +9121,7 @@ std::string_view webControlPageHtml()
     function sensorCropControlsAvailableForSnapshot(snapshot) {
       const sensorLower = sensorNameLower(snapshot);
       return sensorLower.indexOf("imx585") !== -1 || sensorLower.indexOf("imx477") !== -1
-        || sensorLower.indexOf("imx294") !== -1;
+        || sensorLower.indexOf("imx294") !== -1 || sensorLower.indexOf("imx283") !== -1;
     }
 
     function sensorBaseResolutionOptionsForSnapshot(snapshot) {
@@ -9008,6 +9129,8 @@ std::string_view webControlPageHtml()
         return imx585BaseResolutionOptions(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294BaseResolutionOptions(snapshot);
+      if (sensorNameLower(snapshot).indexOf("imx283") !== -1)
+        return imx283BaseResolutionOptions(snapshot);
       return sensorNameLower(snapshot).indexOf("imx477") !== -1 ? imx477BaseResolutionOptions() : [];
     }
 
@@ -9039,6 +9162,8 @@ std::string_view webControlPageHtml()
       const resolution = resolutionLabelFromSnapshot(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294ResolutionOptionsForSnapshot(snapshot)[0];
+      if (sensorNameLower(snapshot).indexOf("imx283") !== -1)
+        return imx283BaseValueForResolution(snapshot, resolution);
       if (sensorNameLower(snapshot).indexOf("imx477") !== -1)
         return isImx477FourKResolution(resolution) ? "4056x2160" : "2028x1080";
       return resolution;
@@ -9051,6 +9176,8 @@ std::string_view webControlPageHtml()
       const baseValue = sensorBaseResolutionValueFromSnapshot(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294CropOptionsForBase(snapshot, baseValue, enabled);
+      if (sensorNameLower(snapshot).indexOf("imx283") !== -1)
+        return imx283CropOptionsForBase(snapshot, baseValue, enabled);
       return sensorNameLower(snapshot).indexOf("imx477") !== -1 ? imx477CropOptionsForBase(baseValue, enabled) : [];
     }
 
@@ -9061,6 +9188,11 @@ std::string_view webControlPageHtml()
       const sensorLower = sensorNameLower(snapshot);
       if (sensorLower.indexOf("imx294") !== -1) {
         const option = imx294CropOptionsForBase(snapshot, baseValue).find(
+          item => item.value === selected || item.label === selected);
+        return option ? option.value : baseValue;
+      }
+      if (sensorLower.indexOf("imx283") !== -1) {
+        const option = imx283CropOptionsForBase(snapshot, baseValue).find(
           item => item.value === selected || item.label === selected);
         return option ? option.value : baseValue;
       }
@@ -9354,6 +9486,7 @@ std::string_view webControlPageHtml()
       const name = String(sensorLower || "");
       return name.indexOf("imx585") !== -1
         || name.indexOf("imx294") !== -1
+        || name.indexOf("imx283") !== -1
         || name.indexOf("imx477") !== -1
         || name.indexOf("imx577") !== -1;
     }
@@ -9413,6 +9546,9 @@ std::string_view webControlPageHtml()
       const imx294Label = imx294CropRatioLabel(resolutionValue);
       if (imx294Label)
         return imx294Label;
+      const imx283Label = imx283CropRatioLabel(resolutionValue);
+      if (imx283Label)
+        return imx283Label;
       const value = String(resolutionValue || "");
       if (value === "4056x3040" || value === "2028x1520" || value === "1332x990")
         return "4:3";
