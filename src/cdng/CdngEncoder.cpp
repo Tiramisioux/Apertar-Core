@@ -24,7 +24,9 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -74,6 +76,38 @@ bool detailedLosslessProfilingEnabled()
             std::strcmp(text, "false") != 0 && std::strcmp(text, "off") != 0;
     }();
     return enabled;
+}
+
+// Rows per write() when the payload is packed through the scratch buffer (APERTAR_DNG_WRITE_ROWS,
+// default 64: 491,520 bytes for a 16-bit 4K row, 34 writes a frame). The row packers decide the
+// bytes; this only decides how many rows go to the kernel per call.
+uint32_t configuredPayloadWriteRows()
+{
+    static const uint32_t value = []() {
+        const char *text = std::getenv("APERTAR_DNG_WRITE_ROWS");
+        if (!text || !*text)
+            return 64u;
+
+        char *end = nullptr;
+        errno = 0;
+        const unsigned long parsed = std::strtoul(text, &end, 10);
+        if (errno != 0 || end == text || *end != '\0' || parsed < 1 || parsed > 4096)
+            return 64u;
+        return static_cast<uint32_t>(parsed);
+    }();
+    return value;
+}
+
+// APERTAR_DNG_PAYLOAD_COPY=1 keeps the old path for every frame: rows copied into the scratch
+// buffer and written from there, even when the copy changes nothing (the A/B knob).
+bool payloadCopyForced()
+{
+    static const bool forced = []() {
+        const char *text = std::getenv("APERTAR_DNG_PAYLOAD_COPY");
+        return text && *text && std::strcmp(text, "0") != 0 &&
+            std::strcmp(text, "false") != 0 && std::strcmp(text, "off") != 0;
+    }();
+    return forced;
 }
 
 uint32_t packedRowBytes(uint32_t width, RawBitDepth bitDepth)
@@ -1020,6 +1054,71 @@ void unpackPispCompressedRowToPacked10(const uint8_t *src, uint8_t *dst, uint32_
     }
 }
 
+// True when writeDngRowBytes would copy the row unchanged: unpacked 16-bit samples, or unpacked
+// 8-bit samples that already take one byte each. Those rows can go to the file straight from the
+// frame, without the pass through the scratch buffer (one full copy of the frame per DNG less:
+// 16.6 MB at 4K 16-bit, the Clear HDR case).
+bool rowCopyIsIdentity(const RawFrameView &frame)
+{
+    if (frame.packing == PixelPacking::Csi2Packed || frame.packing == PixelPacking::PispCompressed1)
+        return false;
+    if (frame.bitDepth == RawBitDepth::Bits16)
+        return true;
+    if (frame.bitDepth == RawBitDepth::Bits8)
+        return unpackedBytesPerSampleForFrame(frame) == 1u;
+    return false;
+}
+
+// writev() until every iovec is written; adjusts the vector for a partial write.
+bool writevAll(int fd, struct iovec *iov, int count)
+{
+    while (count > 0) {
+        const ssize_t written = ::writev(fd, iov, count);
+        if (written < 0) {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        if (written == 0) {
+            errno = EIO;
+            return false;
+        }
+        size_t remaining = static_cast<size_t>(written);
+        while (count > 0 && remaining >= iov->iov_len) {
+            remaining -= iov->iov_len;
+            ++iov;
+            --count;
+        }
+        if (count > 0 && remaining > 0) {
+            iov->iov_base = static_cast<uint8_t *>(iov->iov_base) + remaining;
+            iov->iov_len -= remaining;
+        }
+    }
+    return true;
+}
+
+// The payload straight from the frame. One write() when the rows are contiguous (stride ==
+// rowBytes, the usual case); otherwise one iovec per row, IOV_MAX rows per writev().
+bool writeRowsDirect(int fd, const RawFrameView &frame, uint32_t rowBytes)
+{
+    if (frame.stride == rowBytes)
+        return writeAll(fd, frame.data, static_cast<size_t>(rowBytes) * frame.height);
+
+    const uint32_t rowsPerCall = static_cast<uint32_t>(std::min<long>(IOV_MAX, 1024));
+    std::vector<struct iovec> iov(std::min<uint32_t>(rowsPerCall, frame.height));
+    for (uint32_t y = 0; y < frame.height;) {
+        const uint32_t rows = std::min<uint32_t>(rowsPerCall, frame.height - y);
+        for (uint32_t i = 0; i < rows; ++i) {
+            iov[i].iov_base = const_cast<uint8_t *>(frame.data + static_cast<size_t>(y + i) * frame.stride);
+            iov[i].iov_len = rowBytes;
+        }
+        if (!writevAll(fd, iov.data(), static_cast<int>(rows)))
+            return false;
+        y += rows;
+    }
+    return true;
+}
+
 void writeDngRowBytes(const RawFrameView &frame,
                       const CdngEncoder::EncodedRawLayout &layout,
                       const uint8_t *src,
@@ -1866,11 +1965,16 @@ bool CdngEncoder::writeRawPayload(int fd, const RawFrameView &frame, const Encod
         return false;
     }
 
+    // Rows that need no repacking are written from the frame itself (cinepi-raw's one write per
+    // frame); APERTAR_DNG_PAYLOAD_COPY=1 forces the scratch path for the A/B.
+    if (!payloadCopyForced() && rowCopyIsIdentity(frame))
+        return writeRowsDirect(fd, frame, layout.rowBytes);
+
     const size_t targetChunkSize = std::max<size_t>(
         static_cast<size_t>(layout.rowBytes),
-        std::min<size_t>(4u * 1024u * 1024u,
+        std::min<size_t>(64u * 1024u * 1024u,
                          std::max<size_t>(256u * 1024u,
-                                          static_cast<size_t>(layout.rowBytes) * 64u)));
+                                          static_cast<size_t>(layout.rowBytes) * configuredPayloadWriteRows())));
     std::vector<uint8_t> scratch = takePayloadScratch(targetChunkSize);
     size_t bufferedBytes = 0;
 
