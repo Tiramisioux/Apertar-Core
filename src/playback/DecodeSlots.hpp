@@ -23,9 +23,13 @@ namespace apertar::playback {
 
 struct DecodeSlot {
     std::mutex busy;
-    std::vector<uint16_t> samples;   // up to 4096 x 3072 x 2 B = 25 MB (4K: 16.6 MB)
-    std::vector<uint8_t> scratch;    // one chunk of rows or one lossless tile (~1-2 MB)
-    std::vector<uint8_t> rgb;        // the rendered picture before JPEG (1920 w: ~6 MB)
+    // Per slot at the largest frame Core writes (IMX283, 5472 x 3648; kMaxDngSampleBytes in DngTags.hpp):
+    // samples 38 MiB (4K UHD 16-bit: 16 MiB), scratch 1.3 MiB for 128 rows of 16-bit (a lossless
+    // tile is smaller), rgb 7 MiB (a 1920 w preview of a 3:2 frame is 1920 x 1280 x 3 B).
+    // So ~46 MiB a slot, ~92 MiB with the default 2 slots, until trimIdle gives it back.
+    std::vector<uint16_t> samples;
+    std::vector<uint8_t> scratch;    // one chunk of rows or one lossless tile
+    std::vector<uint8_t> rgb;        // the rendered picture before JPEG
     std::atomic<int64_t> lastUsedMs{0};
 
     size_t bytesHeld() const
