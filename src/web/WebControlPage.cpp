@@ -7230,10 +7230,10 @@ std::string_view webControlPageHtml()
         // Clear HDR 16-bit stops at 25, as in Core's tableMaximumFpsForResolution().
         if ((width === 3856 && height === 2180) || (width === 3840 && height === 2160))
           return snapshot.clear_hdr && Number(snapshot.raw_bit_depth) === 16 ? 25.0 : 30.0;
-        if (width === 3840 && (height === 2076 || height === 2024 || height === 1920 || height === 1744
+        if (width === 3840 && (height === 2072 || height === 2024 || height === 1920 || height === 1744
             || height === 1728 || height === 1632 || height === 1608 || height === 1536 || height === 1504))
           return 60.0;
-        if (width === 1920 && (height === 1038 || height === 1012 || height === 960 || height === 872
+        if (width === 1920 && (height === 1036 || height === 1012 || height === 960 || height === 872
             || height === 864 || height === 816 || height === 804 || height === 768 || height === 752))
           return 60.0;
         if ((width === 1928 && height === 1090) || (width === 1920 && height === 1080))
@@ -8562,7 +8562,7 @@ std::string_view webControlPageHtml()
       if (sensorLower.indexOf("imx294") !== -1)
         return imx294ResolutionOptionsForSnapshot(snapshot);
       if (sensorLower.indexOf("imx585") !== -1)
-        return ["1920x1080", "1920x1038", "1920x1012", "1920x960", "1920x872", "1920x864", "1920x816", "1920x804", "1920x768", "1920x752", "3840x2160", "3840x2076", "3840x2024", "3840x1920", "3840x1744", "3840x1728", "3840x1632", "3840x1608", "3840x1536", "3840x1504"];
+        return ["1920x1080", "1920x1036", "1920x1012", "1920x960", "1920x872", "1920x864", "1920x816", "1920x804", "1920x768", "1920x752", "3840x2160", "3840x2072", "3840x2024", "3840x1920", "3840x1744", "3840x1728", "3840x1632", "3840x1608", "3840x1536", "3840x1504"];
       return fallbackResolutionOptions;
     }
 
@@ -8614,15 +8614,20 @@ std::string_view webControlPageHtml()
       }
 
       if (sensorLower.indexOf("imx585") !== -1) {
+        // Old driver 1.85:1 sizes (3840x2076, 1920x1038): the cinemate-port driver has 3840x2072 and 1920x1036.
+        if (value === "3840x2076")
+          return "3840x2072";
+        if (value === "1920x1038")
+          return "1920x1036";
         if (value === "1928x1090" || value === "1920x1080")
           return "1920x1080";
-        if (value === "1920x1038" || value === "1920x1012" || value === "1920x960" || value === "1920x872"
+        if (value === "1920x1036" || value === "1920x1012" || value === "1920x960" || value === "1920x872"
             || value === "1920x864" || value === "1920x816" || value === "1920x804" || value === "1920x768"
             || value === "1920x752")
           return value;
         if (value === "3856x2180" || value === "3840x2160")
           return "3840x2160";
-        if (value === "3840x2076" || value === "3840x2024" || value === "3840x1920" || value === "3840x1744"
+        if (value === "3840x2072" || value === "3840x2024" || value === "3840x1920" || value === "3840x1744"
             || value === "3840x1728" || value === "3840x1632" || value === "3840x1608" || value === "3840x1536"
             || value === "3840x1504")
           return value;
@@ -8696,7 +8701,7 @@ std::string_view webControlPageHtml()
       if (!isImx585FourKResolution(resolutionLabelFromSnapshot(snapshot))) {
         return [
           { value: "1920x1080", label: "16:9", enabled },
-          { value: "1920x1038", label: "1.85:1", enabled },
+          { value: "1920x1036", label: "1.85:1", enabled },
           { value: "1920x1012", label: "1.90:1", enabled },
           { value: "1920x960", label: "2.00:1", enabled },
           { value: "1920x872", label: "2.20:1", enabled },
@@ -8710,7 +8715,7 @@ std::string_view webControlPageHtml()
 
       return [
         { value: "3840x2160", label: "16:9", enabled },
-        { value: "3840x2076", label: "1.85:1", enabled },
+        { value: "3840x2072", label: "1.85:1", enabled },
         { value: "3840x2024", label: "1.90:1", enabled },
         { value: "3840x1920", label: "2.00:1", enabled },
         { value: "3840x1744", label: "2.20:1", enabled },
@@ -8759,7 +8764,7 @@ std::string_view webControlPageHtml()
     function isImx585FourKResolution(resolutionValue) {
       return resolutionValue === "3840x2160"
         || resolutionValue === "3856x2180"
-        || resolutionValue === "3840x2076"
+        || resolutionValue === "3840x2072"
         || resolutionValue === "3840x2024"
         || resolutionValue === "3840x1920"
         || resolutionValue === "3840x1744"
@@ -8773,7 +8778,7 @@ std::string_view webControlPageHtml()
     function isImx585FullHdResolution(resolutionValue) {
       return resolutionValue === "1920x1080"
         || resolutionValue === "1928x1090"
-        || resolutionValue === "1920x1038"
+        || resolutionValue === "1920x1036"
         || resolutionValue === "1920x1012"
         || resolutionValue === "1920x960"
         || resolutionValue === "1920x872"
@@ -8834,7 +8839,7 @@ std::string_view webControlPageHtml()
         : (baseValue === "3840x2160"
            ? [
              { value: "3840x2160", label: "16:9" },
-             { value: "3840x2076", label: "1.85:1" },
+             { value: "3840x2072", label: "1.85:1" },
              { value: "3840x2024", label: "1.90:1" },
              { value: "3840x1920", label: "2.00:1" },
              { value: "3840x1744", label: "2.20:1" },
@@ -8846,7 +8851,7 @@ std::string_view webControlPageHtml()
            ]
            : [
              { value: "1920x1080", label: "16:9" },
-             { value: "1920x1038", label: "1.85:1" },
+             { value: "1920x1036", label: "1.85:1" },
              { value: "1920x1012", label: "1.90:1" },
              { value: "1920x960", label: "2.00:1" },
              { value: "1920x872", label: "2.20:1" },
@@ -8931,8 +8936,8 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 3840, height: 2160 };
       if (label === "1920x1012")
         return { cmd: "set_resolution", width: 1920, height: 1012 };
-      if (label === "1920x1038")
-        return { cmd: "set_resolution", width: 1920, height: 1038 };
+      if (label === "1920x1036" || label === "1920x1038")
+        return { cmd: "set_resolution", width: 1920, height: 1036 };
       if (label === "1920x960")
         return { cmd: "set_resolution", width: 1920, height: 960 };
       if (label === "1920x872")
@@ -8947,8 +8952,8 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 1920, height: 768 };
       if (label === "1920x752")
         return { cmd: "set_resolution", width: 1920, height: 752 };
-      if (label === "3840x2076")
-        return { cmd: "set_resolution", width: 3840, height: 2076 };
+      if (label === "3840x2072" || label === "3840x2076")
+        return { cmd: "set_resolution", width: 3840, height: 2072 };
       if (label === "3840x2024")
         return { cmd: "set_resolution", width: 3840, height: 2024 };
       if (label === "3840x1920")
@@ -9209,7 +9214,7 @@ std::string_view webControlPageHtml()
         return "4:3";
       if (value === "4056x2280" || value === "2028x1140")
         return "16:9";
-      if (value === "3840x2076" || value === "2560x1384" || value === "1920x1038"
+      if (value === "3840x2072" || value === "3840x2076" || value === "2560x1384" || value === "1920x1036" || value === "1920x1038"
           || value === "4056x2192" || value === "2028x1096")
         return "1.85:1";
       if (value === "3840x2024" || value === "2560x1348" || value === "1920x1012"

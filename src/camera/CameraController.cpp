@@ -432,9 +432,32 @@ bool isImx585LowResolutionAlias(const Resolution &resolution)
            resolutionMatches(resolution, 1928, 1090);
 }
 
+// The imx585 driver's 1.85:1 crops are 3840x2072 and the binned 1920x1036 (cinemate-modes, the
+// cinemate-port driver branch). The Apertar-Beta 1.6.0 driver had 3840x2076 and 1920x1038, windows
+// that started at PIX_VST 54 against the sensor's multiple-of-4 rule; the new driver has neither.
+// Settings, presets, ladder rungs and clients (the touch UI) that still say the old sizes are
+// moved to the new ones here, before any lookup.
+Resolution migratedImx585CropResolution(Resolution resolution)
+{
+    if (resolutionMatches(resolution, 3840, 2076))
+        return Resolution{ 3840, 2072 };
+    if (resolutionMatches(resolution, 1920, 1038))
+        return Resolution{ 1920, 1036 };
+    return resolution;
+}
+
+void migrateImx585LadderRungs(std::vector<ladder::Rung> &rungs)
+{
+    for (ladder::Rung &rung : rungs) {
+        const Resolution moved = migratedImx585CropResolution(Resolution{ rung.width, rung.height });
+        rung.width = moved.width;
+        rung.height = moved.height;
+    }
+}
+
 bool isImx585FullHdCropResolution(const Resolution &resolution)
 {
-    return resolutionMatches(resolution, 1920, 1038) ||
+    return resolutionMatches(resolution, 1920, 1036) ||
            resolutionMatches(resolution, 1920, 1012) ||
            resolutionMatches(resolution, 1920, 960) ||
            resolutionMatches(resolution, 1920, 872) ||
@@ -454,7 +477,7 @@ bool isImx585HighResolutionAlias(const Resolution &resolution)
 
 bool isImx585Raw12CropResolution(const Resolution &resolution)
 {
-    return resolutionMatches(resolution, 3840, 2076) ||
+    return resolutionMatches(resolution, 3840, 2072) ||
            resolutionMatches(resolution, 3840, 2024) ||
            resolutionMatches(resolution, 3840, 1920) ||
            resolutionMatches(resolution, 3840, 1744) ||
@@ -616,6 +639,7 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         const auto parsed = apertar::clipname::parse(settings.clipNameTemplate);
         settings.clipNameTemplate = parsed.ok ? parsed.normalized : std::string(apertar::clipname::kDefaultTemplate);
     }
+    settings.resolution = migratedImx585CropResolution(settings.resolution);
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -9970,6 +9994,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
         std::stringstream ladderText;
         ladderText << ladderFile.rdbuf();
         modeLadder_ = ladder::parseFile(ladderText.str());   // a missing or broken file: ladder off
+        migrateImx585LadderRungs(modeLadder_.rungs);
     }
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
@@ -10103,6 +10128,7 @@ bool CameraController::setResolution(Resolution resolution)
         return false;
     }
 
+    resolution = migratedImx585CropResolution(resolution);   // a client that still sends 3840x2076 / 1920x1038
     if (!validateResolution(resolution))
         return false;
 
@@ -10478,6 +10504,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
             *error = parseError;
             return false;
         }
+        migrateImx585LadderRungs(draft.rungs);
     }
     if (enabled)
         draft.enabled = *enabled;
@@ -12023,9 +12050,11 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         setErrorLocked("Wait for still captures to finish before loading a preset.");
         return false;
     }
-    if (!validateResolution(requested.resolution)) return false;
+    const Resolution presetResolution = migratedImx585CropResolution(requested.resolution);   // a preset saved with 3840x2076 / 1920x1038
+    if (!validateResolution(presetResolution)) return false;
     rampNominalShutterUs_ = 0; // a preset brings its own shutter
     CaptureSettings next = supportedRecordingSettings(requested);
+    next.resolution = presetResolution;
     next.tuningFile = normalizeTuningFilePath(next.tuningFile);
     if (!validateTuningFilePath(next.tuningFile, &lastError_)) return false;
     const CaptureSettings previous = settings_;
