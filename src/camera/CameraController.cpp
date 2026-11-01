@@ -67,6 +67,7 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <sched.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -8672,12 +8673,31 @@ private:
             capturePriorityAdjusted_ = true;
             // Only this callback thread changes priority, not encoder workers.
             const int tid = static_cast<int>(::syscall(SYS_gettid));
+            // APERTAR_RT_CAPTURE_PRIORITY=1..99: SCHED_FIFO for this thread alone (needs LimitRTPRIO on the
+            // unit). The capture callback then preempts every SCHED_OTHER thread of Core (writers, copy worker,
+            // WebUI) instead of competing with them under CFS; the writers keep their priorities, unlike the
+            // whole-process chrt of APERTAR_RT=1 (kb working/dng-chain, V/H15). Off by default.
+            const unsigned int rtPriority = unsignedEnvValue("APERTAR_RT_CAPTURE_PRIORITY", 0, 0, 99);
+            bool realtime = false;
+            if (rtPriority > 0) {
+                sched_param param{};
+                param.sched_priority = static_cast<int>(rtPriority);
+                if (::sched_setscheduler(tid, SCHED_FIFO, &param) == 0) {
+                    realtime = true;
+                    std::cerr << "ApertarCore capture scheduling: thread=" << tid << " SCHED_FIFO priority=" << rtPriority << "\n";
+                } else {
+                    std::cerr << "ApertarCore capture scheduling: SCHED_FIFO refused (" << std::strerror(errno)
+                              << "); is LimitRTPRIO set on the unit? falling back to nice\n";
+                }
+            }
             // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
-            if (::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), -5) == 0)
-                std::cerr << "ApertarCore capture scheduling: thread=" << tid << " nice=-5\n";
-            else
-                std::cerr << "ApertarCore capture scheduling: normal priority retained ("
-                          << std::strerror(errno) << ")\n";
+            if (!realtime) {
+                if (::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), -5) == 0)
+                    std::cerr << "ApertarCore capture scheduling: thread=" << tid << " nice=-5\n";
+                else
+                    std::cerr << "ApertarCore capture scheduling: normal priority retained ("
+                              << std::strerror(errno) << ")\n";
+            }
         }
 
         WhiteBalanceMeasurement whiteBalance;
