@@ -1273,6 +1273,8 @@ constexpr unsigned int kConfiguredBufferCount = 4;
 constexpr unsigned int kClearHdrBufferCount = 8;
 constexpr int kPhotoJpegQuality = 92;
 
+#endif
+
 unsigned int unsignedEnvValue(const char *name,
                               unsigned int defaultValue,
                               unsigned int minimumValue,
@@ -1369,6 +1371,8 @@ void applyProcessTuningFile(const std::string &path)
     ::setenv("APERTAR_SENSOR_TUNING_FILE", path.c_str(), 1);
 }
 
+
+#if APERTARCORE_HAS_LIBCAMERA
 
 unsigned int h264CameraBufferCount()
 {
@@ -2190,6 +2194,8 @@ bool encodeProcessedTiff(const ProcessedRgbStill &image, std::vector<uint8_t> *t
     return true;
 }
 
+#endif
+
 enum class SensorFamily {
     Unknown,
     Imx294,
@@ -2227,10 +2233,14 @@ Resolution processedVideoCaptureResolutionForSensor(const CaptureSettings &setti
 struct SensorModeSelection
 {
     Resolution rawResolution{};
+#if APERTARCORE_HAS_LIBCAMERA
     libcamera::PixelFormat rawPixelFormat = libcamera::formats::SRGGB12_CSI2P;
+#endif
     uint32_t bitDepth = 12;
     std::string dngModel;
 };
+#if APERTARCORE_HAS_LIBCAMERA
+
 
 
 bool controlInfoHas(const libcamera::ControlInfoMap &controlInfo, const libcamera::ControlId &control)
@@ -2477,6 +2487,8 @@ SensorFamily detectSensorFamily(const std::string &cameraId)
     return SensorFamily::Unknown;
 }
 
+#endif
+
 const char *sensorFamilyName(SensorFamily sensorFamily)
 {
     switch (sensorFamily) {
@@ -2488,6 +2500,8 @@ const char *sensorFamilyName(SensorFamily sensorFamily)
     }
     return "Unknown";
 }
+
+#if APERTARCORE_HAS_LIBCAMERA
 
 libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
 {
@@ -2502,6 +2516,8 @@ libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
         return libcamera::formats::SRGGB12_CSI2P;
     }
 }
+
+#endif
 
 Resolution imx294ReadoutForActiveResolution(Resolution active, uint32_t bitDepth)
 {
@@ -2521,7 +2537,9 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
 {
     SensorModeSelection selection;
     selection.rawResolution = requested;
+#if APERTARCORE_HAS_LIBCAMERA
     selection.rawPixelFormat = rawPixelFormatForBitDepth(rawBitDepth);
+#endif
     selection.bitDepth = normalizeRawBitDepth(rawBitDepth);
     selection.dngModel = "Generic";
 
@@ -2589,7 +2607,9 @@ SensorModeSelection imx577ModeSelection(Resolution resolution, uint32_t bitDepth
 {
     SensorModeSelection selection;
     selection.rawResolution = resolution;
+#if APERTARCORE_HAS_LIBCAMERA
     selection.rawPixelFormat = rawPixelFormatForBitDepth(bitDepth);
+#endif
     selection.bitDepth = normalizeRawBitDepth(bitDepth);
     selection.dngModel = "IMX577";
     return selection;
@@ -2599,7 +2619,9 @@ bool sameSensorModeSelection(const SensorModeSelection &left, const SensorModeSe
 {
     return left.rawResolution.width == right.rawResolution.width &&
            left.rawResolution.height == right.rawResolution.height &&
+#if APERTARCORE_HAS_LIBCAMERA
            left.rawPixelFormat == right.rawPixelFormat &&
+#endif
            left.bitDepth == right.bitDepth;
 }
 
@@ -3415,6 +3437,8 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     return settings;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
+
 bool parseSizeEnv(const char *value, uint32_t &width, uint32_t &height)
 {
     if (!value || !*value)
@@ -4022,6 +4046,8 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
     return out;
 }
 
+#endif
+
 // The write queue's live level, readable without any lock: the controller's main mutex is held for the whole
 // drain after a take stops, which is exactly when the buffer bar is needed. Written by DngRecordingQueue under
 // its own mutex; read by CameraController::frameBufferStatus().
@@ -4040,6 +4066,8 @@ FrameBufferGauge &frameBufferGauge()
     static FrameBufferGauge gauge;
     return gauge;
 }
+
+#if APERTARCORE_HAS_LIBCAMERA
 
 class DngRecordingQueue {
 public:
@@ -9931,6 +9959,11 @@ private:
     const size_t maxPendingPhotoCaptures_ = 12;
     bool acquired_ = false;
     bool started_ = false;
+#else
+    // The simulate build keeps only the state its settings accessors read.
+    CaptureSettings settings_{};
+    mutable std::shared_mutex sessionSettingsMutex_;
+    SensorFamily sensorFamily_ = SensorFamily::Unknown;
 #endif
 
     PreviewCallback previewCallback_;
