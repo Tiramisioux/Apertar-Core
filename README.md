@@ -268,7 +268,7 @@ Settings are saved separately from recordings. Core's camera settings normally l
 
 ### Trim the recording drive
 
-After about one card of writing without a trim, the NVMe stalls for seconds. Core trims the recording drive after clips are deleted (when a delete frees at least 1 GiB) and when the drive is mounted, through a small root helper; `APERTAR_MEDIA_TRIM=0` turns it off.
+After about one card of writing without a trim, the NVMe stalls for seconds. Core trims the recording drive after clips are deleted (when a delete frees at least 1 GiB, also when the delete was made outside Core, for example from the touch UI), after the storage pre-roll's own clip is deleted, and when the drive is mounted, through a small root helper; `APERTAR_MEDIA_TRIM=0` turns it off.
 
 ```bash
 sudo install -m 0755 -o root -g root ~/ApertarCore/scripts/apertar-media-trim /usr/local/libexec/apertar-media-trim
@@ -277,6 +277,20 @@ sudo visudo -cf /etc/sudoers.d/apertar-media-trim
 # proof: prints "... trimmed" and asks for no password
 sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
 ```
+
+### Write-path knobs for A/B tests
+
+Environment variables of the Core service (a systemd drop-in with `Environment=`). Each one restores an older behaviour or switches a measured option on, so a change can be compared on the same rig. Details and the measurements behind them: the Apertar knowledge base, `working/dng-chain`.
+
+| Variable | Default | What it changes |
+| --- | --- | --- |
+| `APERTAR_DNG_PAYLOAD_COPY=1` | off | Copies every frame's rows into the writer's scratch buffer before writing, even when the copy changes nothing (the behaviour before the direct write of 16-bit and 8-bit payloads). |
+| `APERTAR_DNG_WRITE_ROWS=N` | 64 | Rows per `write()` when the payload goes through the scratch buffer (packed 10/12-bit, PiSP-compressed and CineMate Log frames). |
+| `APERTAR_RAW_POOL_WARM=0` | on | Restores the old raw-copy pool: no copies allocated before a take starts, and at most workers + 2 kept while it runs. |
+| `APERTAR_DNG_WRITEBACK=0` | on | No `sync_file_range` per written DNG (the kernel's own writeback only). |
+| `APERTAR_MEDIA_SYNC_MS=0` | 1000 | No once-a-second `fsync` of the finished DNGs and the clip folder during a take; the stop-time `syncfs` stays. |
+| `APERTAR_RT=1` | off | The start script runs Core under `SCHED_FIFO` priority 70 on cores 1 to 3 with the best-effort I/O class (`APERTAR_RT_PRIORITY`, `APERTAR_RT_CPUS` adjust it), as cinemate runs cinepi-raw. Needs `LimitRTPRIO` on the unit: install `config/apertar-core-capture-priority.conf` as a drop-in. |
+| `APERTAR_MEDIA_TUNE=1` | off | Kernel-side knobs for the recording drive through the `apertar-media-tune` root helper (dirty-page cushion, scheduler, queue depth). |
 
 ## For Developers
 
