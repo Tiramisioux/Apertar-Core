@@ -1285,6 +1285,11 @@ bool boolEnvValue(const char *name, bool defaultValue)
     return defaultValue;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
+
+// Pure helpers shared with the build without libcamera (--simulate): the tuning file checks and,
+// further down in the other unguarded spans, the sensor model (families, modes, fps and ISO limits and the
+// settings sanitiser) that the CameraController methods outside the libcamera half call.
 std::string normalizeTuningFilePath(std::string value)
 {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -1346,6 +1351,7 @@ void applyProcessTuningFile(const std::string &path)
 }
 
 
+#if APERTARCORE_HAS_LIBCAMERA
 unsigned int h264CameraBufferCount()
 {
     const unsigned int defaultCount = recordingCapabilities().hardwareH264 ? 4u : 6u;
@@ -2166,6 +2172,7 @@ bool encodeProcessedTiff(const ProcessedRgbStill &image, std::vector<uint8_t> *t
     return true;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 enum class SensorFamily {
     Unknown,
     Imx294,
@@ -2203,12 +2210,15 @@ Resolution processedVideoCaptureResolutionForSensor(const CaptureSettings &setti
 struct SensorModeSelection
 {
     Resolution rawResolution{};
+#if APERTARCORE_HAS_LIBCAMERA
     libcamera::PixelFormat rawPixelFormat = libcamera::formats::SRGGB12_CSI2P;
+#endif
     uint32_t bitDepth = 12;
     std::string dngModel;
 };
 
 
+#if APERTARCORE_HAS_LIBCAMERA
 bool controlInfoHas(const libcamera::ControlInfoMap &controlInfo, const libcamera::ControlId &control)
 {
     return controlInfo.find(&control) != controlInfo.end();
@@ -2453,6 +2463,7 @@ SensorFamily detectSensorFamily(const std::string &cameraId)
     return SensorFamily::Unknown;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 const char *sensorFamilyName(SensorFamily sensorFamily)
 {
     switch (sensorFamily) {
@@ -2465,6 +2476,7 @@ const char *sensorFamilyName(SensorFamily sensorFamily)
     return "Unknown";
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
 {
     switch (normalizeRawBitDepth(bitDepth)) {
@@ -2479,6 +2491,7 @@ libcamera::PixelFormat rawPixelFormatForBitDepth(uint32_t bitDepth)
     }
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 Resolution imx294ReadoutForActiveResolution(Resolution active, uint32_t bitDepth)
 {
     active = normalizedImx294ResolutionForBitDepth(active, bitDepth);
@@ -2497,7 +2510,9 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
 {
     SensorModeSelection selection;
     selection.rawResolution = requested;
+#if APERTARCORE_HAS_LIBCAMERA
     selection.rawPixelFormat = rawPixelFormatForBitDepth(rawBitDepth);
+#endif
     selection.bitDepth = normalizeRawBitDepth(rawBitDepth);
     selection.dngModel = "Generic";
 
@@ -2561,6 +2576,7 @@ SensorModeSelection sensorModeForRequestedResolution(SensorFamily sensorFamily,
     return selection;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 SensorModeSelection imx577ModeSelection(Resolution resolution, uint32_t bitDepth)
 {
     SensorModeSelection selection;
@@ -2662,6 +2678,7 @@ std::vector<SensorModeSelection> sensorModeCandidatesForRequestedResolution(Sens
     return candidates;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 Resolution normalizedResolutionForSensor(SensorFamily sensorFamily, Resolution requested)
 {
     switch (sensorFamily) {
@@ -2762,6 +2779,7 @@ bool isLosslessTwoKCapture(const CaptureSettings &settings, SensorFamily sensorF
 
 // The ISO that keeps the sensor on the gain code it is measured at. The gain-to-code step rounds
 // down (0.3 dB per code), so ISO 794 for a measured 7.94x lands one code lower; rounding up keeps it.
+#if APERTARCORE_HAS_LIBCAMERA
 // Sample rate from a WAV's fmt chunk (Core's WAVs carry a bext chunk first); 0 if unreadable.
 uint32_t wavSampleRate(const std::filesystem::path &path)
 {
@@ -2793,6 +2811,7 @@ std::string shellQuote(const std::string &text)
         quoted += ch == '\'' ? std::string("'\\''") : std::string(1, ch);
     return quoted + "'";
 }
+#endif
 
 uint32_t isoForMeasuredGain(float gain)
 {
@@ -2852,6 +2871,7 @@ CameraSection loadCameraSection()
     return limits;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 // The write-buffer keys of [storage], read from the hardware file at the start of each take, so a save in the
 // Config pane applies to the next take. Bad or missing keys are unset (see bufferbudget::bufferConfProblem).
 bufferbudget::BufferConf loadBufferConf()
@@ -2872,6 +2892,7 @@ bufferbudget::BufferConf loadBufferConf()
     }
     return {};
 }
+#endif
 
 // Read once: a change in the file takes effect at the next Core start.
 const CameraSection &cameraSection()
@@ -3173,7 +3194,9 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
 // Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
 std::mutex probedSensorModesMutex;
 std::vector<CameraController::SensorMode> probedSensorModes;
+#if APERTARCORE_HAS_LIBCAMERA
 bool sensorModesProbed = false;
+#endif
 
 std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
 {
@@ -3391,6 +3414,7 @@ CaptureSettings sanitizeSettingsForSensor(CaptureSettings settings, SensorFamily
     return settings;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 bool parseSizeEnv(const char *value, uint32_t &width, uint32_t &height)
 {
     if (!value || !*value)
@@ -3998,6 +4022,7 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
     return out;
 }
 
+#endif // APERTARCORE_HAS_LIBCAMERA
 // The write queue's live level, readable without any lock: the controller's main mutex is held for the whole
 // drain after a take stops, which is exactly when the buffer bar is needed. Written by DngRecordingQueue under
 // its own mutex; read by CameraController::frameBufferStatus().
@@ -4017,6 +4042,7 @@ FrameBufferGauge &frameBufferGauge()
     return gauge;
 }
 
+#if APERTARCORE_HAS_LIBCAMERA
 class DngRecordingQueue {
 public:
     explicit DngRecordingQueue(RecordingDropWarning *warning = nullptr) : dropWarning_(warning) {}
@@ -9907,6 +9933,12 @@ private:
     const size_t maxPendingPhotoCaptures_ = 12;
     bool acquired_ = false;
     bool started_ = false;
+#else
+    // Without libcamera there is no camera to open: the session never starts, so these keep their defaults
+    // and the shared accessors (currentSettings, sensorFamily) answer for an idle, unknown sensor.
+    CaptureSettings settings_;
+    mutable std::shared_mutex sessionSettingsMutex_;
+    SensorFamily sensorFamily_ = SensorFamily::Unknown;
 #endif
 
     PreviewCallback previewCallback_;
