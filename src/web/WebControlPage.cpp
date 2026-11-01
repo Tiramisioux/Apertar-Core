@@ -3141,6 +3141,13 @@ std::string_view webControlPageHtml()
       color: #fcd34d;
     }
 
+    .config-diff .diff-info {
+      margin: 6px 0 0;
+      font-family: inherit;
+      white-space: normal;
+      color: var(--muted);
+    }
+
     .config-diff .diff-confirm {
       display: flex;
       gap: 8px;
@@ -19535,7 +19542,7 @@ std::string_view webControlPageHtml()
             + "and the touch UI moves to the panel.");
         const drm = drmSummary(result.drm);
         if (drm)
-          bootConfigDiffLine(box, "diff-gap", drm);
+          bootConfigDiffLine(box, "diff-info", drm);
         const row = document.createElement("label");
         row.className = "diff-confirm";
         gate = document.createElement("input");
