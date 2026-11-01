@@ -12,6 +12,7 @@
 #include "hardware/I2cProbe.hpp"
 #include "hardware/HardwareConfigStore.hpp"
 #include "hardware/ButtonActionList.hpp"
+#include "hardware/BootConfigText.hpp"
 #include "hardware/Mpu6050RecordingSession.hpp"
 #include "web/WebControlPage.hpp"
 #include "util/SettingsFile.hpp"
@@ -3437,9 +3438,119 @@ std::string detectManagedFanMode(const std::string &text)
     return "Auto";
 }
 
+constexpr const char *kBootConfigHelper = "/usr/local/libexec/apertar-boot-config";
+
+// config.txt, or the copy APERTAR_BOOT_CONFIG names (a dev machine, a test). The root helper only ever writes the real one.
+std::filesystem::path bootConfigPath()
+{
+    if (const char *path = std::getenv("APERTAR_BOOT_CONFIG"); path && *path)
+        return path;
+    return kBootConfigPath;
+}
+
+// One writer at a time: the fan mode and the Boot config card both read, change and replace config.txt.
+std::mutex &bootConfigMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+bool fsyncPath(const std::filesystem::path &path)
+{
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+    const bool ok = ::fsync(fd) == 0;
+    ::close(fd);
+    return ok;
+}
+
+// Replace config.txt with `text`, the previous file kept as config.txt.apertar.bak. In order: a direct write when Core
+// may write there itself (root, or an APERTAR_BOOT_CONFIG copy); the root helper apertar-boot-config (text on stdin, no
+// arguments, see scripts/); then `sudo -n install`, the route the fan mode always used. `how` names the one that wrote;
+// `permissionDenied` is set when nothing was allowed to.
+bool writeBootConfigText(const std::string &text, std::string *errorMessage, std::string *how = nullptr,
+                         bool *permissionDenied = nullptr)
+{
+    const std::filesystem::path dest = bootConfigPath();
+    const std::filesystem::path dir = dest.has_parent_path() ? dest.parent_path() : std::filesystem::path(".");
+    const std::filesystem::path backup = dest.string() + ".apertar.bak";
+    auto fail = [&](const std::string &message, bool denied = false) {
+        if (errorMessage)
+            *errorMessage = message;
+        if (permissionDenied)
+            *permissionDenied = denied;
+        return false;
+    };
+
+    if (::access(dest.c_str(), W_OK) == 0 && ::access(dir.c_str(), W_OK) == 0) {
+        std::error_code ec;
+        std::filesystem::copy_file(dest, backup, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec)
+            return fail("Could not back up " + dest.string() + ": " + ec.message());
+        const std::filesystem::path temp = dir / (".config.txt.apertar-" + std::to_string(::getpid()) + ".tmp");
+        if (!writeTextFileRaw(temp, text) || !fsyncPath(temp)) {
+            std::filesystem::remove(temp, ec);
+            return fail("Could not write " + temp.string() + ".");
+        }
+        std::filesystem::rename(temp, dest, ec);
+        if (ec) {
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            return fail("Could not replace " + dest.string() + ": " + ec.message());
+        }
+        fsyncPath(dir);
+        if (how)
+            *how = "direct";
+        return true;
+    }
+    if (dest != std::filesystem::path(kBootConfigPath))
+        return fail("Cannot write " + dest.string() + " (APERTAR_BOOT_CONFIG): permission denied.", true);
+
+    const std::filesystem::path staged = std::filesystem::temp_directory_path() /
+        ("apertar-boot-config-" + std::to_string(::getpid()) + ".txt");
+    if (!writeTextFileRaw(staged, text))
+        return fail("Could not prepare the config.txt update.");
+    struct RemoveStaged {
+        std::filesystem::path path;
+        ~RemoveStaged() { std::error_code ec; std::filesystem::remove(path, ec); }
+    } removeStaged{staged};
+
+    if (::access(kBootConfigHelper, X_OK) == 0) {
+        const ShellCommandResult helper = runShellCommandCapture(
+            "sudo -n " + shellQuote(kBootConfigHelper) + " < " + shellQuote(staged.string()));
+        if (helper.exitCode == 0) {
+            if (how)
+                *how = "helper";
+            return true;
+        }
+        // The helper ran and said no (bad input, a failed write): that is the answer. Only a sudo refusal falls through.
+        if (helper.output.find("apertar-boot-config:") != std::string::npos)
+            return fail(helper.output);
+    }
+
+    std::string installError;
+    std::string backupError;
+    runShellCommand("sudo -n install -m 644 " + shellQuote(dest.string()) + " " + shellQuote(backup.string()), &backupError);
+    if (runShellCommand("sudo -n install -m 644 " + shellQuote(staged.string()) + " " + shellQuote(dest.string()), &installError)) {
+        if (how)
+            *how = "install";
+        return true;
+    }
+    std::string lower = installError;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (lower.find("password") != std::string::npos || lower.find("permission denied") != std::string::npos ||
+        lower.find("not allowed") != std::string::npos)
+        return fail("Writing config.txt needs root. Install the helper: sudo install -m 0755 -o root -g root "
+                    "~/ApertarCore/scripts/apertar-boot-config /usr/local/libexec/apertar-boot-config, then "
+                    "sudo install -m 0440 ~/ApertarCore/config/apertar-boot-config.sudoers /etc/sudoers.d/apertar-boot-config.",
+                    true);
+    return fail(installError.empty() ? "Could not update /boot/firmware/config.txt." : installError);
+}
+
 std::string currentFanMode()
 {
-    const std::string config = readTextFileRaw(kBootConfigPath);
+    const std::string config = readTextFileRaw(bootConfigPath());
     if (config.empty())
         return "Auto";
     return detectManagedFanMode(config);
@@ -3453,7 +3564,8 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
         return false;
     }
 
-    const std::string existing = readTextFileRaw(kBootConfigPath);
+    std::lock_guard<std::mutex> lock(bootConfigMutex());
+    const std::string existing = readTextFileRaw(bootConfigPath());
     if (existing.empty()) {
         if (errorMessage)
             *errorMessage = "Could not read /boot/firmware/config.txt.";
@@ -3465,37 +3577,193 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
         updated += "\n\n";
     updated += fanModeBlock(mode);
 
-    std::filesystem::path tempPath = std::filesystem::temp_directory_path() /
-        ("apertar-fan-mode-" + std::to_string(::getpid()) + ".tmp");
-    if (!writeTextFileRaw(tempPath, updated)) {
-        if (errorMessage)
-            *errorMessage = "Could not prepare the fan mode update.";
-        return false;
-    }
-
-    std::string installError;
-    const bool ok = runShellCommand(
-        "sudo -n install -m 644 " + shellQuote(tempPath.string()) + " " + shellQuote(kBootConfigPath),
-        &installError);
-    std::error_code rmEc;
-    std::filesystem::remove(tempPath, rmEc);
-
-    if (ok)
+    std::string writeError;
+    bool denied = false;
+    if (writeBootConfigText(updated, &writeError, nullptr, &denied))
         return true;
+    if (errorMessage)
+        *errorMessage = denied ? "Changing the fan mode needs sudo permission."
+                               : (writeError.empty() ? "Could not update the fan mode configuration." : writeError);
+    return false;
+}
 
-    const std::string lower = installError;
-    if (errorMessage) {
-        if (lower.find("password") != std::string::npos ||
-            lower.find("permission denied") != std::string::npos ||
-            lower.find("not allowed") != std::string::npos) {
-            *errorMessage = "Changing the fan mode needs sudo permission.";
-        } else {
-            *errorMessage = installError.empty()
-                ? "Could not update the fan mode configuration."
-                : installError;
+// ---- Boot config card (System pane): config.txt read and edited in place, see hardware/BootConfigText.hpp ----
+
+bootconf::Facts bootConfigFacts()
+{
+    bootconf::Facts facts;
+    facts.board = bootconf::boardFromDeviceTree(readTextFileRaw("/proc/device-tree/compatible"),
+                                                readTextFileRaw("/proc/device-tree/model"));
+    std::set<std::string> names;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(bootConfigPath().parent_path() / "overlays", ec))
+        if (entry.path().extension() == ".dtbo")
+            names.insert(bootconf::lower(entry.path().stem().string()));
+    if (!names.empty())
+        facts.overlays = std::move(names);
+    return facts;
+}
+
+// The DRM connectors and whether they have modes: a DPI overlay shows a "connected" DPI connector even without a
+// panel, so this is information for the display question, not proof of a panel.
+std::string drmConnectorsJson()
+{
+    std::vector<std::string> items;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("card", 0) != 0 || name.find('-') == std::string::npos)
+            continue;
+        const std::string status = trimAscii(readTextFileRaw(entry.path() / "status"));
+        const std::string modes = readTextFileRaw(entry.path() / "modes");
+        items.push_back("{\"name\":" + bootconf::jsonString(name) + ",\"status\":" + bootconf::jsonString(status) +
+                        ",\"modes\":" + std::to_string(std::count(modes.begin(), modes.end(), '\n')) + "}");
+    }
+    std::sort(items.begin(), items.end());
+    std::string out = "[";
+    for (size_t i = 0; i < items.size(); ++i)
+        out += (i ? "," : "") + items[i];
+    return out + "]";
+}
+
+std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts)
+{
+    const std::filesystem::path path = bootConfigPath();
+    bootconf::State state = bootconf::readState(bootconf::parseDocument(text, facts.board), facts.board);
+    const bool readable = !text.empty();
+    if (!readable) {
+        state.editable = false;
+        state.problem = "Could not read " + path.string() + ".";
+    }
+    std::error_code ec;
+    const std::string backup = path.string() + ".apertar.bak";
+    return "{\"path\":" + bootconf::jsonString(path.string()) + ",\"readable\":" + (readable ? "true" : "false") +
+           ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(text)) +
+           ",\"helper\":" + (::access(kBootConfigHelper, X_OK) == 0 ? "true" : "false") +
+           ",\"backup_path\":" + bootconf::jsonString(std::filesystem::exists(backup, ec) ? backup : std::string()) +
+           ",\"state\":" + bootconf::stateJson(state, facts) + ",\"drm\":" + drmConnectorsJson() +
+           ",\"text\":" + bootconf::jsonString(text) + "}";
+}
+
+std::optional<bool> boolFieldValue(const std::string &value)
+{
+    std::string v = value;
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (v == "true" || v == "1" || v == "on" || v == "yes")
+        return true;
+    if (v == "false" || v == "0" || v == "off" || v == "no")
+        return false;
+    return std::nullopt;
+}
+
+// Fields: cam0_sensor, cam1_sensor, cam0_link_frequency, cam1_link_frequency (Hz or null), i2c, i2s, spi, audio, rp1,
+// display. A field left out is left as config.txt has it.
+bool bootConfigRequestFrom(const ControlCommand &command, bootconf::Request *request, std::string *error)
+{
+    for (const std::string port : {"cam0", "cam1"}) {
+        if (const auto sensor = command.string(port + "_sensor"))
+            request->sensors[port] = *sensor;
+        if (const auto link = command.string(port + "_link_frequency")) {
+            if (link->empty() || *link == "null") {
+                request->linkFrequencies[port] = std::nullopt;
+            } else if (const auto hz = bootconf::parseHz(*link)) {
+                request->linkFrequencies[port] = *hz;
+            } else {
+                *error = port + "_link_frequency must be a whole number of Hz, or null for the sensor's default.";
+                return false;
+            }
         }
     }
-    return false;
+    std::vector<std::string> keys;
+    for (const auto &toggle : bootconf::toggles())
+        keys.emplace_back(toggle.key);
+    keys.emplace_back("rp1");
+    for (const auto &key : keys) {
+        const auto text = command.string(key);
+        if (!text)
+            continue;
+        const auto value = boolFieldValue(*text);
+        if (!value) {
+            *error = key + " must be true or false.";
+            return false;
+        }
+        if (key == "rp1")
+            request->rp1 = *value;
+        else
+            request->toggles[key] = *value;
+    }
+    if (const auto display = command.string("display"))
+        request->display = *display;
+    return true;
+}
+
+struct BootConfigReply {
+    int status = 200;
+    std::string body;
+};
+
+BootConfigReply bootConfigGet(int id)
+{
+    const bootconf::Facts facts = bootConfigFacts();
+    std::lock_guard<std::mutex> lock(bootConfigMutex());
+    return {200, okReply(id, "\"boot_config\":" + bootConfigJson(readTextFileRaw(bootConfigPath()), facts))};
+}
+
+// set_boot_config / POST /api/boot-config. dry_run=true answers what would change without writing (the card's review).
+// A save carries the revision it was made against; a display change needs confirm_display=true (the DPI guard).
+BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional<std::string> &revision, bool browser)
+{
+    bootconf::Request request;
+    std::string error;
+    if (!bootConfigRequestFrom(command, &request, &error))
+        return {400, errorReplyBody(command.id, error, "\"code\":\"invalid\"")};
+    const bool dryRun = boolFieldValue(command.string("dry_run").value_or("false")).value_or(false);
+    const bool confirmDisplay = boolFieldValue(command.string("confirm_display").value_or("false")).value_or(false);
+
+    const bootconf::Facts facts = bootConfigFacts();
+    std::lock_guard<std::mutex> lock(bootConfigMutex());
+    const std::filesystem::path path = bootConfigPath();
+    const std::string text = readTextFileRaw(path);
+    if (text.empty())
+        return {500, errorReplyBody(command.id, "Could not read " + path.string() + ".", "\"code\":\"unreadable\"")};
+    const std::string current = bootconf::revisionOf(text);
+    if (!dryRun) {
+        if (!revision && browser)
+            return {409, errorReplyBody(command.id, "Apertar was updated: reload this page.", "\"code\":\"old_page\"")};
+        if (revision && *revision != current)
+            return {409, errorReplyBody(command.id,
+                                        "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
+                                        "Reload the card and choose again.",
+                                        "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current))};
+    }
+
+    const bootconf::ApplyResult result = bootconf::applyRequest(text, request, facts);
+    if (!result.ok)
+        return {400, errorReplyBody(command.id, result.error, "\"code\":\"refused\"")};
+    const std::string body = "\"changes\":" + bootconf::changesJson(result.changes) +
+        ",\"display_changed\":" + (result.displayChanged ? "true" : "false") +
+        ",\"text\":" + bootconf::jsonString(result.text) + ",\"state\":" + bootconf::stateJson(result.after, facts);
+    if (dryRun)
+        return {200, okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" +
+                                             bootconf::jsonString(current) + ",\"drm\":" + drmConnectorsJson())};
+    if (result.displayChanged && !confirmDisplay)
+        return {409, errorReplyBody(command.id,
+                                    "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
+                                    "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
+                                    "Send confirm_display=true to save anyway.",
+                                    "\"code\":\"confirm_display\",\"drm\":" + drmConnectorsJson())};
+    if (result.changes.empty())
+        return {200, okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current))};
+
+    std::string how;
+    bool denied = false;
+    if (!writeBootConfigText(result.text, &error, &how, &denied))
+        return {denied ? 403 : 500, errorReplyBody(command.id, error, denied ? "\"code\":\"permission\"" : "\"code\":\"write_failed\"")};
+    std::cerr << "ApertarCore boot config: wrote " << path.string() << " (" << result.changes.size()
+              << " line(s), via " << how << "); takes effect at the next reboot\n";
+    return {200, okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
+                                         ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(readTextFileRaw(path))) +
+                                         ",\"reboot_required\":true")};
 }
 
 std::string normalizedPowerError(const std::string &errorMessage)
@@ -4631,7 +4899,7 @@ hwconf::Facts hardwareConfigFacts()
     }
     std::sort(facts.buses.begin(), facts.buses.end());
     facts.known = !facts.buses.empty();
-    facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(kBootConfigPath)).dpiLines;
+    facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(bootConfigPath())).dpiLines;
     return facts;
 }
 
@@ -8796,6 +9064,60 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
+    // System pane, Boot config card: /boot/firmware/config.txt (bootConfigGet / bootConfigSet above).
+    if (request.method == "GET" && request.path == "/api/boot-config") {
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        const BootConfigReply reply = bootConfigGet(-1);
+        response.status = reply.status;
+        response.body = reply.body;
+        return response;
+    }
+
+    if (request.method == "POST" && request.path == "/api/boot-config") {
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        // The body is the card's fields as one JSON object; the command parser wants a name, so it gets one.
+        std::string payload = request.body;
+        const size_t brace = payload.find('{');
+        if (brace == std::string::npos) {
+            response.status = 400;
+            response.body = errorReply(-1, "Expected a JSON object.");
+            return response;
+        }
+        const size_t next = payload.find_first_not_of(" \t\r\n", brace + 1);
+        const bool empty = next != std::string::npos && payload[next] == '}';
+        payload.insert(brace + 1, empty ? "\"cmd\":\"set_boot_config\"" : "\"cmd\":\"set_boot_config\",");
+        const ParseResult parsed = parseControlCommand(payload);
+        if (!parsed.ok) {
+            response.status = 400;
+            response.body = errorReply(-1, parsed.error);
+            return response;
+        }
+        const auto revisionHeader = request.headers.find("x-apertar-revision");
+        const std::optional<std::string> revision = revisionHeader != request.headers.end()
+            ? std::optional<std::string>(revisionHeader->second) : parsed.command.string("revision");
+        const BootConfigReply reply = bootConfigSet(parsed.command, revision, request.headers.count("origin") > 0);
+        response.status = reply.status;
+        response.body = reply.body;
+        return response;
+    }
+
+    // An uploaded config.txt, read with this Pi's board rules and not written anywhere (the card's Upload).
+    if (request.method == "POST" && request.path == "/api/boot-config/parse") {
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        if (request.body.empty() || request.body.size() > 65536 || request.body.find('\0') != std::string::npos) {
+            response.status = 400;
+            response.body = errorReply(-1, "Upload a config.txt (text, at most 64 KiB).");
+            return response;
+        }
+        const bootconf::Facts facts = bootConfigFacts();
+        const bootconf::State state = bootconf::readState(bootconf::parseDocument(request.body, facts.board), facts.board);
+        response.body = okReply(-1, "\"state\":" + bootconf::stateJson(state, facts));
+        return response;
+    }
+
     if (request.method == "POST" && request.path == "/api/command") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
@@ -12085,7 +12407,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -13717,6 +14039,12 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                        ",\"local_time_input\":\"" + escapeJson(currentLocalDateTimeInputValue()) + "\""
                        ",\"network_time_synced\":" + std::string(networkTimeSynced ? "true" : "false"));
     }
+
+    if (command.name == "get_boot_config")
+        return bootConfigGet(command.id).body;
+
+    if (command.name == "set_boot_config")
+        return bootConfigSet(command, command.string("revision"), false).body;
 
     if (command.name == "set_fan_mode") {
         const auto value = command.string("value");
