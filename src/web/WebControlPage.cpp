@@ -7559,6 +7559,8 @@ std::string_view webControlPageHtml()
     }
 
     function ladderAspectText(mode) {
+      if (imx585Selected(state.snapshot))
+        return imx585RatioLabel(mode.width, mode.height);
       const ratio = mode.height > 0 ? mode.width / mode.height : 16 / 9;
       return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
     }
@@ -7589,6 +7591,8 @@ std::string_view webControlPageHtml()
     // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
     // "4K SDR 12-bit", "4K SDR 2.39:1 12-bit", "2K SDR binned 12-bit", "2K SDR binned 2.39:1 12-bit".
     function ladderModeName(mode) {
+      if (imx585Selected(state.snapshot))
+        return imx585LadderModeName(mode);
       const info = ladderModeInfo(mode);
       const bits = mode.bits + "-bit";
       const aspect = ladderAspectText(mode);
@@ -7603,6 +7607,8 @@ std::string_view webControlPageHtml()
     }
 
     function ladderModeGroup(mode) {
+      if (imx585Selected(state.snapshot))
+        return imx585LadderGroup(mode);
       const info = ladderModeInfo(mode);
       if (mode.clear_hdr)
         return "chdr";
@@ -8175,7 +8181,7 @@ std::string_view webControlPageHtml()
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
-      ladderGroups.forEach(([groupKey, title]) => {
+      (imx585Selected(state.snapshot) ? imx585LadderGroups : ladderGroups).forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
           && (state.ladderAspect === "all" || ladderAspectText(entry) === state.ladderAspect))
           .sort(ladderQualityCompare);
@@ -8677,19 +8683,226 @@ std::string_view webControlPageHtml()
       ];
     }
 
+    // ---- IMX585 resolutions ----------------------------------------------------------------------
+    // Core offers one set of sizes per class: SDR 12-bit (s12), SDR 10-bit (s10), Clear HDR 12-bit (h12) and
+    // Clear HDR 16-bit (h16); src/camera/Imx585Modes.hpp. What the probe found Core can run is the Mode Ladder's
+    // pool (state.ladderServer.pool); the strings below are the fallback until it has arrived. Active sizes,
+    // "b" = 2x2 binned, widths under 1280 left out as in Core.
+    const imx585ClassModes = {
+      s12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      s10: "3840x2160 1920x1080b 1440x1080b 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      h12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080",
+      h16: "3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1016 1920x1008 1920x960 1920x872 1920x864 1920x816 1920x800 1920x768 1920x752 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x800 1920x1080b",
+    };
+    // The resolution pills; each also has a Clear HDR version ("<key>-hdr") where the class has rows for it.
+    const imx585Families = [
+      { key: "hd", label: "Full HD binned" },   // 1920 wide, 2x2 binned
+      { key: "4k", label: "4K" },
+      { key: "2k", label: "2K crop" },          // 2048 wide (and 1440x1080), 1x1
+      { key: "crop", label: "HD crop" },        // 1920 wide, 1x1
+    ];
+    const imx585Ratios = [[1, "1:1"], [4 / 3, "1.33:1"], [1.378, "1.38:1"], [16 / 9, "16:9"], [1.85, "1.85:1"], [1.89, "1.89:1"],
+      [1.9, "1.90:1"], [2, "2.00:1"], [2.2, "2.20:1"], [2.22, "2.22:1"], [2.35, "2.35:1"], [2.39, "2.39:1"], [2.4, "2.40:1"],
+      [2.5, "2.50:1"], [2.55, "2.55:1"]];
+    const imx585LadderGroups = [["4k-hdr", "4K Clear HDR"], ["4k", "4K SDR"], ["hd-hdr", "Full HD binned Clear HDR"],
+      ["hd", "Full HD binned SDR"], ["2k-hdr", "2K crop Clear HDR"], ["2k", "2K crop SDR"], ["crop-hdr", "HD crop Clear HDR"],
+      ["crop", "HD crop SDR"]];
+
+    function imx585Selected(snapshot) {
+      return sensorNameLower(snapshot).indexOf("imx585") !== -1;
+    }
+
+    function imx585ClassKeyFor(bits, clearHdr) {
+      return clearHdr ? (bits === 16 ? "h16" : "h12") : (bits === 10 ? "s10" : "s12");
+    }
+
+    function imx585ClassKey(snapshot) {
+      return imx585ClassKeyFor(rawBitDepthNumber(snapshot && snapshot.raw_bit_depth), !!(snapshot && snapshot.clear_hdr));
+    }
+
+    // The class a family pill leads to: Core keeps the bit depth, except that Clear HDR on is 12-bit from SDR
+    // and Clear HDR off is 12-bit SDR.
+    function imx585TargetClassKey(snapshot, clearHdr) {
+      return clearHdr === !!(snapshot && snapshot.clear_hdr) ? imx585ClassKey(snapshot) : (clearHdr ? "h12" : "s12");
+    }
+
+    // The sizes of a class as {width, height, binned}: the probed pool, else the table above. A mono sensor
+    // offers less than the table, so without a pool it shows only the size it has.
+    function imx585ClassRows(snapshot, classKey) {
+      const pool = state.ladderServer && Array.isArray(state.ladderServer.pool) ? state.ladderServer.pool : [];
+      if (pool.length > 0) {
+        return pool.filter((entry) => imx585ClassKeyFor(Number(entry.bits), entry.clear_hdr === true) === classKey)
+          .map((entry) => ({ width: Number(entry.width), height: Number(entry.height), binned: Number(entry.binning) >= 2 }));
+      }
+      if (snapshot && snapshot.sensor_mono === true) {
+        return classKey === imx585ClassKey(snapshot)
+          ? [{ width: Number(snapshot.width) || 0, height: Number(snapshot.height) || 0, binned: false }] : [];
+      }
+      return imx585ClassModes[classKey].split(" ").map((text) => {
+        const parts = text.split(/[xb]/);
+        return { width: Number(parts[0]), height: Number(parts[1]), binned: text.endsWith("b") };
+      });
+    }
+
+    function imx585FamilyKey(row) {
+      if (row.binned)
+        return "hd";
+      if (row.width >= 3840 || row.height >= 2160)
+        return "4k";
+      return row.width === 1920 ? "crop" : "2k";
+    }
+
+    function imx585FamilyRows(snapshot, classKey, familyKey) {
+      return imx585ClassRows(snapshot, classKey).filter((row) => imx585FamilyKey(row) === familyKey);
+    }
+
+    // "16:9", "1.85:1", "2.39:1": the nearest known ratio, else the number.
+    function imx585RatioLabel(width, height) {
+      const ratio = height > 0 ? width / height : 16 / 9;
+      const known = imx585Ratios.reduce((best, entry) => Math.abs(entry[0] - ratio) < Math.abs(best[0] - ratio) ? entry : best);
+      return Math.abs(known[0] - ratio) < 0.02 ? known[1] : ratio.toFixed(2) + ":1";
+    }
+
+    // One entry per ratio of the rows (the largest picture when two share one), flattest last.
+    function imx585RatioEntries(rows) {
+      const best = {};
+      rows.forEach((row) => {
+        const label = imx585RatioLabel(row.width, row.height);
+        if (!best[label] || row.width * row.height > best[label].width * best[label].height)
+          best[label] = row;
+      });
+      return Object.keys(best).map((label) => ({
+        label,
+        value: formatResolutionValue(best[label].width, best[label].height),
+        ratio: best[label].width / best[label].height,
+        area: best[label].width * best[label].height,
+      })).sort((a, b) => a.ratio - b.ratio);
+    }
+
+    function imx585CurrentRow(snapshot) {
+      const parts = resolutionLabelFromSnapshot(snapshot).split("x");
+      const width = Number(parts[0]) || 0;
+      const height = Number(parts[1]) || 0;
+      return imx585ClassRows(snapshot, imx585ClassKey(snapshot)).find((row) => row.width === width && row.height === height)
+        || { width, height, binned: false };
+    }
+
+    // The resolution pills carry the family, "-hdr" added in Clear HDR: "4k", "crop-hdr".
+    function imx585BaseResolutionValueFromSnapshot(snapshot) {
+      return imx585FamilyKey(imx585CurrentRow(snapshot)) + (snapshot && snapshot.clear_hdr ? "-hdr" : "");
+    }
+
+    // Clear HDR (cDNG/MLV video) is part of the family pill, as long as the class has sizes of that family.
+    // A mono sensor shows only the pills the pool offers.
+    function imx585BaseResolutionOptions(snapshot) {
+      const hdrAllowed = clearHdrAvailableForSnapshot(snapshot);
+      const mono = !!snapshot && snapshot.sensor_mono === true;
+      const options = [];
+      [false, true].forEach((clearHdr) => imx585Families.forEach((family) => {
+        const offered = imx585FamilyRows(snapshot, imx585TargetClassKey(snapshot, clearHdr), family.key).length > 0;
+        if (offered || !mono)
+          options.push({ value: family.key + (clearHdr ? "-hdr" : ""), label: family.label + (clearHdr ? " HDR" : ""),
+            enabled: offered && (!clearHdr || hdrAllowed) });
+      }));
+      return options;
+    }
+
+    function clearHdrAvailableForSnapshot(snapshot) {
+      const format = String((snapshot && snapshot.recording_format) || "").toLowerCase();
+      return imx585Selected(snapshot) && !(snapshot && snapshot.photo_mode_enabled)
+        && (format === "cdng" || format === "mlv");
+    }
+
+    // The crop row: the ratios of the current family in the current class, "2.39:1 · 3840x1608".
+    function imx585CropRatioOptions(snapshot) {
+      const family = imx585FamilyKey(imx585CurrentRow(snapshot));
+      return imx585RatioEntries(imx585FamilyRows(snapshot, imx585ClassKey(snapshot), family))
+        .map((entry) => ({ value: entry.value, label: entry.label + " · " + entry.value, enabled: true }));
+    }
+
+    // The size of a family pill (a base value) at a ratio: the same ratio if the family has it in that class, else
+    // 16:9, else the largest. "" when the class has no size of the family.
+    function imx585ResolutionForBaseAndRatio(snapshot, baseValue, ratioLabelOrValue) {
+      const clearHdr = /-hdr$/.test(baseValue);
+      const entries = imx585RatioEntries(imx585FamilyRows(snapshot, imx585TargetClassKey(snapshot, clearHdr), baseValue.replace(/-hdr$/, "")));
+      const selected = String(ratioLabelOrValue || "");
+      const match = entries.find((entry) => entry.label === selected || entry.value === selected)
+        || entries.find((entry) => entry.label === "16:9")
+        || entries.slice().sort((a, b) => b.area - a.area)[0];
+      return match ? match.value : "";
+    }
+
+    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size; Core takes the
+    // nearest row of the new class on its own, the size sent is the one of the same ratio.
+    function imx585BaseCommands(snapshot, value) {
+      if (processedVideoRecordFormatForSnapshot(snapshot))
+        return [h264ResolutionCommandPayload(h264ResolutionFromBaseSelection(snapshot, value))];
+      const clearHdr = /-hdr$/.test(value);
+      const commands = clearHdr === !!snapshot.clear_hdr ? [] : [{ cmd: "set_clear_hdr", enabled: clearHdr ? "true" : "false" }];
+      const current = resolutionLabelFromSnapshot(snapshot).split("x");
+      const size = imx585ResolutionForBaseAndRatio(snapshot, value, imx585RatioLabel(Number(current[0]), Number(current[1])));
+      return size ? commands.concat([resolutionCommandPayload(size)]) : commands;
+    }
+
+    // The sizes of the current class, widest picture first.
+    function imx585ResolutionOptions(snapshot) {
+      return imx585ClassRows(snapshot, imx585ClassKey(snapshot))
+        .sort((a, b) => b.width * b.height - a.width * a.height)
+        .map((row) => formatResolutionValue(row.width, row.height));
+    }
+
+    // What Core reports, with the old driver's 1.85:1 sizes (3840x2076, 1920x1038) and the other sensors' sizes a
+    // saved preset or an old client may still send mapped to the sizes the IMX585 has.
+    function imx585NormalizedResolution(snapshot, resolutionValue) {
+      if (processedVideoRecordFormatForSnapshot(snapshot))
+        return forcedH264CaptureResolutionForSnapshot(snapshot);
+      const value = String(resolutionValue || "").trim();
+      const aliases = {
+        "3840x2076": "3840x2072", "1920x1038": "1920x1036", "1928x1090": "1920x1080", "3856x2180": "3840x2160",
+        "1332x990": "1920x1080", "2028x1080": "1920x1080", "2028x1520": "1920x1080",
+        "4056x2160": "3840x2160", "4056x3040": "3840x2160",
+      };
+      if (aliases[value])
+        return aliases[value];
+      return /^\d{3,5}x\d{3,5}$/.test(value) ? value : "1920x1080";
+    }
+
+    // The Mode Ladder groups and names its sizes by these families: the pool entry knows if a size is binned.
+    function imx585LadderFamily(mode) {
+      const info = ladderModeInfo(mode);
+      // A pool entry without a probe mode has binning 0: then the class table says if the size is binned.
+      const row = info && Number(info.binning) >= 2 ? { width: mode.width, height: mode.height, binned: true }
+        : imx585ClassRows(state.snapshot, imx585ClassKeyFor(mode.bits, mode.clear_hdr))
+          .find((other) => other.width === mode.width && other.height === mode.height) || { width: mode.width, height: mode.height, binned: false };
+      return imx585Families.find((family) => family.key === imx585FamilyKey(row));
+    }
+
+    function imx585LadderGroup(mode) {
+      return imx585LadderFamily(mode).key + (mode.clear_hdr ? "-hdr" : "");
+    }
+
+    // "4K Clear HDR 16-bit", "4K SDR 2.39:1 12-bit", "Full HD binned SDR 12-bit", "HD crop SDR 2.00:1 12-bit".
+    function imx585LadderModeName(mode) {
+      const ratio = imx585RatioLabel(mode.width, mode.height);
+      return imx585LadderFamily(mode).label + (mode.clear_hdr ? " Clear HDR " : " SDR ") + (ratio === "16:9" ? "" : ratio + " ")
+        + mode.bits + "-bit";
+    }
+
     function sensorResolutionOptions(sensorLower, snapshot) {
+      if (sensorLower.indexOf("imx585") !== -1)
+        return imx585ResolutionOptions(snapshot);
       if (sensorLower.indexOf("imx577") !== -1)
         return ["1332x990", "2028x1080", "2028x1520", "4056x2160", "4056x3040"];
       if (sensorLower.indexOf("imx477") !== -1)
         return imx477ResolutionOptions();
       if (sensorLower.indexOf("imx294") !== -1)
         return imx294ResolutionOptionsForSnapshot(snapshot);
-      if (sensorLower.indexOf("imx585") !== -1)
-        return ["1920x1080", "1920x1036", "1920x1012", "1920x960", "1920x872", "1920x864", "1920x816", "1920x804", "1920x768", "1920x752", "3840x2160", "3840x2072", "3840x2024", "3840x1920", "3840x1744", "3840x1728", "3840x1632", "3840x1608", "3840x1536", "3840x1504"];
       return fallbackResolutionOptions;
     }
 
     function normalizedResolutionForSnapshot(snapshot, resolutionValue) {
+      if (imx585Selected(snapshot))
+        return imx585NormalizedResolution(snapshot, resolutionValue);
       const sensorLower = sensorNameLower(snapshot);
       const value = String(resolutionValue || "").trim();
       if (processedVideoRecordFormatForSnapshot(snapshot))
@@ -8734,31 +8947,6 @@ std::string_view webControlPageHtml()
             || value === "4056x2160")
           return options[0] || "4144x2176";
         return options[0] || "4144x2176";
-      }
-
-      if (sensorLower.indexOf("imx585") !== -1) {
-        // Old driver 1.85:1 sizes (3840x2076, 1920x1038): the cinemate-port driver has 3840x2072 and 1920x1036.
-        if (value === "3840x2076")
-          return "3840x2072";
-        if (value === "1920x1038")
-          return "1920x1036";
-        if (value === "1928x1090" || value === "1920x1080")
-          return "1920x1080";
-        if (value === "1920x1036" || value === "1920x1012" || value === "1920x960" || value === "1920x872"
-            || value === "1920x864" || value === "1920x816" || value === "1920x804" || value === "1920x768"
-            || value === "1920x752")
-          return value;
-        if (value === "3856x2180" || value === "3840x2160")
-          return "3840x2160";
-        if (value === "3840x2072" || value === "3840x2024" || value === "3840x1920" || value === "3840x1744"
-            || value === "3840x1728" || value === "3840x1632" || value === "3840x1608" || value === "3840x1536"
-            || value === "3840x1504")
-          return value;
-        if (value === "1332x990" || value === "2028x1080" || value === "2028x1520")
-          return "1920x1080";
-        if (value === "4056x2160" || value === "4056x3040")
-          return "3840x2160";
-        return "1920x1080";
       }
 
       return value || fallbackResolutionOptions[0];
@@ -8809,107 +8997,25 @@ std::string_view webControlPageHtml()
       return normalizedResolutionForSnapshot(snapshot, explicit || fallback);
     }
 
-    function imx585CropControlsAvailableForSnapshot(snapshot) {
-      return sensorNameLower(snapshot).indexOf("imx585") !== -1;
-    }
-
     function sensorCropControlsAvailableForSnapshot(snapshot) {
       const sensorLower = sensorNameLower(snapshot);
       return sensorLower.indexOf("imx585") !== -1 || sensorLower.indexOf("imx477") !== -1
         || sensorLower.indexOf("imx294") !== -1;
     }
 
-    function imx585CropRatioOptionsForSnapshot(snapshot) {
-      const enabled = imx585CropControlsAvailableForSnapshot(snapshot);
-      if (!isImx585FourKResolution(resolutionLabelFromSnapshot(snapshot))) {
-        return [
-          { value: "1920x1080", label: "16:9", enabled },
-          { value: "1920x1036", label: "1.85:1", enabled },
-          { value: "1920x1012", label: "1.90:1", enabled },
-          { value: "1920x960", label: "2.00:1", enabled },
-          { value: "1920x872", label: "2.20:1", enabled },
-          { value: "1920x864", label: "2.22:1", enabled },
-          { value: "1920x816", label: "2.35:1", enabled },
-          { value: "1920x804", label: "2.39:1", enabled },
-          { value: "1920x768", label: "2.50:1", enabled },
-          { value: "1920x752", label: "2.55:1", enabled },
-        ];
-      }
-
-      return [
-        { value: "3840x2160", label: "16:9", enabled },
-        { value: "3840x2072", label: "1.85:1", enabled },
-        { value: "3840x2024", label: "1.90:1", enabled },
-        { value: "3840x1920", label: "2.00:1", enabled },
-        { value: "3840x1744", label: "2.20:1", enabled },
-        { value: "3840x1728", label: "2.22:1", enabled },
-        { value: "3840x1632", label: "2.35:1", enabled },
-        { value: "3840x1608", label: "2.39:1", enabled },
-        { value: "3840x1536", label: "2.50:1", enabled },
-        { value: "3840x1504", label: "2.55:1", enabled },
-      ];
-    }
-
-    function imx585BaseResolutionOptions() {
-      return [
-        { value: "1920x1080", label: "Full HD" },
-        { value: "3840x2160", label: "4K" },
-      ];
-    }
-
     function sensorBaseResolutionOptionsForSnapshot(snapshot) {
+      if (imx585Selected(snapshot))
+        return imx585BaseResolutionOptions(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294BaseResolutionOptions(snapshot);
-      return sensorNameLower(snapshot).indexOf("imx477") !== -1
-        ? imx477BaseResolutionOptions()
-        : imx585BaseResolutionOptions().concat([
-            { value: "clearhdr", label: "4K Clear HDR", enabled: clearHdrAvailableForSnapshot(snapshot) },
-          ]);
+      return sensorNameLower(snapshot).indexOf("imx477") !== -1 ? imx477BaseResolutionOptions() : [];
     }
 
-    // 4K Clear HDR (IMX585, cDNG/MLV video) is a resolution choice of its own: Core forces 4K, has no
-    // crops, and records 12 or 16 bit.
-    function clearHdrAvailableForSnapshot(snapshot) {
-      const format = String((snapshot && snapshot.recording_format) || "").toLowerCase();
-      return sensorNameLower(snapshot).indexOf("imx585") !== -1 && !(snapshot && snapshot.photo_mode_enabled)
-        && (format === "cdng" || format === "mlv");
-    }
-
-    // Choosing "4K Clear HDR" turns it on; any other base size turns it off first.
+    // The IMX585's family pills may switch Clear HDR too: its commands are Clear HDR, then the size.
     function resolutionBaseCommands(snapshot, value) {
-      const clearHdr = !!(snapshot && snapshot.clear_hdr);
-      if (value === "clearhdr")
-        return clearHdr ? [] : [{ cmd: "set_clear_hdr", enabled: "true" }];
-      return (clearHdr ? [{ cmd: "set_clear_hdr", enabled: "false" }] : [])
-        .concat([resolutionBaseCommandPayload(snapshot, value)]);
-    }
-
-    function isImx585FourKResolution(resolutionValue) {
-      return resolutionValue === "3840x2160"
-        || resolutionValue === "3856x2180"
-        || resolutionValue === "3840x2072"
-        || resolutionValue === "3840x2024"
-        || resolutionValue === "3840x1920"
-        || resolutionValue === "3840x1744"
-        || resolutionValue === "3840x1728"
-        || resolutionValue === "3840x1632"
-        || resolutionValue === "3840x1608"
-        || resolutionValue === "3840x1536"
-        || resolutionValue === "3840x1504";
-    }
-
-    function isImx585FullHdResolution(resolutionValue) {
-      return resolutionValue === "1920x1080"
-        || resolutionValue === "1928x1090"
-        || resolutionValue === "1920x1036"
-        || resolutionValue === "1920x1012"
-        || resolutionValue === "1920x960"
-        || resolutionValue === "1920x872"
-        || resolutionValue === "1920x864"
-        || resolutionValue === "1920x816"
-        || resolutionValue === "1920x804"
-        || resolutionValue === "1920x768"
-        || resolutionValue === "1920x752";
+      if (imx585Selected(snapshot))
+        return imx585BaseCommands(snapshot, value);
+      return [resolutionBaseCommandPayload(snapshot, value)];
     }
 
     function isImx477FourKResolution(resolutionValue) {
@@ -8928,28 +9034,29 @@ std::string_view webControlPageHtml()
     }
 
     function sensorBaseResolutionValueFromSnapshot(snapshot) {
+      if (imx585Selected(snapshot))
+        return imx585BaseResolutionValueFromSnapshot(snapshot);
       const resolution = resolutionLabelFromSnapshot(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294ResolutionOptionsForSnapshot(snapshot)[0];
       if (sensorNameLower(snapshot).indexOf("imx477") !== -1)
         return isImx477FourKResolution(resolution) ? "4056x2160" : "2028x1080";
-      if (sensorNameLower(snapshot).indexOf("imx585") !== -1)
-        return isImx585FourKResolution(resolution) ? "3840x2160" : "1920x1080";
       return resolution;
     }
 
     function sensorCropRatioOptionsForSnapshot(snapshot) {
+      if (imx585Selected(snapshot))
+        return imx585CropRatioOptions(snapshot);
       const enabled = sensorCropControlsAvailableForSnapshot(snapshot);
       const baseValue = sensorBaseResolutionValueFromSnapshot(snapshot);
       if (sensorNameLower(snapshot).indexOf("imx294") !== -1)
         return imx294CropOptionsForBase(snapshot, baseValue, enabled);
-      if (sensorNameLower(snapshot).indexOf("imx477") !== -1)
-        return imx477CropOptionsForBase(baseValue, enabled);
-      const options = imx585CropRatioOptionsForSnapshot(snapshot);
-      return snapshot && snapshot.clear_hdr ? options.map((option) => Object.assign({}, option, { enabled: false })) : options;
+      return sensorNameLower(snapshot).indexOf("imx477") !== -1 ? imx477CropOptionsForBase(baseValue, enabled) : [];
     }
 
     function sensorResolutionForBaseAndRatio(snapshot, baseValue, ratioLabelOrValue) {
+      if (imx585Selected(snapshot))
+        return imx585ResolutionForBaseAndRatio(snapshot, baseValue, ratioLabelOrValue) || resolutionLabelFromSnapshot(snapshot);
       const selected = String(ratioLabelOrValue || "");
       const sensorLower = sensorNameLower(snapshot);
       if (sensorLower.indexOf("imx294") !== -1) {
@@ -8957,40 +9064,14 @@ std::string_view webControlPageHtml()
           item => item.value === selected || item.label === selected);
         return option ? option.value : baseValue;
       }
-      const options = sensorLower.indexOf("imx477") !== -1
-        ? imx477CropOptionsForBase(baseValue, true)
-        : (baseValue === "3840x2160"
-           ? [
-             { value: "3840x2160", label: "16:9" },
-             { value: "3840x2072", label: "1.85:1" },
-             { value: "3840x2024", label: "1.90:1" },
-             { value: "3840x1920", label: "2.00:1" },
-             { value: "3840x1744", label: "2.20:1" },
-             { value: "3840x1728", label: "2.22:1" },
-             { value: "3840x1632", label: "2.35:1" },
-             { value: "3840x1608", label: "2.39:1" },
-             { value: "3840x1536", label: "2.50:1" },
-             { value: "3840x1504", label: "2.55:1" },
-           ]
-           : [
-             { value: "1920x1080", label: "16:9" },
-             { value: "1920x1036", label: "1.85:1" },
-             { value: "1920x1012", label: "1.90:1" },
-             { value: "1920x960", label: "2.00:1" },
-             { value: "1920x872", label: "2.20:1" },
-             { value: "1920x864", label: "2.22:1" },
-             { value: "1920x816", label: "2.35:1" },
-             { value: "1920x804", label: "2.39:1" },
-             { value: "1920x768", label: "2.50:1" },
-             { value: "1920x752", label: "2.55:1" },
-           ]);
+      const options = sensorLower.indexOf("imx477") !== -1 ? imx477CropOptionsForBase(baseValue, true) : [];
       const match = options.find((option) => option.label === selected || option.value === selected);
       return match ? match.value : baseValue;
     }
 
     function resolutionBaseValueFromSnapshot(snapshot) {
-      if (snapshot && snapshot.clear_hdr)
-        return "clearhdr";
+      if (imx585Selected(snapshot))
+        return imx585BaseResolutionValueFromSnapshot(snapshot);
       const resolution = resolutionLabelFromSnapshot(snapshot);
       return sensorCropControlsAvailableForSnapshot(snapshot)
         ? sensorBaseResolutionValueFromSnapshot(snapshot)
@@ -10610,7 +10691,7 @@ std::string_view webControlPageHtml()
       const resolutionBaseValue = h264RecordFormat ? h264BaseResolutionValueFromSnapshot(snapshot) : resolutionBaseValueFromSnapshot(snapshot);
       const cropRatioOptions = h264RecordFormat ? h264CropOptionsForBase(resolutionBaseValue) : sensorCropRatioOptionsForSnapshot(snapshot);
       const cropRatioValue = h264RecordFormat ? h264CropRatioValueFromSnapshot(snapshot) : cropRatioValueFromSnapshot(snapshot);
-      const cropRatioEnabled = h264RecordFormat || (cropControlsAvailable && !snapshot.clear_hdr);
+      const cropRatioEnabled = h264RecordFormat || cropControlsAvailable;
       const externalMonitorEnabled = !!uiState.external_monitor_enabled;
       const externalMonitorMode = uiState.external_monitor_mode || "Clean Feed";
       const externalMonitorInfoOverlay = uiState.external_monitor_info_overlay || "On";
@@ -14921,7 +15002,7 @@ std::string_view webControlPageHtml()
       const resolutionBaseValue = h264RecordFormat ? h264BaseResolutionValueFromSnapshot(snapshot) : resolutionBaseValueFromSnapshot(snapshot);
       const cropRatioOptions = h264RecordFormat ? h264CropOptionsForBase(resolutionBaseValue) : sensorCropRatioOptionsForSnapshot(snapshot);
       const cropRatioValue = h264RecordFormat ? h264CropRatioValueFromSnapshot(snapshot) : cropRatioValueFromSnapshot(snapshot);
-      const cropRatioEnabled = h264RecordFormat || (cropControlsAvailable && !snapshot.clear_hdr);
+      const cropRatioEnabled = h264RecordFormat || cropControlsAvailable;
       const isRecording = !!snapshot.recording;
       const isSoundRecording = !!snapshot.sound_recording;
       const isTimelapse = !!snapshot.timelapse_active;
