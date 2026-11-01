@@ -5591,6 +5591,7 @@ double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::st
     const bool imx477 = sensor.find("imx477") != std::string::npos;
     const bool imx577 = sensor.find("imx577") != std::string::npos;
     const bool imx294 = sensor.find("imx294") != std::string::npos;
+    const bool imx283 = sensor.find("imx283") != std::string::npos;
     const bool imx585 = sensor.find("imx585") != std::string::npos;
 
     auto bitsPerPixelForEstimate = [&settings]() {
@@ -5603,7 +5604,7 @@ double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::st
         return 12.0;
     };
 
-    if (imx294) {
+    if (imx294 || imx283) {     // the IMX283 resolution is the active picture, up to 5472x3648
         const double bitsPerPixel = bitsPerPixelForEstimate();
         const double bytes =
             static_cast<double>(std::max(1, width)) *
@@ -12045,7 +12046,7 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
         holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
         static const std::map<int, const char *> known = {
-            {0x04, "Grove ADC"}, {0x1a, "IMX585 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
             {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
             {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
             {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};

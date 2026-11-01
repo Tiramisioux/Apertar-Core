@@ -63,4 +63,32 @@ inline std::optional<NativeScalerCrop> centeredPreviewScalerCrop(
         nativeWidth, nativeHeight};
 }
 
+// A sensor whose delivered (transport) frame carries leading-left optical-black columns and
+// trailing-bottom optical-black rows (IMX283): the active picture is (outW - activeW) columns in from
+// the left and starts at the top. The crop is derived from the runtime ScalerCropMaximum (nativeBounds):
+// its origin may be offset and its size is the driver's, so no native coordinates are hard-coded.
+// Offsets and sizes round up (a pixel more optical black is better than a pixel less picture), and the
+// result is held inside nativeBounds. The caller centres the target aspect inside it.
+inline std::optional<NativeScalerCrop> activeAreaScalerCrop(
+    uint32_t outWidth, uint32_t outHeight, uint32_t activeWidth, uint32_t activeHeight,
+    NativeScalerCrop nativeBounds)
+{
+    if (outWidth < 2 || outHeight < 2 || activeWidth < 2 || activeHeight < 2 ||
+        activeWidth > outWidth || activeHeight > outHeight ||
+        nativeBounds.width < 2 || nativeBounds.height < 2)
+        return std::nullopt;
+    const auto ceilDiv = [](uint64_t numerator, uint64_t denominator) {
+        return (numerator + denominator - 1) / denominator;
+    };
+    const uint64_t left = ceilDiv(uint64_t(outWidth - activeWidth) * nativeBounds.width, outWidth);
+    const uint64_t width = std::min<uint64_t>(ceilDiv(uint64_t(activeWidth) * nativeBounds.width, outWidth),
+                                              nativeBounds.width - std::min<uint64_t>(left, nativeBounds.width));
+    const uint64_t height = std::min<uint64_t>(ceilDiv(uint64_t(activeHeight) * nativeBounds.height, outHeight),
+                                               nativeBounds.height);
+    if (width < 2 || height < 2)
+        return std::nullopt;
+    return NativeScalerCrop{nativeBounds.x + static_cast<int>(left), nativeBounds.y,
+                            static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+}
+
 } // namespace apertar
