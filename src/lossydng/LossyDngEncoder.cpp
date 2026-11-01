@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "lossydng/LossyDngEncoder.hpp"
+#include "cdng/CdngEncoder.hpp"   // dngPageCacheDrop
 
 #include <array>
 #include <atomic>
@@ -98,7 +99,10 @@ bool writeFile(const std::string &path, const uint8_t *data, size_t size)
     ::posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     bool ok = writeAll(fd, data, size);
     const int writeErrno = errno;
-    ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    // The same knob as the cDNG writer (APERTAR_DNG_DONTNEED); lossy takes have no sync thread, so "sync" leaves
+    // the pages to the kernel like "off".
+    if (dngPageCacheDrop() == DngPageCacheDrop::Writer)
+        ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
     if (::close(fd) != 0 && ok)
         ok = false;
     if (!ok) {

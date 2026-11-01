@@ -4295,8 +4295,6 @@ public:
         if (mediaDirFd_ >= 0 && joinAll)
             ::close(mediaDirFd_);
         mediaDirFd_ = -1;
-        if (const uint64_t dropped = droppedNoRequestSlot_.load(std::memory_order_relaxed); dropped > 0)
-            std::cerr << "ApertarCore recording stats: dropped_copy_slot=" << dropped << "\n";
         if (recordingFormat_ == RecordingFormat::LossyDng) {
             if (mediumGone_.load(std::memory_order_acquire))
                 LossyDngEncoder::abandonWrites();
@@ -8672,9 +8670,9 @@ private:
         noteFrameForPreroll(request);
         if (!capturePriorityAdjusted_) {
             capturePriorityAdjusted_ = true;
-            // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
             // Only this callback thread changes priority, not encoder workers.
             const int tid = static_cast<int>(::syscall(SYS_gettid));
+            // LimitNICE=-5 permits this bounded boost without CAP_SYS_NICE.
             if (::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), -5) == 0)
                 std::cerr << "ApertarCore capture scheduling: thread=" << tid << " nice=-5\n";
             else
@@ -11978,11 +11976,6 @@ bool CameraController::cdngLogApplicable() const
 // Called about 5 times a second from the HTTP and watcher threads. The numbers come from the write queue's
 // lock-free gauge. Only the mode needs the controller's settings, so it is read under try_lock: while the
 // command path holds the mutex (including the whole drain after a take stops) the last answer is reused.
-bool CameraController::rawTakeActive() const
-{
-    return frameBufferGauge().active.load(std::memory_order_acquire);
-}
-
 CameraController::FrameBufferStatus CameraController::frameBufferStatus() const
 {
     FrameBufferGauge &gauge = frameBufferGauge();
@@ -12010,6 +12003,11 @@ CameraController::FrameBufferStatus CameraController::frameBufferStatus() const
     out.mode = gauge.ram.load(std::memory_order_relaxed) ? "ram" : "frames";
     out.used = std::min(out.used, out.capacity);
     return out;
+}
+
+bool CameraController::rawTakeActive() const
+{
+    return frameBufferGauge().active.load(std::memory_order_acquire);
 }
 
 CameraController::StillExposureStatus CameraController::stillExposureStatus() const

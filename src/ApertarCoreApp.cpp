@@ -81,8 +81,9 @@ constexpr double kWebPreviewMaxFps = 30.0;
 constexpr int kWebPreviewJpegQuality = 75;
 
 // The web preview's rate while a raw take runs (APERTAR_WEB_PREVIEW_RECORDING_FPS): default the normal 30,
-// 0 = no web preview frames while recording. The downsample for it is the one per-frame image pass left on
-// libcamera's completion thread, so this is the A/B knob for the WebUI-open drops (kb working/dng-chain).
+// 0 = no web preview frames while recording. The downsample for it runs on libcamera's completion thread
+// (about 0.2 to 0.5 ms per frame measured idle in the kb), so this is the A/B knob for its share of the
+// WebUI-open drops (kb working/dng-chain, V/H4).
 double webPreviewRecordingFps()
 {
     static const double fps = []() {
@@ -91,9 +92,9 @@ double webPreviewRecordingFps()
             return kWebPreviewMaxFps;
         char *end = nullptr;
         const double parsed = std::strtod(text, &end);
-        if (end == text || *end != '\0' || parsed < 0.0 || parsed > kWebPreviewMaxFps)
+        if (end == text || *end != '\0' || !std::isfinite(parsed) || parsed < 0.0 || parsed > kWebPreviewMaxFps)
             return kWebPreviewMaxFps;
-        return parsed;
+        return parsed < 0.5 ? 0.0 : parsed;
     }();
     return fps;
 }
