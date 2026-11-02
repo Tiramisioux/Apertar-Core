@@ -4981,15 +4981,6 @@ std::string_view webControlPageHtml()
               <p class="settings-card-copy" id="settingsExposureCompensationNote">Enable Auto ISO or Auto Shutter to adjust exposure.</p>
             </div>
 
-            <div class="settings-card">
-              <div class="settings-card-head">
-                <div>
-                  <h3 class="settings-card-title">Value Lists</h3>
-                </div>
-              </div>
-              <div class="field-stack" id="settingsValueLists"></div>
-            </div>
-
             <div class="settings-card" id="settingsSpeedRampCard">
               <div class="settings-card-head wrap-head">
                 <div>
@@ -6070,6 +6061,15 @@ std::string_view webControlPageHtml()
                 <button class="primary-button" id="saveControlsButton" type="button" disabled>Save Controls</button>
                 <span class="subtle-note">Saved changes are checked first, kept in the file's history, and applied at once.</span>
               </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Value Lists</h3>
+                </div>
+              </div>
+              <div class="field-stack" id="settingsValueLists"></div>
             </div>
           </section>
 
