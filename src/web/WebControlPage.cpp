@@ -6592,7 +6592,7 @@ std::string_view webControlPageHtml()
       ladderFetching: false,
       ladderFetchedMs: -10000,
       ladderSeenActive: null,
-      ladderAspect: "all",
+      ladderAspects: [],       // the aspect filter of Activated sensor modes; empty = All
       ladderOpen: { chdr: true, "4k": true, crop: false, "2k": false },
       fetchInFlight: false,
       fetchQueued: false,
@@ -8181,22 +8181,30 @@ std::string_view webControlPageHtml()
           aspects.push({ text, ratio: entry.width / entry.height });
       });
       aspects.sort((a, b) => a.ratio - b.ratio);
-      if (state.ladderAspect !== "all" && !aspects.some((aspect) => aspect.text === state.ladderAspect))
-        state.ladderAspect = "all";
+      state.ladderAspects = state.ladderAspects.filter((text) => aspects.some((aspect) => aspect.text === text));
       const filters = document.getElementById("settingsSensorModeAspectFilters");
       filters.classList.toggle("hidden", pool.length === 0);
-      buildOptionButtons("settingsSensorModeAspectFilters",
-        [{ value: "all", label: "All", enabled: true }].concat(aspects.map((aspect) => ({ value: aspect.text, label: aspect.text, enabled: true }))),
-        state.ladderAspect, (value) => {
-          state.ladderAspect = value;
+      // Several ratios at once: a click turns one on or off, All clears the choice.
+      const aspectOptions = [{ value: "all", label: "All", enabled: true }]
+        .concat(aspects.map((aspect) => ({ value: aspect.text, label: aspect.text, enabled: true })));
+      buildOptionButtons("settingsSensorModeAspectFilters", aspectOptions,
+        state.ladderAspects.length === 0 ? "all" : "", (value) => {
+          if (value === "all")
+            state.ladderAspects = [];
+          else if (state.ladderAspects.includes(value))
+            state.ladderAspects = state.ladderAspects.filter((text) => text !== value);
+          else
+            state.ladderAspects = state.ladderAspects.concat([value]);
           renderSensorModes();
         });
+      Array.from(filters.children).forEach((button, index) =>
+        button.classList.toggle("active", index > 0 && state.ladderAspects.includes(aspectOptions[index].value)));
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
       (imx585Selected(state.snapshot) ? imx585LadderGroups : ladderGroups).forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
-          && (state.ladderAspect === "all" || ladderAspectText(entry) === state.ladderAspect))
+          && (state.ladderAspects.length === 0 || state.ladderAspects.includes(ladderAspectText(entry))))
           .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
