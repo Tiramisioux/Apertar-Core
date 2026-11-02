@@ -11357,8 +11357,14 @@ void ApertarCoreApp::applyMediaTuning(const MediaProfile &profile, bool apply)
     // Opt-in (APERTAR_MEDIA_TUNE=1). 16-bit 4K25 ran clean without it (2026-10-27
     // C0002), and its dirty-page limits would undo the once-a-second sync's bound
     // on what a pulled card loses.
-    if (const char *env = std::getenv("APERTAR_MEDIA_TUNE"); !env || env[0] != '1')
+    // Without the environment variable the media tuning file's kernel_tune decides.
+    if (const char *env = std::getenv("APERTAR_MEDIA_TUNE"); env) {
+        if (env[0] != '1')
+            return;
+    } else if (!loadMediaTuneLogged(mediaClassName(profile.mediaClass), mediaFilesystemName(profile.filesystem))
+                    .kernelTune.value_or(false)) {
         return;
+    }
     if (profile.rootDisk.empty())
         return;
     static const char *const helper = "/usr/local/libexec/apertar-media-tune";

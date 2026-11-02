@@ -1,11 +1,14 @@
 #pragma once
 
 #include "util/MediaProbe.hpp"
+#include "util/MediaTune.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <mutex>
 #include <string>
 #include <system_error>
 
@@ -164,6 +167,20 @@ struct MediaProfile {
     }
 };
 
+// loadMediaTune() plus the once-per-process log lines: the summary the first time the tune is loaded, then one
+// line per warning (stderr, the "ApertarCore ..." prefix style).
+inline MediaTune loadMediaTuneLogged(const std::string &className, const std::string &fsName)
+{
+    MediaTune tune = loadMediaTune(className, fsName);
+    static std::once_flag logged;
+    std::call_once(logged, [&tune] {
+        std::cerr << "ApertarCore media tune: " << tune.summary() << "\n";
+        for (const std::string &warning : tune.warnings)
+            std::cerr << "ApertarCore media tune: warning: " << warning << "\n";
+    });
+    return tune;
+}
+
 inline MediaProfile deriveMediaProfile(MediaClass mediaClass, const std::string &device, const std::string &fstype)
 {
     MediaProfile profile;
@@ -173,6 +190,15 @@ inline MediaProfile deriveMediaProfile(MediaClass mediaClass, const std::string 
     profile.rootDisk = rootDiskForDevice(device);
     profile.fstype = fstype;
     profile.writer = writerSettingsFor(profile.filesystem, mediaClass);
+    // The media tuning file wins over the table (kept pure above, so it stays readable); the
+    // environment variables of the read sites win over both. See MediaTune.hpp.
+    const MediaTune tune = loadMediaTuneLogged(mediaClassName(mediaClass), mediaFilesystemName(profile.filesystem));
+    if (tune.workers)
+        profile.writer.workers = *tune.workers;
+    if (tune.queue)
+        profile.writer.queueFrames = *tune.queue;
+    if (tune.extraRawBuffers)
+        profile.writer.extraRawBuffers = *tune.extraRawBuffers;
     return profile;
 }
 
@@ -196,6 +222,15 @@ inline std::string &configuredMediaRoot()
 inline unsigned mediaExtraRawBuffersForConfiguredRoot()
 {
     return detectMediaProfile(cachedMediaSnapshotOrProbe(configuredMediaRoot())).writer.extraRawBuffers;
+}
+
+// The media tuning file resolved for the configured recording root (class and filesystem names of its
+// cached profile; "unknown" / "none" when nothing is mounted, which only the [default] sections match).
+// For the read sites that have no profile at hand. Same cached snapshot as above: never blocks on a dead device.
+inline MediaTune mediaTuneForConfiguredRoot()
+{
+    const MediaProfile profile = detectMediaProfile(cachedMediaSnapshotOrProbe(configuredMediaRoot()));
+    return loadMediaTuneLogged(mediaClassName(profile.mediaClass), mediaFilesystemName(profile.filesystem));
 }
 
 } // namespace apertar

@@ -1452,8 +1452,12 @@ unsigned int rawCameraBufferCount(bool clearHdr)
     // Spikier filesystems (exFAT/FAT/NTFS allocate a directory entry per frame)
     // get two more buffers of cushion, as Cinemate's profiles do (8 ext4 /
     // 10 exFAT-NTFS). The env override still wins over everything.
+    // The media tuning file's raw_buffers (an absolute count) comes between the env override and
+    // base + extra (extra already carries the file's extra_raw_buffers through the media profile).
     const unsigned int extra = mediaExtraRawBuffersForConfiguredRoot();
-    return unsignedEnvValue("APERTAR_RAW_CAMERA_BUFFERS", std::min(16u, base + extra), 3, 16);
+    const MediaTune tune = mediaTuneForConfiguredRoot();
+    const unsigned int fallback = tune.rawBuffers ? *tune.rawBuffers : std::min(16u, base + extra);
+    return unsignedEnvValue("APERTAR_RAW_CAMERA_BUFFERS", fallback, 3, 16);
 }
 
 bool photoFormatWritesDng(PhotoCaptureFormat format)
@@ -4317,7 +4321,9 @@ public:
             writtenFiles_.clear();
         }
         // Opened before the writers start: they read mediaDirFd_ (noteWrittenFile).
-        const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000);
+        // env > media tuning file > 1000; read per take.
+        const MediaTune mediaTune = mediaTuneForConfiguredRoot();
+        const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", mediaTune.syncMs.value_or(1000u), 0, 60000);
         if (syncMs > 0) {
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
@@ -4355,7 +4361,8 @@ public:
                                       : dngPageCacheDrop() == DngPageCacheDrop::Off ? "off"
                                       : "sync")
                   << " writeback=" << (startWritebackPerFrame() ? "on" : "off")
-                  << " sync_ms=" << syncMs;
+                  << " sync_ms=" << syncMs
+                  << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no");
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
@@ -4667,7 +4674,8 @@ public:
     // capture frames (C0001, 2026-10-26). APERTAR_DNG_WRITEBACK=0 turns it off.
     static bool startWritebackPerFrame()
     {
-        static const bool enabled = boolEnvValue("APERTAR_DNG_WRITEBACK", true);
+        // env > media tuning file > on; fixed for the life of the process (a change needs a Core restart).
+        static const bool enabled = boolEnvValue("APERTAR_DNG_WRITEBACK", mediaTuneForConfiguredRoot().writeback.value_or(true));
         return enabled;
     }
 

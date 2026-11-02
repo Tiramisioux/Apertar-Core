@@ -4,6 +4,7 @@
 
 #include "cdng/IfdBuilder.hpp"
 #include "color/ColorProfileConfig.hpp"
+#include "util/MediaProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,7 +85,17 @@ DngPageCacheDrop dngPageCacheDrop()
 {
     static const DngPageCacheDrop mode = []() {
         const char *text = std::getenv("APERTAR_DNG_DONTNEED");
-        if (!text || !*text || std::strcmp(text, "sync") == 0)
+        if (!text || !*text) {
+            // No environment variable: the media tuning file (override, then base), else sync.
+            // Computed once per process; a change in the file needs a Core restart.
+            const MediaTune tune = mediaTuneForConfiguredRoot();
+            if (tune.dontneed && *tune.dontneed == "writer")
+                return DngPageCacheDrop::Writer;
+            if (tune.dontneed && *tune.dontneed == "off")
+                return DngPageCacheDrop::Off;
+            return DngPageCacheDrop::Sync;
+        }
+        if (std::strcmp(text, "sync") == 0)
             return DngPageCacheDrop::Sync;
         if (std::strcmp(text, "writer") == 0 || std::strcmp(text, "1") == 0)
             return DngPageCacheDrop::Writer;
