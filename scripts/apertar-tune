@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""apertar-tune: edit Core's media tuning files from the command line.
+
+Core reads two INI files when it starts:
+
+  base      /home/pi/apertar-media-tune.conf            (kept across reboots; only `init` ever creates it)
+  override  /run/apertar-media/media-tune.override.conf   (tmpfs, gone at reboot; this tool edits it)
+            (/run/apertar-media comes from config/apertar-media.tmpfiles.conf; not /dev/shm, where logind's
+             RemoveIPC deletes pi's files when pi's last session ends)
+
+Precedence in Core: environment variables > override file > base file > code defaults; inside a file
+[class.fs] > [fs] > [class] > [default]. Core reads the files once, at start, so every change needs
+    sudo systemctl restart apertar-core
+Core logs one journal line per start (`ApertarCore media tune: file=... override=... source: ...`);
+`apertar-tune show` prints the latest ones. This tool does no resolution of its own: Core is the source of truth.
+
+Usage:
+  apertar-tune show
+  apertar-tune set KEY=VALUE [KEY=VALUE ...] [--section S]
+  apertar-tune unset KEY [KEY ...] [--section S]
+  apertar-tune clear
+  apertar-tune init [--from PATH]
+  global options (put them before the subcommand; they exist for tests only):
+    --base PATH       use PATH instead of /home/pi/apertar-media-tune.conf
+    --override PATH   use PATH instead of /run/apertar-media/media-tune.override.conf
+
+Sections (default: default; names are case-insensitive and stored lower case):
+  default | a filesystem: exfat ext4 vfat ntfs ntfs-fuse other
+          | a connection class: pi-nvme usb-uas usb-storage sd-card other
+          | class.filesystem, e.g. pi-nvme.exfat
+
+Keys and values:
+  dontneed           sync | writer | off
+  writeback          on | off | 1 | 0 | true | false
+  sync_ms            integer 0..60000
+  raw_buffers        integer 3..16
+  extra_raw_buffers  integer 0..8
+  workers            integer 1..8
+  queue              integer 4..64
+  kernel_tune        on | off | 1 | 0 | true | false
+
+Examples:
+  apertar-tune set dontneed=writer sync_ms=500
+  apertar-tune set workers=4 --section pi-nvme.exfat
+  apertar-tune unset sync_ms
+  apertar-tune clear && sudo systemctl restart apertar-core
+
+`set` and `unset` change only the override file, atomically (temp file next to it, then os.replace); every other
+line and its order is kept. The base file is never edited except by `init`, which copies the repo template
+(<script dir>/../config/apertar-media-tune.conf) to the base path when that file does not exist yet and never
+overwrites an existing one. Runs as user pi, refuses root.
+
+Exit codes: 0 ok, 2 usage or validation error (nothing changed), 1 I/O error.
+"""
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_BASE = "/home/pi/apertar-media-tune.conf"
+DEFAULT_OVERRIDE = "/run/apertar-media/media-tune.override.conf"
+OVERRIDE_HEADER = "# written by apertar-tune; gone at reboot (tmpfs)"
+RESTART_HINT = "restart apertar-core to apply: sudo systemctl restart apertar-core"
+JOURNAL_MARK = "ApertarCore media tune:"
+
+FILESYSTEMS = ("exfat", "ext4", "vfat", "ntfs", "ntfs-fuse", "other")
+CLASSES = ("pi-nvme", "usb-uas", "usb-storage", "sd-card", "other")
+BOOLS = ("on", "off", "1", "0", "true", "false")
+ENUM_KEYS = {"dontneed": ("sync", "writer", "off")}
+BOOL_KEYS = ("writeback", "kernel_tune")
+INT_KEYS = {
+    "sync_ms": (0, 60000),
+    "raw_buffers": (3, 16),
+    "extra_raw_buffers": (0, 8),
+    "workers": (1, 8),
+    "queue": (4, 64),
+}
+ALL_KEYS = tuple(ENUM_KEYS) + BOOL_KEYS + tuple(INT_KEYS)
+
+
+class Fail(Exception):
+    def __init__(self, msg, code):
+        Exception.__init__(self, msg)
+        self.code = code
+
+
+def die(msg, code=2):
+    raise Fail(msg, code)
+
+
+# ---------------------------------------------------------------- validation
+
+def valid_section(name):
+    if name == "default" or name in FILESYSTEMS or name in CLASSES:
+        return True
+    if name.count(".") == 1:
+        cls, fs = name.split(".")
+        return cls in CLASSES and fs in FILESYSTEMS
+    return False
+
+
+def check_section(raw):
+    name = raw.strip().lower()
+    if not valid_section(name):
+        die("bad section '%s': use default, a filesystem (%s), a connection class (%s) or class.filesystem "
+            "(e.g. pi-nvme.exfat)" % (raw, ", ".join(FILESYSTEMS), ", ".join(CLASSES)))
+    return name
+
+
+def check_key(raw):
+    key = raw.strip().lower()
+    if key not in ALL_KEYS:
+        return None, "unknown key '%s' (known: %s)" % (raw, ", ".join(ALL_KEYS))
+    return key, None
+
+
+def check_value(key, raw):
+    """Return (normalised value, None) or (None, error message)."""
+    val = raw.strip().lower()
+    if key in ENUM_KEYS:
+        if val not in ENUM_KEYS[key]:
+            return None, "%s: bad value '%s' (use %s)" % (key, raw, " | ".join(ENUM_KEYS[key]))
+    elif key in BOOL_KEYS:
+        if val not in BOOLS:
+            return None, "%s: bad value '%s' (use %s)" % (key, raw, " | ".join(BOOLS))
+    else:
+        lo, hi = INT_KEYS[key]
+        if not re.fullmatch(r"[0-9]{1,9}", val):
+            return None, "%s: bad value '%s' (an integer %d..%d)" % (key, raw, lo, hi)
+        if not lo <= int(val) <= hi:
+            return None, "%s: %s is out of range (%d..%d)" % (key, raw, lo, hi)
+        val = str(int(val))
+    return val, None
+
+
+# ---------------------------------------------------------------- file handling
+
+def read_lines(path):
+    """Lines of the file without line endings, or None when it does not exist."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape", newline=None) as f:
+            return f.read().splitlines()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        die("cannot read %s: %s" % (path, e.strerror or e), 1)
+
+
+def write_atomic(path, lines):
+    """Temp file in the same directory as `path` (/run/apertar-media for the real override), then os.replace."""
+    directory = os.path.dirname(os.path.abspath(path))
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".apertar-tune.", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write("\n".join(lines) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        tmp = None
+    except OSError as e:
+        die("cannot write %s: %s" % (path, e.strerror or e), 1)
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def classify(line):
+    """('section', name) | ('kv', key, value) | ('other',) for one raw line."""
+    s = line.strip()
+    if not s or s[0] in "#;":
+        return ("other",)
+    if s.startswith("[") and s.endswith("]"):
+        return ("section", s[1:-1].strip().lower())
+    if "=" in s:
+        k, v = s.split("=", 1)
+        return ("kv", k.strip().lower(), v.strip())
+    return ("other",)
+
+
+def section_ranges(lines, name):
+    """[(header_index, end_index_exclusive)] for every [name] block."""
+    out = []
+    start = None
+    for i, line in enumerate(lines):
+        c = classify(line)
+        if c[0] == "section":
+            if start is not None:
+                out.append((start, i))
+                start = None
+            if c[1] == name:
+                start = i
+    if start is not None:
+        out.append((start, len(lines)))
+    return out
+
+
+def key_lines(lines, ranges, key):
+    """Indices of `key = ...` lines inside the given section ranges."""
+    hits = []
+    for a, b in ranges:
+        for i in range(a + 1, b):
+            c = classify(lines[i])
+            if c[0] == "kv" and c[1] == key:
+                hits.append(i)
+    return hits
+
+
+def get_value(lines, section, key):
+    ranges = section_ranges(lines, section)
+    hits = key_lines(lines, ranges, key)
+    if not hits:
+        return None
+    return classify(lines[hits[-1]])[2]
+
+
+def set_value(lines, section, key, value):
+    """Return a new list of lines with section/key set (the last existing occurrence replaced, duplicates dropped)."""
+    lines = list(lines)
+    ranges = section_ranges(lines, section)
+    new_line = "%s = %s" % (key, value)
+    hits = key_lines(lines, ranges, key)
+    if hits:
+        lines[hits[-1]] = new_line
+        for i in reversed(hits[:-1]):
+            del lines[i]
+        return lines
+    if ranges:
+        a, b = ranges[-1]
+        at = b
+        while at > a + 1 and not lines[at - 1].strip():
+            at -= 1
+        lines.insert(at, new_line)
+        return lines
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines:
+        lines.append("")
+    lines.append("[%s]" % section)
+    lines.append(new_line)
+    return lines
+
+
+def unset_value(lines, section, key):
+    """Remove every `key` line of the section; drop the section when no key lines are left."""
+    lines = list(lines)
+    ranges = section_ranges(lines, section)
+    for i in reversed(key_lines(lines, ranges, key)):
+        del lines[i]
+    # Ranges moved; find sections left without any key line and remove them.
+    for a, b in reversed(section_ranges(lines, section)):
+        if not any(classify(lines[i])[0] == "kv" for i in range(a + 1, b)):
+            del lines[a:b]
+            if a > 0 and not lines[a - 1].strip() and (a >= len(lines) or not lines[a].strip()):
+                del lines[a - 1]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+# ---------------------------------------------------------------- subcommands
+
+def show_file(label, path):
+    print("%s: %s" % (label, path))
+    try:
+        lines = read_lines(path)
+    except Fail as e:
+        print("  (%s)" % e)
+        return
+    if lines is None:
+        print("  absent")
+        return
+    if not lines:
+        print("  (empty file)")
+    for line in lines:
+        print("  | " + line)
+
+
+def cmd_show(args):
+    show_file("base", args.base)
+    print()
+    show_file("override", args.override)
+    print()
+    print("journal (journalctl -u apertar-core -b):")
+    try:
+        r = subprocess.run(["journalctl", "-u", "apertar-core", "-b", "--no-pager"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                           errors="replace", timeout=20)
+    except FileNotFoundError:
+        print("  journalctl not available on this machine")
+        return 0
+    except (OSError, subprocess.SubprocessError) as e:
+        print("  journalctl failed: %s" % e)
+        return 0
+    if r.returncode != 0:
+        err = (r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1]
+        print("  journalctl failed: %s" % err)
+        return 0
+    found = [l for l in r.stdout.splitlines() if JOURNAL_MARK in l]
+    if not found:
+        print("  no '%s' line found this boot" % JOURNAL_MARK)
+        return 0
+    for l in found[-3:]:
+        print("  " + l)
+    return 0
+
+
+def cmd_set(args):
+    section = check_section(args.section)
+    errors = []
+    pairs = []
+    seen = set()
+    for item in args.pairs:
+        if "=" not in item:
+            errors.append("'%s' is not KEY=VALUE" % item)
+            continue
+        raw_k, raw_v = item.split("=", 1)
+        key, err = check_key(raw_k)
+        if err:
+            errors.append(err)
+            continue
+        if key in seen:
+            errors.append("%s given twice" % key)
+            continue
+        seen.add(key)
+        val, err = check_value(key, raw_v)
+        if err:
+            errors.append(err)
+            continue
+        pairs.append((key, val))
+    if errors:
+        die("nothing changed:\n  " + "\n  ".join(errors))
+    lines = read_lines(args.override)
+    if lines is None:
+        lines = [OVERRIDE_HEADER]
+    report = []
+    for key, val in pairs:
+        old = get_value(lines, section, key)
+        lines = set_value(lines, section, key, val)
+        report.append("override: %s %s: %s -> %s" % (section, key, old if old is not None else "unset", val))
+    write_atomic(args.override, lines)
+    for r in report:
+        print(r)
+    print(RESTART_HINT)
+    return 0
+
+
+def cmd_unset(args):
+    section = check_section(args.section)
+    errors = []
+    keys = []
+    for raw in args.keys:
+        key, err = check_key(raw)
+        if err:
+            errors.append(err)
+        elif key not in keys:
+            keys.append(key)
+    if errors:
+        die("nothing changed:\n  " + "\n  ".join(errors))
+    lines = read_lines(args.override)
+    if lines is None:
+        for key in keys:
+            print("override: %s %s: unset -> unset" % (section, key))
+        print("override file %s does not exist; nothing to do" % args.override)
+        print(RESTART_HINT)
+        return 0
+    report = []
+    changed = False
+    for key in keys:
+        old = get_value(lines, section, key)
+        if old is not None:
+            lines = unset_value(lines, section, key)
+            changed = True
+        report.append("override: %s %s: %s -> unset" % (section, key, old if old is not None else "unset"))
+    if changed:
+        write_atomic(args.override, lines)
+    for r in report:
+        print(r)
+    print(RESTART_HINT)
+    return 0
+
+
+def cmd_clear(args):
+    path = args.override
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            die("%s is a directory, not touching it" % path, 1)
+        os.unlink(path)
+    except FileNotFoundError:
+        print("override file %s does not exist; nothing to clear" % path)
+    except OSError as e:
+        die("cannot remove %s: %s" % (path, e.strerror or e), 1)
+    else:
+        print("removed %s" % path)
+    print(RESTART_HINT)
+    return 0
+
+
+def cmd_init(args):
+    dest = args.base
+    if os.path.lexists(dest):
+        print("%s already exists; left as it is (init never overwrites)" % dest)
+        return 0
+    if args.src:
+        src = args.src
+    else:
+        here = os.path.dirname(os.path.realpath(__file__))
+        src = os.path.join(here, "..", "config", "apertar-media-tune.conf")
+    src = os.path.normpath(src)
+    if not os.path.isfile(src):
+        die("template %s not found (use --from PATH)" % src, 1)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".apertar-tune.", suffix=".tmp", dir=os.path.dirname(os.path.abspath(dest)))
+        os.close(fd)
+        shutil.copyfile(src, tmp)
+        os.chmod(tmp, 0o644)
+        try:
+            os.link(tmp, dest)  # fails if dest appeared meanwhile: never overwrites
+        except FileExistsError:
+            print("%s already exists; left as it is (init never overwrites)" % dest)
+            return 0
+    except OSError as e:
+        die("cannot create %s: %s" % (dest, e.strerror or e), 1)
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    print("created %s from %s" % (dest, src))
+    print(RESTART_HINT)
+    return 0
+
+
+# ---------------------------------------------------------------- main
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        sys.stderr.write("apertar-tune: %s\n" % message)
+        sys.stderr.write("try: apertar-tune --help\n")
+        sys.exit(2)
+
+
+def build_parser():
+    p = Parser(prog="apertar-tune", description="Edit Core's media tuning files (see the header of this script).")
+    p.add_argument("--base", default=DEFAULT_BASE, metavar="PATH", help="base file (tests only)")
+    p.add_argument("--override", default=DEFAULT_OVERRIDE, metavar="PATH", help="override file (tests only)")
+    sub = p.add_subparsers(dest="cmd", metavar="{show,set,unset,clear,init}")
+    sub.required = True
+    sub.add_parser("show", help="print both files and Core's latest 'media tune' journal lines")
+    s = sub.add_parser("set", help="set KEY=VALUE pairs in the override file")
+    s.add_argument("pairs", nargs="+", metavar="KEY=VALUE")
+    s.add_argument("--section", default="default", metavar="S")
+    u = sub.add_parser("unset", help="remove keys from the override file")
+    u.add_argument("keys", nargs="+", metavar="KEY")
+    u.add_argument("--section", default="default", metavar="S")
+    sub.add_parser("clear", help="delete the override file")
+    i = sub.add_parser("init", help="create the base file from the template if it does not exist")
+    i.add_argument("--from", dest="src", metavar="PATH", help="template (default: <script dir>/../config/apertar-media-tune.conf)")
+    return p
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
+    if os.geteuid() == 0:
+        sys.stderr.write("apertar-tune: refusing to run as root; run it as user pi (it uses sudo only in the hint it prints)\n")
+        return 2
+    handlers = {"show": cmd_show, "set": cmd_set, "unset": cmd_unset, "clear": cmd_clear, "init": cmd_init}
+    try:
+        return handlers[args.cmd](args)
+    except Fail as e:
+        sys.stderr.write("apertar-tune: %s\n" % e)
+        return e.code
+    except BrokenPipeError:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
