@@ -4317,7 +4317,8 @@ public:
             writtenFiles_.clear();
         }
         // Opened before the writers start: they read mediaDirFd_ (noteWrittenFile).
-        if (const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000); syncMs > 0) {
+        const unsigned int syncMs = unsignedEnvValue("APERTAR_MEDIA_SYNC_MS", 1000, 0, 60000);
+        if (syncMs > 0) {
             mediaDirFd_ = ::open(folderPathString_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (mediaDirFd_ >= 0)
                 spawnWorker([this, syncMs, fd = mediaDirFd_] { syncLoop(fd, std::chrono::milliseconds(syncMs)); });
@@ -4349,7 +4350,12 @@ public:
                                       : recordingFormat_ == RecordingFormat::LossyDng ? toWireValue(settings_.lossyDngRatio)
                                       : "none");
         std::cerr << " media_class=" << mediaClassName(mediaProfile_.mediaClass)
-                  << " media_fs=" << mediaFilesystemName(mediaProfile_.filesystem);
+                  << " media_fs=" << mediaFilesystemName(mediaProfile_.filesystem)
+                  << " dontneed=" << (dngPageCacheDrop() == DngPageCacheDrop::Writer ? "writer"
+                                      : dngPageCacheDrop() == DngPageCacheDrop::Off ? "off"
+                                      : "sync")
+                  << " writeback=" << (startWritebackPerFrame() ? "on" : "off")
+                  << " sync_ms=" << syncMs;
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
