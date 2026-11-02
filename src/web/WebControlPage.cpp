@@ -4707,6 +4707,10 @@ std::string_view webControlPageHtml()
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/record.png" alt=""></span>
             <span>Record</span>
           </button>
+          <button class="settings-nav-item" data-panel="modes" type="button">
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/resolution.png" alt=""></span>
+            <span>Modes</span>
+          </button>
           <button class="settings-nav-item" data-panel="audio" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/audio.png" alt=""></span>
             <span>Audio</span>
@@ -4915,54 +4919,6 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsModeLadderCard">
-              <div class="settings-card-head">
-                <div>
-                  <h3 class="settings-card-title">Mode Ladder</h3>
-                  <p class="settings-card-copy">Switches resolution automatically when you change FPS. Each resolution runs to its max FPS, then the next one takes over.</p>
-                </div>
-                <div class="online-pill off" id="settingsModeLadderValue">Off</div>
-              </div>
-              <div class="ladder-box">
-                <div class="ladder-box-text">
-                  <div class="ladder-box-title">Activate ladder</div>
-                  <div class="subtle-note" id="settingsModeLadderSwitchNote">Off: changing FPS never switches resolution.</div>
-                </div>
-                <div class="pill-grid ladder-pair" id="settingsModeLadderOptions"></div>
-              </div>
-              <div class="ladder-box">
-                <div class="ladder-box-text">
-                  <span class="input-label">Running now</span>
-                  <div class="ladder-now" id="settingsModeLadderNow">--</div>
-                  <div class="subtle-note" id="settingsModeLadderNowNote"></div>
-                </div>
-                <div class="crop-frame large" id="settingsModeLadderNowCrop" role="img"></div>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">During a take</span>
-                <span class="ladder-row-range">FPS stops at the running resolution's ceiling. Resolutions change between takes only, with a short preview blink.</span>
-                <span class="subtle-note">While the ladder is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
-              </div>
-              <div class="field-stack">
-                <div class="ladder-list-head">
-                  <span class="input-label">Resolutions array</span>
-                  <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
-                </div>
-                <div class="ladder-list" id="settingsModeLadderList"></div>
-              </div>
-            </div>
-
-            <div class="settings-card" id="settingsSensorModesCard">
-              <div class="settings-card-head">
-                <div>
-                  <h3 class="settings-card-title">Activated sensor modes</h3>
-                  <p class="settings-card-copy" id="settingsSensorModesCopy"></p>
-                </div>
-              </div>
-              <div class="pill-grid ladder-aspects" id="settingsSensorModeAspectFilters" role="group" aria-label="Aspect ratio"></div>
-              <div class="ladder-groups" id="settingsSensorModeGroups"></div>
-            </div>
-
             <div class="settings-card">
               <div class="settings-card-head">
                 <div>
@@ -5148,6 +5104,56 @@ std::string_view webControlPageHtml()
                   <div class="settings-summary-label">Storage</div>
                   <div class="settings-summary-value" id="settingsStorageSummary">--</div>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-panel="modes">
+            <div class="settings-card" id="settingsSensorModesCard">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Activated sensor modes</h3>
+                  <p class="settings-card-copy" id="settingsSensorModesCopy"></p>
+                </div>
+              </div>
+              <div class="pill-grid ladder-aspects" id="settingsSensorModeAspectFilters" role="group" aria-label="Aspect ratio"></div>
+              <div class="ladder-groups" id="settingsSensorModeGroups"></div>
+            </div>
+
+            <div class="settings-card" id="settingsModeLadderCard">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Mode Ladder</h3>
+                  <p class="settings-card-copy">Switches resolution automatically when you change FPS. Each resolution runs to its max FPS, then the next one takes over.</p>
+                </div>
+                <div class="online-pill off" id="settingsModeLadderValue">Off</div>
+              </div>
+              <div class="ladder-box">
+                <div class="ladder-box-text">
+                  <div class="ladder-box-title">Activate ladder</div>
+                  <div class="subtle-note" id="settingsModeLadderSwitchNote">Off: changing FPS never switches resolution.</div>
+                </div>
+                <div class="pill-grid ladder-pair" id="settingsModeLadderOptions"></div>
+              </div>
+              <div class="ladder-box">
+                <div class="ladder-box-text">
+                  <span class="input-label">Running now</span>
+                  <div class="ladder-now" id="settingsModeLadderNow">--</div>
+                  <div class="subtle-note" id="settingsModeLadderNowNote"></div>
+                </div>
+                <div class="crop-frame large" id="settingsModeLadderNowCrop" role="img"></div>
+              </div>
+              <div class="field-stack">
+                <span class="input-label">During a take</span>
+                <span class="ladder-row-range">FPS stops at the running resolution's ceiling. Resolutions change between takes only, with a short preview blink.</span>
+                <span class="subtle-note">While the ladder is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
+              </div>
+              <div class="field-stack">
+                <div class="ladder-list-head">
+                  <span class="input-label">Resolutions array</span>
+                  <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
+                </div>
+                <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
             </div>
           </section>
@@ -6529,6 +6535,10 @@ std::string_view webControlPageHtml()
         title: "Record",
         copy: "Still mode, recording format, timecode, and capture setup.",
       },
+      modes: {
+        title: "Modes",
+        copy: "The sensor modes the camera offers, and the mode ladder that picks one by FPS.",
+      },
       favorites: {
         title: "Favorites",
         copy: "Manage the same quick access favorites list used by the on-device UI.",
@@ -7895,7 +7905,7 @@ std::string_view webControlPageHtml()
     function openModeLadderCard() {
       if (!state.settingsOpen)
         setSettingsOpen(true);
-      setSettingsPanel("record");
+      setSettingsPanel("modes");
       const card = document.getElementById("settingsModeLadderCard");
       if (card)
         window.requestAnimationFrame(() => card.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -10000,7 +10010,7 @@ std::string_view webControlPageHtml()
       document.body.classList.toggle("settings-open", state.settingsOpen);
       document.getElementById("settingsOverlay").classList.toggle("hidden", !state.settingsOpen);
       if (state.settingsOpen && state.activeSettingsPanel === "audio") void refreshAudioCaptureCapabilities();
-      if (state.settingsOpen && state.activeSettingsPanel === "record") void fetchModeLadder(false);
+      if (state.settingsOpen && state.activeSettingsPanel === "modes") void fetchModeLadder(false);
       if (state.settingsOpen && state.activeSettingsPanel === "system" && !bootConfig.payload && !bootConfigBusy()) void loadBootConfig(true);
     }
 
@@ -10063,7 +10073,7 @@ std::string_view webControlPageHtml()
         void loadControls(true);
       if (normalized === "record" && state.snapshot)
         window.requestAnimationFrame(() => drawImuAxisVisual(state.snapshot.imu || {}));
-      if (normalized === "record" && state.settingsOpen)
+      if (normalized === "modes" && state.settingsOpen)
         void fetchModeLadder(false);
     }
 
