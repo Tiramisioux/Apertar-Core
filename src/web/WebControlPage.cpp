@@ -3561,7 +3561,7 @@ std::string_view webControlPageHtml()
     /* GPIO out: pin | function | active | Test, in the second column of a row like GPIO in's. */
     .controls-output-fields {
       display: grid;
-      grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 112px;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 112px 112px;
       gap: 10px;
       align-items: center;
     }
@@ -17743,6 +17743,23 @@ std::string_view webControlPageHtml()
         showToast(result.ok ? peripheral.title + ": test sent." : (result.error || "Could not test it."), !result.ok);
       });
       fields.appendChild(test);
+      // Remove: the same as pin None (the output off), saved with Save Controls; Undo puts back what the file has.
+      const fileOn = tallyFileEnabled(peripheral) === "true";
+      const removedHere = fileOn && current === "none";
+      const remove = buildControlsRemove(peripheral.title || "Tally LED", removedHere, () => {
+        if (removedHere) {
+          ["target", "line", "pcf_pin", "enabled"].forEach((key) => controlsState.settingEdits.delete(peripheral.section + "|" + key));
+        } else {
+          setTallyField(peripheral, "line", "-1");
+          setTallyField(peripheral, "pcf_pin", "-1");
+          syncTallyEnabled(peripheral);
+        }
+        renderHardware();
+        renderControls();
+      });
+      if (!fileOn && current === "none")
+        remove.disabled = true;                          // nothing to remove: no pin in the file or here
+      fields.appendChild(remove);
       element.appendChild(fields);
       return element;
     }
