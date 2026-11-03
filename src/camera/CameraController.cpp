@@ -3416,11 +3416,11 @@ double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution re
 // Back-end limits that are not the sensor's, applied after the sensor value; nullopt = none.
 std::optional<double> backendMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
-    // IMX585 Clear HDR 16-bit: 25 fps is the accepted ceiling in every mode until the others are measured.
-    // At 30 the back end delivers about 28 and drops frames (KB working/research-30fps-answer.md).
-    if (sensorFamily == SensorFamily::Imx585 && settings.clearHdr &&
-        normalizeRawBitDepth(settings.rawBitDepth) == 16)
-        return 25.0;
+    // IMX585 Clear HDR 16-bit had a 25 fps cap here in every mode. Removed (User, 2026-11-03): the driver's
+    // maximum applies (4K 30, the height crops up to 42). At 30 in 4K the ISP back end is the limit and frames
+    // are lost under load (KB working/research-30fps-answer.md, working/drop-frames/tests-2026-11/findings-2026-11-03.md).
+    (void)settings;
+    (void)sensorFamily;
     return std::nullopt;
 }
 
