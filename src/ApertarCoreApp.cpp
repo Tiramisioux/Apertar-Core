@@ -12028,6 +12028,32 @@ void ApertarCoreApp::noteInputSeen(const std::string &sectionKey)
     lastInputAt_ = std::chrono::steady_clock::now();
 }
 
+// test_input section=<section> key=<key>: run what that key holds in the saved file, as if its pin had moved, through
+// the same path as the input threads (standby wake, action sequences). The page can only fire what a control would.
+std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
+{
+    const std::string section = command.string("section").value_or("");
+    const std::string key = command.string("key").value_or("");
+    const hwconf::Document doc = hwconf::parse(hardware::configStore().info().text);
+    for (const hwconf::ControlRow &row : hwconf::controlRows(doc)) {
+        if (row.source != section)
+            continue;
+        for (const hwconf::ControlLine &line : row.lines) {
+            if (line.key != key)
+                continue;
+            if (!hwconf::sectionOn(doc, section))
+                return errorReply(command.id, row.title + " is switched off: switch it on and save first.");
+            if (line.actions.empty() || (line.actions.size() == 1 && line.actions[0] == "none"))
+                return errorReply(command.id, "Nothing is assigned to " + row.title + " " + line.label + ".");
+            const bool turn = key.size() > 3 && (key.compare(key.size() - 3, 3, "_cw") == 0 ||
+                                                 (key.size() > 4 && key.compare(key.size() - 4, 4, "_ccw") == 0));
+            handleHardwareInputAction(line.raw, !turn);   // a turn does not wake from standby, as on the knob
+            return okReply(command.id, "\"section\":\"" + escapeJson(section) + "\",\"key\":\"" + escapeJson(key) + "\"");
+        }
+    }
+    return errorReply(command.id, "test_input: no control " + section + " " + key + " in the saved file.");
+}
+
 // The hardware commands that only read: they run without the command lock.
 std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
 {
@@ -12175,6 +12201,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
     if (const auto reply = handleReadOnlyHardwareCommand(command))
         return *reply;
+    // The WebUI's Try and Remote controls: the actions are commands that take the command lock themselves.
+    if (command.name == "test_input")
+        return testInputReply(command);
     // Record pressed while the safety-stop thread drains the previous take (it holds commandMutex_ and the controller
     // mutex for that): cut the flush short BEFORE waiting for the lock. The queue's own mutex is all this needs, so the
     // drain ends as soon as the writers have finished the frames they already hold, and the lock below frees up.

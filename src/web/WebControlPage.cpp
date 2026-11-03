@@ -3374,10 +3374,10 @@ std::string_view webControlPageHtml()
       color: var(--muted);
     }
 
-    /* Gesture or label | action | Remove: the same three columns on every line, so actions and Removes line up. */
+    /* Gesture or label | action | Try and Remove: the same three columns on every line, so actions and Removes line up. */
     .controls-line {
       display: grid;
-      grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr) 112px;
+      grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr) 200px;
       gap: 10px;
       align-items: center;
       margin: 0 0 8px;
@@ -3392,8 +3392,35 @@ std::string_view webControlPageHtml()
       color: var(--muted);
     }
 
+    .controls-line-remove {
+      display: flex;
+      gap: 6px;
+    }
+
     .controls-line-remove > button {
-      width: 100%;
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .controls-line-remove > button.controls-try {
+      flex: 0 0 86px;
+    }
+
+    .controls-line-remove > button.controls-try-turn {
+      flex: 0 0 40px;
+    }
+
+    /* Remote controls (main page, under Camera settings): the Camera settings blocks and pills. */
+    .remote-note {
+      margin: -12px 0 16px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    #remoteControlsRows .pill-button {
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     .controls-add-action {
@@ -4536,6 +4563,19 @@ std::string_view webControlPageHtml()
                 </div>
               </section>
             </div>
+          </div>
+        </div>
+
+        <div class="card" data-search="remote controls simulate press click hold turn knob button switch from afar">
+          <div class="card-body">
+            <div class="section-head">
+              <div class="section-icon">
+                <img class="icon-image" src="/icons/settings.png" alt="">
+              </div>
+              <h2 class="section-title">Remote controls</h2>
+            </div>
+            <p class="remote-note">Use the camera's buttons, switches and knobs from here: each one runs what the control does, as saved. Hold an arrow to keep turning.</p>
+            <div class="stack" id="remoteControlsRows"></div>
           </div>
         </div>
       </section>
@@ -16735,7 +16775,7 @@ std::string_view webControlPageHtml()
 
     // One line of a row: what it reacts to (a label, or a button's gesture dropdown), its action dropdown, and a
     // fixed cell on the right for its Remove, so the action columns and the Removes of every line line up.
-    function buildControlsLine(name, select, remove, removed) {
+    function buildControlsLine(name, select, remove, removed, tryButtons) {
       const wrap = document.createElement("div");
       wrap.className = "controls-line" + (removed ? " removed" : "");
       if (typeof name === "string") {
@@ -16749,10 +16789,50 @@ std::string_view webControlPageHtml()
       wrap.appendChild(select || document.createElement("div"));
       const cell = document.createElement("div");
       cell.className = "controls-line-remove";
+      (Array.isArray(tryButtons) ? tryButtons : tryButtons ? [tryButtons] : []).forEach((button) => cell.appendChild(button));
       if (remove)
         cell.appendChild(remove);
       wrap.appendChild(cell);
       return wrap;
+    }
+
+    // test_input: Core runs what the control's key holds in the saved file, as if its pin had moved (Try, Remote Controls).
+    async function sendTestInput(section, key, name, quiet) {
+      let result;
+      try {
+        result = await controlsCall({ cmd: "test_input", section: section, key: key });
+      } catch (error) {
+        result = { ok: false, error: "Core did not answer." };
+      }
+      if (!result.ok || !quiet)
+        showToast(result.ok ? name + ": sent." : (result.error || "Could not run it."), !result.ok);
+      return !!result.ok;
+    }
+
+    const controlsSaveFirst = "Save first: Try runs what is saved.";
+
+    // Why a line cannot be tried yet, or null: Try runs the saved action, so an unsaved edit waits for Save.
+    function controlsTryWhy(row, key, value) {
+      const line = (row.lines || []).find((candidate) => candidate.key === key);
+      if (!row.enabled)
+        return row.title + " is switched off.";
+      if (!line || (value || "") !== line.raw)
+        return controlsSaveFirst;
+      if (line.raw === "" || line.raw === "none")
+        return "Nothing is assigned.";
+      return null;
+    }
+
+    function buildControlsTry(name, section, key, why, text) {
+      const button = document.createElement("button");
+      button.className = "secondary-button preset-action " + (text ? "controls-try-turn" : "controls-try");
+      button.type = "button";
+      button.textContent = text || "Try";
+      button.setAttribute("aria-label", "Try " + name);
+      button.title = why || "Run " + name + " as saved, as if the control were used.";
+      button.disabled = !!why || controlsState.saving;
+      button.addEventListener("click", () => sendTestInput(section, key, name, false));
+      return button;
     }
 
     function buildControlsRemove(label, undo, onClick) {
@@ -16787,7 +16867,7 @@ std::string_view webControlPageHtml()
     // A GPIO button's lines, as in Cinemate: each line's gesture is a dropdown (the ones its other lines use are
     // greyed out), each line has its own Remove, and + Add action adds the next gesture the button lacks.
     // Removing the last line of a new button drops the button (onEmpty).
-    function appendButtonLines(container, title, section, base, lines, gestures, onEmpty) {
+    function appendButtonLines(container, title, section, base, lines, gestures, onEmpty, tryRow) {
       const usedBy = (except) => new Set(lines.filter((line) => line !== except && !line.removed).map((line) => line.suffix));
       lines.forEach((line) => {
         const taken = usedBy(line);
@@ -16826,7 +16906,11 @@ std::string_view webControlPageHtml()
         });
         if (line.removed && taken.has(line.suffix))
           remove.disabled = true;                    // another line took its gesture meanwhile
-        container.appendChild(buildControlsLine(name, select, remove, line.removed));
+        // A saved line of a saved button can be tried (tryRow); a moved, renamed or removed one waits for Save.
+        // A new button or a new line shows a Try that waits for Save too, so every line has one.
+        const tryButton = buildControlsTry(title + " " + label, section, line.orig || base + line.suffix,
+          !tryRow || !line.orig || line.removed || line.orig !== base + line.suffix ? controlsSaveFirst : controlsTryWhy(tryRow, line.orig, line.value));
+        container.appendChild(buildControlsLine(name, select, remove, line.removed, tryButton));
       });
       const free = [gestures[0].suffix, ...controlsAddOrder].filter((suffix) => !usedBy(null).has(suffix));
       if (free.length > 0) {
@@ -16908,7 +16992,12 @@ std::string_view webControlPageHtml()
               controlsState.removed.add(rowId);
             renderControls();
           }) : null;
-          lines.appendChild(buildControlsLine("Turn adjusts", turn, remove, false));
+          const turnWhy = (line) => removed ? controlsSaveFirst : controlsTryWhy(row, line.key, valueOf(line) === "none" && line.raw === "" ? "" : valueOf(line));
+          const tryTurns = [
+            buildControlsTry("turning " + row.title + " counter-clockwise", section, ccwLine.key, turnWhy(ccwLine), "◀"),
+            buildControlsTry("turning " + row.title + " clockwise", section, cwLine.key, turnWhy(cwLine), "▶"),
+          ];
+          lines.appendChild(buildControlsLine("Turn adjusts", turn, remove, false, tryTurns));
           fixedLines = fixedLines.filter((line) => line !== cwLine && line !== ccwLine);
         }
       }
@@ -16927,10 +17016,12 @@ std::string_view webControlPageHtml()
           }
           renderControls();
         }) : null;
-        lines.appendChild(buildControlsLine(controlsLineLabel(row, line), select, remove, false));
+        const tryButton = buildControlsTry(row.title + " " + controlsLineLabel(row, line), section, line.key,
+          removed ? controlsSaveFirst : controlsTryWhy(row, line.key, edit ? (edit.value === "none" && line.raw === "" ? "" : edit.value) : line.raw));
+        lines.appendChild(buildControlsLine(controlsLineLabel(row, line), select, remove, false, tryButton));
       });
       if (push && !(wholeRow && removed))
-        appendButtonLines(lines, row.title, section, row.base, push.lines, gestures, null);
+        appendButtonLines(lines, row.title, section, row.base, push.lines, gestures, null, row);
       element.className = "controls-row" + (row.enabled ? "" : " off") + (removed ? " removed" : "") + (changed ? " changed" : "");
       element.appendChild(lines);
       if (controlsPinSources.includes(section) && (removed || (!!push && push.lines.some((line) => line.removed)))) {
@@ -17271,7 +17362,8 @@ std::string_view webControlPageHtml()
             drop();
             renderControls();
           }) : null;
-          lines.appendChild(buildControlsLine(spec.label, select, remove, false));
+          lines.appendChild(buildControlsLine(spec.label, select, remove, false,
+            buildControlsTry(controlsNewTitles.encoder + " " + spec.label, "gpio_encoders", spec.suffix, controlsSaveFirst)));
         });
         if (entry.pins[2] !== null)
           appendButtonLines(lines, controlsNewTitles.encoder, "gpio_encoders", "encoder", entry.lines, controlsPushGestures("_press"), null);
@@ -17288,7 +17380,8 @@ std::string_view webControlPageHtml()
             drop();
             renderControls();
           }) : null;
-          lines.appendChild(buildControlsLine(spec.label, select, remove, false));
+          lines.appendChild(buildControlsLine(spec.label, select, remove, false,
+            buildControlsTry(controlsNewTitles[entry.kind] + " " + spec.label, "gpio_switches", spec.suffix, controlsSaveFirst)));
         });
       }
       element.appendChild(lines);
@@ -17714,6 +17807,137 @@ std::string_view webControlPageHtml()
       }
       renderControlsReview();
       updateControlsButtons();
+      renderRemoteControls();
+    }
+
+    // The labels the action dropdowns use, for a line's actions ("ISO up + FPS 24").
+    function controlsActionText(line) {
+      const catalog = (controlsState.catalog && controlsState.catalog.actions) || [];
+      return (line.actions || []).map((token) => {
+        const found = catalog.find((action) => action.id === token);
+        return found ? found.label : token;
+      }).join(" + ");
+    }
+
+    // One Remote controls pill. A turn (repeat) fires on press and, held, keeps firing: one step per answer from
+    // Core, so a slow answer slows the turning instead of queueing steps.
+    function buildRemoteButton(text, name, onFire, repeat) {
+      const button = document.createElement("button");
+      button.className = "pill-button";                     // the Camera settings pills
+      button.type = "button";
+      button.textContent = text;
+      button.title = name;
+      button.setAttribute("aria-label", name);
+      let busy = false;
+      let flash = null;
+      const fire = async () => {
+        if (busy)
+          return true;
+        busy = true;
+        const ok = await onFire();
+        busy = false;
+        if (ok) {
+          button.classList.add("active");                // a white flash, like a chosen pill
+          clearTimeout(flash);
+          flash = setTimeout(() => button.classList.remove("active"), 250);
+        }
+        return ok;
+      };
+      if (!repeat) {
+        button.addEventListener("click", fire);
+        return button;
+      }
+      let delay = null;
+      let every = null;
+      const stop = () => {
+        clearTimeout(delay);
+        clearInterval(every);
+        delay = every = null;
+      };
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0)
+          return;
+        stop();
+        button.setPointerCapture(event.pointerId);
+        fire().then((ok) => { if (!ok) stop(); });
+        delay = setTimeout(() => {
+          every = setInterval(() => fire().then((ok) => { if (!ok) stop(); }), 140);
+        }, 450);
+      });
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((type) => button.addEventListener(type, stop));
+      button.addEventListener("click", (event) => { if (event.detail === 0) fire(); });   // Enter or Space
+      button.addEventListener("contextmenu", (event) => event.preventDefault());
+      return button;
+    }
+
+    // Remote controls (main page), laid out like Camera settings: a block per kind, pills named by what they do, no
+    // pins. Buttons (GPIO, remote only, PCF pins) and switch positions; each knob a block named by what it turns
+    // (ISO), with its turns as the arrows at either end. Built from the saved model: it runs what the camera would.
+    function renderRemoteControls() {
+      const host = document.getElementById("remoteControlsRows");
+      const model = controlsState.model;
+      if (!host)
+        return;
+      host.textContent = "";
+      const assigned = (line) => (line.actions || []).some((action) => action !== "none");
+      const block = (title, columns) => {
+        const section = document.createElement("section");
+        section.className = "select-block";
+        const top = document.createElement("div");
+        top.className = "select-topline";
+        const label = document.createElement("span");
+        label.textContent = title;
+        top.appendChild(label);
+        section.appendChild(top);
+        const grid = document.createElement("div");
+        grid.className = "pill-grid";
+        grid.style.gridTemplateColumns = "repeat(" + Math.max(1, Math.min(columns, 4)) + ", minmax(0, 1fr))";
+        section.appendChild(grid);
+        host.appendChild(section);
+        return grid;
+      };
+      const pill = (grid, row, line, text, repeat) => {
+        const name = row.title + " " + controlsLineLabel(row, line) + ": " + controlsActionText(line);
+        grid.appendChild(buildRemoteButton(text, name, () => sendTestInput(row.source, line.key, name, true), repeat));
+      };
+      // A press shows its action; a click or hold says which ("Take a photo · double click").
+      const named = (line) => controlsActionText(line) + (/^Press$|^Position|^Turn/.test(line.label) ? "" : " · " + line.label.toLowerCase());
+      const rows = ((model && model.rows) || []).filter((row) => row.enabled && row.lines.some(assigned));
+      const buttonLines = [];
+      rows.filter((row) => row.kind === "button").forEach((row) => row.lines.filter(assigned).forEach((line) => buttonLines.push([row, line])));
+      if (buttonLines.length > 0) {
+        const grid = block("Buttons", 2);
+        buttonLines.forEach(([row, line]) => pill(grid, row, line, named(line), false));
+      }
+      const switchLines = [];
+      rows.filter((row) => row.kind === "switch2" || row.kind === "switch3").forEach((row) => row.lines.filter(assigned).forEach((line) => switchLines.push([row, line])));
+      if (switchLines.length > 0) {
+        const grid = block("Switches", 2);
+        switchLines.forEach(([row, line]) => pill(grid, row, line, named(line), false));
+      }
+      const pairs = controlsTurnPairs();
+      const ids = (line) => (line.actions || []).join(",");
+      rows.filter((row) => row.kind === "knob" || row.kind === "encoder").forEach((row) => {
+        const lines = row.lines.filter(assigned);
+        const cw = lines.find((line) => /_cw$/.test(line.key));
+        const ccw = lines.find((line) => /_ccw$/.test(line.key));
+        const pair = cw && ccw ? pairs.find((candidate) => (candidate.up === ids(cw) && candidate.down === ids(ccw)) ||
+          (candidate.down === ids(cw) && candidate.up === ids(ccw))) : null;
+        const pushes = lines.filter((line) => line !== cw && line !== ccw);
+        const grid = block(pair ? pair.label : "Knob", (ccw ? 1 : 0) + pushes.length + (cw ? 1 : 0));
+        if (ccw)
+          pill(grid, row, ccw, "\u25C0", true);
+        pushes.forEach((line) => pill(grid, row, line, named(line), false));
+        if (cw)
+          pill(grid, row, cw, "\u25B6", true);
+      });
+      if (!host.firstChild) {
+        const empty = document.createElement("div");
+        empty.className = "controls-row-detail";
+        empty.textContent = controlsState.model ? "No control does anything yet: give one an action in Settings, Controls, and save."
+          : "Loading the controls\u2026";
+        host.appendChild(empty);
+      }
     }
 
     function hardwareDirty() {
@@ -20452,6 +20676,16 @@ std::string_view webControlPageHtml()
         await importPresetFiles(event.target.files);
         event.target.value = "";
       });
+      // Remote controls on the main page need the saved controls before Settings opens: load them now, and again
+      // every 5 s until Core has answered.
+      renderRemoteControls();                                // "Loading the controls…" until they come
+      const loadRemoteControls = () => {
+        if (controlsState.model)
+          return;
+        void loadControls(true);
+        setTimeout(loadRemoteControls, 5000);
+      };
+      loadRemoteControls();
       document.getElementById("reloadControlsButton").addEventListener("click", () => loadControls(false, true));
       document.getElementById("reloadHardwareButton").addEventListener("click", () => loadControls(false, true));
       document.getElementById("saveHardwareButton").addEventListener("click", saveHardware);
