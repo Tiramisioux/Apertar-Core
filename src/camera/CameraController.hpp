@@ -95,6 +95,9 @@ public:
     bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
+    bool setPreviewTdn(bool enabled);
+    // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
+    std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
     // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors).

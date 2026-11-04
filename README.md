@@ -312,6 +312,18 @@ sudo visudo -cf /etc/sudoers.d/apertar-media-trim
 sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
 ```
 
+### Preview temporal denoise
+
+The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). **It is off by default**, because it is the most expensive step of the ISP back end. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on.
+
+At 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
+
+Turn it on in the WebUI (Settings, System, Performance, "Preview temporal denoise") or with the command `set_preview_tdn enabled=true|false`; the choice is saved in `camera_settings.conf` (`preview_tdn=`) and the state reports `preview_tdn`. Changing it restarts the camera pipeline (no reboot) and is refused while recording.
+
+Core does not edit your tuning files. With the switch off it resolves the tuning file as before (the automatic default and its Clear HDR variant, or the file you picked) and hands libcamera a copy without the `tdn` members, kept in `~/.cache/apertar-core/tuning/<name>_notdn.json` and renewed when the source file changes. If the file has no `tdn` member, or the copy fails its checks, the original is used and the journal says so (`ApertarCore preview tdn: ...`). `tuning_file` in the state stays your selection; `tuning_file_active` is the file libcamera loaded, and the journal line `ApertarCore tuning file:` ends in `preview_tdn=off active=<path>`.
+
+`c++ -std=c++20 -I src tools/tuning_tdn_strip_test.cpp $(pkg-config --cflags --libs yaml-0.1)` builds the host test of the strip.
+
 ### Write-path knobs for A/B tests
 
 Most of these knobs can also be set in a media tuning file, so a test night needs no systemd drop-in: `~/apertar-media-tune.conf` (template: `config/apertar-media-tune.conf`; `cp` it, no sudo) and, above it, the override file `/run/apertar-media/media-tune.override.conf`, which lives in RAM and is gone at reboot (edit it with `scripts/apertar-tune`). Sections `[default]`, `[exfat]`, `[pi-nvme]`, `[pi-nvme.exfat]` and so on pick the medium; the most specific hit wins. Precedence per knob: environment variable, then override file, then `~/apertar-media-tune.conf`, then the built-in default. Core reads the files at start and when a take starts; the page-cache drop and the per-frame writeback are fixed for the life of the process, so restart Core to apply a change. Core logs the values in effect (`ApertarCore media tune: ...`) and a warning for every key it ignores.

@@ -136,6 +136,7 @@ struct CaptureSettings {
     // camera as a whole, like the timecode mode; nothing derives from it yet.
     double conformFps = 25.0;
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
+    bool previewTdn = false; // Temporal denoise in the preview ISP. Off (default) is much faster; the raw DNGs never change.
     bool mediaTrimEnabled = true; // Trim the recording drive after big deletes and when it is mounted (APERTAR_MEDIA_TRIM=0 overrides).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
     // numbered by count and the clip keeps the FPS it started with as its timeline rate.

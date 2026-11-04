@@ -17,6 +17,7 @@
 
 #include "audio/AudioRecordingSession.hpp"
 #include "cdng/CdngEncoder.hpp"
+#include "camera/TuningTdnStrip.hpp"
 #include "cdng/BlackLevel.hpp"
 #include "cdng/ClearHdrCcmp.hpp"
 #include "cdng/LogCurve.hpp"
@@ -225,6 +226,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"h264_height\":" << settings.h264Resolution.height
         << ",\"timecode_mode\":\"" << toString(settings.timecodeMode) << "\""
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
+        << ",\"preview_tdn\":" << (settings.previewTdn ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
@@ -881,6 +883,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.timecodeMode = timecodeModeFromString(value);
             else if (key == "fps_phase_lock")
                 settings.fpsPhaseLock = (value == "true" || value == "1");
+            else if (key == "preview_tdn")
+                settings.previewTdn = (value == "true" || value == "1");
             else if (key == "media_trim")
                 settings.mediaTrimEnabled = !(value == "false" || value == "0");
             else if (key == "fps_speed_ramp")
@@ -967,6 +971,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
     output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
+    output << prefix << "preview_tdn=" << (s.previewTdn ? "true" : "false") << '\n';
     output << prefix << "media_trim=" << (s.mediaTrimEnabled ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
@@ -7226,13 +7231,27 @@ public:
         const auto automaticTuningPath = [&](std::string path) {
             return settings.clearHdr ? tuning::clearHdrVariant(path, tuningPipeline) : path;
         };
+        // Preview temporal denoise off (the default): libcamera loads a copy of the resolved tuning file without
+        // its rpi.denoise tdn blocks. tuningPath stays the resolved file; activePath is what libcamera loads.
+        std::string activePath;
+        const auto loadablePath = [&](const std::string &path) {
+            activePath = path;
+            if (!settings.previewTdn) {
+                std::string note;
+                activePath = tuning::previewTuningPath(path, tuningPipeline, note);
+                if (!note.empty())
+                    std::cerr << "ApertarCore preview tdn: " << note << "\n";
+            }
+            setActiveTuningFile(activePath);
+            return activePath;
+        };
         std::string tuningPath = automaticTuning
             ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline))
             : settings.tuningFile;
         if (automaticTuning && settings.clearHdr && tuningPath.find("_clearHDR") == std::string::npos)
             std::cerr << "ApertarCore Clear HDR tuning variant (<sensor>_clearHDR.json) not found; "
                          "the default tuning may give a black frame.\n";
-        applyProcessTuningFile(tuningPath);
+        applyProcessTuningFile(loadablePath(tuningPath));
         const auto ispProfile = activeIspColorProfile(settings);
         const bool logPreview = ispProfile != ProresColorProfile::Standard;
         bool derivedTuningApplied = false;
@@ -7307,7 +7326,7 @@ public:
                     cameraManager_->stop();
                     cameraManager_.reset();
                     tuningPath = defaultPath;
-                    applyProcessTuningFile(tuningPath);
+                    applyProcessTuningFile(loadablePath(tuningPath));
                     continue;
                 }
                 if (tuningPath.empty())
@@ -7318,7 +7337,7 @@ public:
             if (logPreview && !derivedTuningApplied) {
                 std::string derivedPath, why;
                 exposureReference=std::make_shared<PreviewExposureReference>();
-                if (!makeProresIspTuning(tuningPath, ispProfile, monochromeSensor_, derivedPath, why, exposureReference.get())) {
+                if (!makeProresIspTuning(activePath, ispProfile, monochromeSensor_, derivedPath, why, exposureReference.get())) {
                     setError(error, why);
                     cameras.clear();
                     stop();
@@ -7329,6 +7348,7 @@ public:
                 cameraManager_->stop();
                 cameraManager_.reset();
                 ::setenv("LIBCAMERA_RPI_TUNING_FILE", derivedPath.c_str(), 1);
+                setActiveTuningFile(derivedPath);
                 derivedTuningApplied = true;
                 std::cerr << "ApertarCore " << (settings.recordingFormat == RecordingFormat::Prores ? "ProRes colour: " : "cDNG preview colour: ")
                           << proresColorSpace(ispProfile) << " / " << proresGamma(ispProfile)
@@ -7341,7 +7361,11 @@ public:
         std::cerr << "ApertarCore tuning file: "
                   << (tuningPath.empty() ? "libcamera default" : tuningPath)
                   << (automaticTuning ? " (sensor default, " : " (custom, ")
-                  << tuning::pipelineName(tuningPipeline) << ")\n";
+                  << tuning::pipelineName(tuningPipeline) << ")"
+                  << (settings.previewTdn ? std::string(" preview_tdn=on")
+                                          : std::string(" preview_tdn=off active=") +
+                                                (activeTuningFile().empty() ? std::string("libcamera default") : activeTuningFile()))
+                  << "\n";
 
         sensorFamily_ = detectSensorFamily(camera_->id());
         settings_ = sanitizeSettingsForSensor(settings, sensorFamily_, monochromeSensor_);
@@ -8079,6 +8103,21 @@ public:
         (void)settings;
         return false;
 #endif
+    }
+
+    std::string activeTuningFile() const
+    {
+        std::lock_guard<std::mutex> lock(activeTuningMutex_);
+        return activeTuningFile_;
+    }
+
+    mutable std::mutex activeTuningMutex_;
+    std::string activeTuningFile_;   // what libcamera loads: the tuning file, its copy without tdn, or a derived colour file
+
+    void setActiveTuningFile(const std::string &path)
+    {
+        std::lock_guard<std::mutex> lock(activeTuningMutex_);
+        activeTuningFile_ = path;
     }
 
     SensorBinning sensorBinning() const
@@ -10241,6 +10280,7 @@ private:
     std::array<int64_t, 16> recentPhaseLockPins_{};
     size_t recentPhaseLockPinIndex_ = 0;
     mutable std::mutex whiteBalanceMutex_;
+
     WhiteBalanceMeasurement whiteBalanceMeasured_;
     uint32_t measuredExposureUs_ = 0;
     float measuredAnalogueGain_ = 0;
@@ -11226,6 +11266,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             // format: on in H.264 (where ramping waits) must mean on in cDNG and MLV too.
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
             const bool fpsPhaseLock = next.fpsPhaseLock;
+            const bool previewTdn = next.previewTdn;   // likewise one switch for the camera
             const bool mediaTrimEnabled = next.mediaTrimEnabled;   // one switch for the camera, not one per format
             const CdngLog cdngLog = next.cdngLog; // CineMate Log is one switch for the camera too
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
@@ -11244,6 +11285,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.conformFps = conformFps;
             next.clipNameTemplate = clipNameTemplate;
             next.fpsPhaseLock = fpsPhaseLock;
+            next.previewTdn = previewTdn;
             next.mediaTrimEnabled = mediaTrimEnabled;
             next.cdngLog = cdngLog;
             if (format == RecordingFormat::Cdng)
@@ -11767,6 +11809,40 @@ bool CameraController::setMediaTrimEnabled(bool enabled)
     CaptureSettings next = settings_;
     next.mediaTrimEnabled = enabled;
     return applySettingsLocked(next, false);
+}
+
+bool CameraController::setPreviewTdn(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == CameraState::Standby) {
+        setErrorLocked("Wake the camera before changing the preview temporal denoise.");
+        return false;
+    }
+    if (recording_) {
+        setErrorLocked("Preview temporal denoise changes are blocked while recording.");
+        return false;
+    }
+    if (timelapseActive() || (!simulateCamera_ && session_ && session_->hasPendingPhotoCaptures())) {
+        setErrorLocked("Wait for still captures and timelapse to finish before changing the preview temporal denoise.");
+        return false;
+    }
+    if (settings_.previewTdn == enabled) {
+        lastError_.clear();
+        emitSettingsEventLocked();
+        return true;
+    }
+    CaptureSettings next = settings_;
+    next.previewTdn = enabled;
+    // The pipeline restarts on the other tuning file, the same way setTuningFile does it.
+    return applySettingsLocked(next, true);
+}
+
+std::string CameraController::activeTuningFile() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (simulateCamera_ || !session_)
+        return settings_.tuningFile;
+    return session_->activeTuningFile();
 }
 
 bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter)

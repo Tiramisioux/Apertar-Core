@@ -5787,6 +5787,13 @@ std::string_view webControlPageHtml()
               </div>
               <section class="select-block">
                 <div class="select-topline">
+                  <span>Preview temporal denoise</span>
+                </div>
+                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Recordings are raw and never affected.</span>
+                <div class="pill-grid" id="settingsPreviewTdnOptions"></div>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
                   <span>Trim the recording drive</span>
                 </div>
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
@@ -16128,6 +16135,13 @@ std::string_view webControlPageHtml()
         }
       });
 
+      buildOptionButtons("settingsPreviewTdnOptions", toggleOptions, formatToggleLabel(!!snapshot.preview_tdn), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_preview_tdn", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
       const mediaTrimEnvOff = !!systemState.media_trim_env_off;
       const mediaTrimNote = document.getElementById("settingsMediaTrimNote");
       if (mediaTrimNote)
