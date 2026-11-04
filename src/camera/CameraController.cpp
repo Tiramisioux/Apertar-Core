@@ -881,6 +881,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.timecodeMode = timecodeModeFromString(value);
             else if (key == "fps_phase_lock")
                 settings.fpsPhaseLock = (value == "true" || value == "1");
+            else if (key == "media_trim")
+                settings.mediaTrimEnabled = !(value == "false" || value == "0");
             else if (key == "fps_speed_ramp")
                 settings.fpsSpeedRamp = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_keep_exposure")
@@ -965,6 +967,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
     output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
+    output << prefix << "media_trim=" << (s.mediaTrimEnabled ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
     output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
@@ -11223,6 +11226,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             // format: on in H.264 (where ramping waits) must mean on in cDNG and MLV too.
             const bool fpsSpeedRamp = next.fpsSpeedRamp;
             const bool fpsPhaseLock = next.fpsPhaseLock;
+            const bool mediaTrimEnabled = next.mediaTrimEnabled;   // one switch for the camera, not one per format
             const CdngLog cdngLog = next.cdngLog; // CineMate Log is one switch for the camera too
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
             const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
@@ -11240,6 +11244,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.conformFps = conformFps;
             next.clipNameTemplate = clipNameTemplate;
             next.fpsPhaseLock = fpsPhaseLock;
+            next.mediaTrimEnabled = mediaTrimEnabled;
             next.cdngLog = cdngLog;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
@@ -11753,6 +11758,14 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings next = settings_;
     next.fpsPhaseLock = enabled;
+    return applySettingsLocked(next, false);
+}
+
+bool CameraController::setMediaTrimEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    CaptureSettings next = settings_;
+    next.mediaTrimEnabled = enabled;
     return applySettingsLocked(next, false);
 }
 

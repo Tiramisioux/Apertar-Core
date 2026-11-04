@@ -5778,6 +5778,22 @@ std::string_view webControlPageHtml()
               <div class="subtle-note" id="storagePrerollLast" hidden></div>
             </div>
 
+            <div class="settings-card" id="settingsPerformanceCard">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Performance</h3>
+                  <p class="settings-card-copy">Settings that decide how much work the camera does per frame. The defaults are the fastest.</p>
+                </div>
+              </div>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Trim the recording drive</span>
+                </div>
+                <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
+                <div class="pill-grid" id="settingsMediaTrimOptions"></div>
+              </section>
+            </div>
+
             <div class="settings-card" id="settingsThermalCard">
               <div class="settings-card-head">
                 <div>
@@ -16107,6 +16123,19 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled !== false), async (value) => {
         try {
           await sendCommand({ cmd: "set_audio_recorded_outline_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+
+      const mediaTrimEnvOff = !!systemState.media_trim_env_off;
+      const mediaTrimNote = document.getElementById("settingsMediaTrimNote");
+      if (mediaTrimNote)
+        mediaTrimNote.textContent = "Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards."
+          + (mediaTrimEnvOff ? " Forced off by APERTAR_MEDIA_TRIM=0." : "");
+      buildOptionButtons("settingsMediaTrimOptions", toggleOptions, formatToggleLabel(systemState.media_trim_enabled !== false && !mediaTrimEnvOff), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_media_trim", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
           showToast(error.message, true);
         }

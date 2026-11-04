@@ -284,6 +284,7 @@ private:
     // never together with commandMutex_ in the worker, so handleCommand may wait on it while holding commandMutex_.
     std::thread mediaTrimThread_;
     std::atomic<bool> mediaTrimWorkerRunning_{false};
+    std::atomic<bool> mediaTrimSetting_{true};      // the persisted switch (CaptureSettings::mediaTrimEnabled); env beats it
     mutable std::mutex mediaTrimMutex_;
     std::condition_variable mediaTrimCv_;
     bool mediaTrimPending_ = false;
