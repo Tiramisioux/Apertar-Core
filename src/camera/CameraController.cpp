@@ -8877,11 +8877,12 @@ private:
         if (decision.servoRan) {
             lastPhaseErrorUs_ = decision.phaseErrorUs;
             // Saturation: the IPA echoes the validated FrameDurationLimits in the
-            // metadata. A pinned {d,d} that comes back as something we never pinned
-            // was clamped to the mode's limits; at a mode's top fps the servo can
-            // then only lengthen frames and the clamp would hide it (one line per arm).
+            // metadata. A pinned {d,d+1} (or Core's own {d,d}) whose lower end comes
+            // back as something we never pinned was clamped to the mode's limits; at
+            // a mode's top fps the servo can then only lengthen frames and the clamp
+            // would hide it (one line per arm).
             if (const auto echoed = request->metadata().get(libcamera::controls::FrameDurationLimits);
-                echoed && echoed->size() == 2 && (*echoed)[0] == (*echoed)[1] && !phaseLockSaturated_) {
+                echoed && echoed->size() == 2 && (*echoed)[1] - (*echoed)[0] <= 1 && !phaseLockSaturated_) {
                 const int64_t echoedUs = (*echoed)[0];
                 bool pinned = false;
                 for (const int64_t pin : recentPhaseLockPins_)
@@ -8987,7 +8988,13 @@ private:
             // changes, so the pin's presence is the only condition needed.
             std::lock_guard<std::mutex> lock(controlsMutex_);
             if (phaseLockDurationUs_ && !photoBusy) {
-                const int64_t range[2] = { *phaseLockDurationUs_, *phaseLockDurationUs_ };
+                // {d, d+1}, not {d, d}: the qbc libcamera's IMX585 helper re-chooses the
+                // line length (HMAX) for every single-value pin, so 1 us pushes became
+                // 5-8 % line-length jumps and one-frame exposure steps (flicker,
+                // hardware-log 2026-10-26). A range takes libcamera's default blanking:
+                // HMAX stays at the mode minimum and the frame rounds down to whole lines,
+                // as on Cinemate's libcamera, so the servo dithers adjacent line counts.
+                const int64_t range[2] = { *phaseLockDurationUs_, *phaseLockDurationUs_ + 1 };
                 request->controls().set(libcamera::controls::FrameDurationLimits,
                                         libcamera::Span<const int64_t, 2>(range));
                 recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = *phaseLockDurationUs_;

@@ -13,8 +13,10 @@ namespace apertar {
 // Pi's clock, which is where the audio samples are stamped. This loop measures
 // the accumulated phase error of the frame arrivals against "origin + k /
 // fps" on the reference clock and nudges the requested frame duration by whole
-// microseconds. The sensor can only realise whole lines, so the integer
-// requests alternate between two adjacent line counts: the average cadence
+// microseconds. The sensor can only realise whole lines (the controller pins
+// {d, d+1} so libcamera keeps the line length fixed and rounds down to lines,
+// as Cinemate's libcamera does), so the integer requests alternate between two
+// adjacent line counts: the average cadence
 // becomes exact (a first-order sigma-delta), the instantaneous error stays
 // within the deadband.
 //
