@@ -138,6 +138,15 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
         addPushLines(row, doc, "d" + std::to_string(pin), "");
         rows.push_back(std::move(row));
     }
+    // Remote-only buttons: remote<N> in [gpio_buttons], no pin (GpioInput skips the key). They run from the WebUI's
+    // Remote controls, also when the GPIO is taken (a DPI display) or [gpio_buttons] is off.
+    for (const int index : indexesOf(doc, "gpio_buttons", "remote")) {
+        const std::string base = "remote" + std::to_string(index);
+        if (keysWithBase(doc, "gpio_buttons", base).empty()) continue;
+        ControlRow row{"gpio_buttons", "Remote only", {}, -1, {}, {}, "button", {}, {}, {}};
+        addPushLines(row, doc, base, "");
+        rows.push_back(std::move(row));
+    }
     // Two-way switch: one pin, an action for on and for off. Three-way: two pins, an action per position; the middle
     // position is neither pin closed. Core applies the position a switch is in when it starts.
     for (const int index : indexesOf(doc, "gpio_switches", "switch")) {
@@ -189,6 +198,12 @@ inline std::vector<ControlRow> controlRows(const Document &doc)
         rows.push_back(std::move(row));
     }
     return rows;
+}
+
+// A remote-only button's base (remote0): on whatever its section says, as no pin is involved.
+inline bool remoteOnly(const std::string &base)
+{
+    return base.rfind("remote", 0) == 0;
 }
 
 // Is the section there and switched on, the way its reader decides?
@@ -333,7 +348,7 @@ inline std::string modelJson(const Document &doc)
     out += "],\"rows\":[";
     first = true;
     for (const auto &row : controlRows(doc)) {
-        const bool on = sectionOn(doc, row.source);
+        const bool on = remoteOnly(row.base) || sectionOn(doc, row.source);
         out += std::string(first ? "" : ",") + "{\"source\":\"" + row.source + "\",\"title\":\"" + jsonEscape(row.title) + "\",\"detail\":\"" +
             jsonEscape(row.detail) + "\",\"pin\":" + std::to_string(row.pin) + ",\"enabled\":" + (on ? "true" : "false") + ",\"lines\":[";
         for (size_t i = 0; i < row.lines.size(); ++i) {

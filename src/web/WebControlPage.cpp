@@ -17048,7 +17048,8 @@ std::string_view webControlPageHtml()
       const num = (text) => { const value = parseInt(text, 10); return Number.isFinite(value) ? value : null; };
       if (row.source === "gpio_buttons") {
         const push = controlsState.buttons.get(row.source + "|" + row.base);
-        return push ? { names: [""], keys: null, orig: [row.pin], now: [num(push.base.slice(1))] } : null;
+        return push ? { names: [""], keys: null, orig: [row.pin >= 0 ? row.pin : null],
+          now: [/^d\d+$/.test(push.base) ? num(push.base.slice(1)) : null] } : null;   // null: remote only
       }
       const editOf = (key) => { const edit = controlsState.edits.get(row.source + "|" + key); return edit ? edit.value : null; };
       if (row.source === "gpio_switches") {
@@ -17078,6 +17079,9 @@ std::string_view webControlPageHtml()
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
+      if (controlsState.dpiLines.length > 0)
+        for (let pin = 0; pin <= 27; ++pin)
+          taken.add(pin);                                // the DPI display holds them
       (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
         const info = row === skipRow ? null : controlsRowPinInfo(row);
         if (info)
@@ -17137,6 +17141,11 @@ std::string_view webControlPageHtml()
             owners.set(line.pin, { kind: "outside", text: line.consumer || "another program" });
         });
       });
+      // A DPI display (a Hyperpixel) holds GPIO 0 to 27: greyed and not to be picked, like a pin held outside Core.
+      if (controlsState.dpiLines.length > 0)
+        for (let pin = 0; pin <= 27; ++pin)
+          if (!owners.has(pin))
+            owners.set(pin, { kind: "outside", text: "the DPI display" });
       (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
         const info = self && self.row === row ? null : controlsRowPinInfo(row);
         if (info && !controlsRowRemoved(row))
@@ -17162,6 +17171,21 @@ std::string_view webControlPageHtml()
         .concat(Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
       return Array.from(new Set(pins)).filter((pin) => Number.isFinite(pin)).sort((a, b) => a - b);
     }
+    // Remote only: a GPIO button with no pin, saved as remote<N> in [gpio_buttons] (Core: ControlsModel.hpp). The
+    // Remote controls card on the main page runs it, also when the pins are taken (a DPI display).
+    const controlsRemoteValue = "remote";
+    // The remote<N> a button takes: its own if it has one, else the lowest one no other button on the page holds.
+    function controlsRemoteBase(self) {
+      if (self && /^remote\d+$/.test(self.base || ""))
+        return self.base;
+      const used = new Set();
+      controlsState.buttons.forEach((push) => { if (push !== self && /^remote\d+$/.test(push.base)) used.add(push.base); });
+      controlsState.added.forEach((entry) => { if (entry !== self && entry.base && entry.pins[0] === null) used.add(entry.base); });
+      for (let index = 0; ; ++index)
+        if (!used.has("remote" + index))
+          return "remote" + index;
+    }
+
     // One dropdown entry: [value, text, owner]. Held by another control: greyed, with its function; held outside Core: also disabled.
     function controlsPinOption(pin, prefix, owner, value) {
       const text = prefix + "GPIO " + pin + (!owner ? "" : owner.kind === "outside" ? " · used by " + owner.text : " · " + owner.text);
@@ -17229,10 +17253,13 @@ std::string_view webControlPageHtml()
         const options = [];
         if (row.source === "gpio_encoders" && index === 2 && info.orig[2] === null)
           options.push(["", prefix + "none"]);              // a push set cannot be taken away again from here
+        if (row.source === "gpio_buttons")
+          options.push([controlsRemoteValue, "Remote only", null]);
         choices.forEach((candidate) => options.push(controlsPinOption(candidate, prefix, owners.get(candidate))));
-        const select = buildControlsPinSelect(options, pin === null ? "" : String(pin), info.names[index] || "Pin", (value) => {
+        const shown = pin !== null ? String(pin) : row.source === "gpio_buttons" ? controlsRemoteValue : "";
+        const select = buildControlsPinSelect(options, shown, info.names[index] || "Pin", (value) => {
           const next = info.now.slice();
-          next[index] = value === "" ? null : parseInt(value, 10);
+          next[index] = value === "" || value === controlsRemoteValue ? null : parseInt(value, 10);
           if (next[index] !== null && !controlsClaimPin(next[index], owners.get(next[index]), self)) {
             renderControls();                                // No: the dropdown snaps back
             return;
@@ -17267,7 +17294,8 @@ std::string_view webControlPageHtml()
 
     function setControlsRowPins(row, info, next) {
       if (row.source === "gpio_buttons") {
-        controlsState.buttons.get(row.source + "|" + row.base).base = "d" + next[0];
+        const push = controlsState.buttons.get(row.source + "|" + row.base);
+        push.base = next[0] === null ? controlsRemoteBase(push) : "d" + next[0];
       } else {
         info.keys.forEach((key, index) => {
           const value = row.source === "gpio_switches" ? next.join(",") : String(next[index]);
@@ -17318,14 +17346,22 @@ std::string_view webControlPageHtml()
         free.filter((candidate) => candidate === pin || !entry.pins.includes(candidate)).forEach((candidate) => {
           select.appendChild(buildControlsPinOptionElement(controlsPinOption(candidate, prefix, owners.get(candidate))));
         });
-        select.value = pin === null ? "" : String(pin);
+        if (entry.kind === "button") {
+          const remote = document.createElement("option");
+          remote.value = controlsRemoteValue;
+          remote.textContent = "Remote only";
+          select.insertBefore(remote, select.firstChild);
+        }
+        select.value = pin !== null ? String(pin) : entry.kind === "button" ? controlsRemoteValue : "";
         select.disabled = controlsState.saving;
         select.addEventListener("change", () => {
-          const picked = select.value === "" ? null : parseInt(select.value, 10);
+          const picked = select.value === "" || select.value === controlsRemoteValue ? null : parseInt(select.value, 10);
           if (picked !== null && !controlsClaimPin(picked, owners.get(picked), self)) {
             renderControls();                                // No: the dropdown snaps back
             return;
           }
+          if (entry.kind === "button" && picked === null)
+            entry.base = controlsRemoteBase(entry);
           entry.pins[index] = picked;
           renderControls();
         });
@@ -17392,11 +17428,13 @@ std::string_view webControlPageHtml()
       const entry = { kind: kind, pins: [], lines: [] };
       const free = controlsFreePins(entry);
       const count = kind === "switch3" ? 2 : kind === "encoder" ? 3 : 1;
-      if (free.length < count) {
+      if (free.length < count && kind !== "button") {
         showToast("No free GPIO pin left.", true);
         return;
       }
-      entry.pins = free.slice(0, count);
+      entry.pins = free.length < count ? [null] : free.slice(0, count);   // a button with no pin left: remote only
+      if (entry.pins[0] === null)
+        entry.base = controlsRemoteBase(entry);
       if (kind === "button" || kind === "encoder")
         entry.lines = [{ suffix: kind === "button" ? "" : "_press", value: "none", orig: "", raw: "", removed: false }];
       else
@@ -18196,7 +18234,7 @@ std::string_view webControlPageHtml()
           set(push.section, key, line.value);
         });
       });
-      // New rows: a button is d<pin> plus its gestures; a switch takes the next free index, its pins and its actions.
+      // New rows: a button is d<pin> (remote<N> when remote only) plus its gestures; a switch takes the next free index, its pins and its actions.
       // Saving one into a group that is switched off switches the group on.
       const nextIndex = (source, pattern) => {
         let next = 0;
@@ -18217,7 +18255,9 @@ std::string_view webControlPageHtml()
         const chosen = lines.filter((line) => line.value !== "none");
         if (chosen.length === 0)
           return;
-        const base = entry.kind === "button" ? "d" + entry.pins[0] : entry.kind === "encoder" ? "encoder" + nextEncoder++ : "switch" + nextSwitch++;
+        const remote = entry.kind === "button" && entry.pins[0] === null;
+        const base = remote ? entry.base : entry.kind === "button" ? "d" + entry.pins[0]
+          : entry.kind === "encoder" ? "encoder" + nextEncoder++ : "switch" + nextSwitch++;
         if (entry.kind === "encoder") {
           set(section, base + "_a", String(entry.pins[0]));
           set(section, base + "_b", String(entry.pins[1]));
@@ -18227,8 +18267,8 @@ std::string_view webControlPageHtml()
           set(section, base + "_pins", entry.pins.join(","));
         }
         chosen.forEach((line) => set(section, base + line.suffix, line.value));
-        if (!(sections.get(section) || {}).enabled)
-          set(section, "enabled", "true");
+        if (!remote && !(sections.get(section) || {}).enabled)
+          set(section, "enabled", "true");                   // a remote-only button needs no GPIO
       });
       sets.forEach((value, id) => {
         unsets.delete(id);
@@ -18259,6 +18299,11 @@ std::string_view webControlPageHtml()
       if (section === "gpio_buttons" && match) {
         const gesture = controlsPushGestures("").find((candidate) => candidate.suffix === match[2]);
         return "GPIO " + match[1] + " · " + (gesture ? gesture.label : match[2]);
+      }
+      match = /^remote(\d+)(.*)$/.exec(key);
+      if (section === "gpio_buttons" && match) {
+        const gesture = controlsPushGestures("").find((candidate) => candidate.suffix === match[2]);
+        return "Remote only · " + (gesture ? gesture.label : match[2]);
       }
       if (key === "enabled")
         return ({ gpio_buttons: "GPIO buttons", gpio_switches: "GPIO switches", gpio_encoders: "GPIO rotary encoders" }[section] || section) + " · switched on";
@@ -18299,7 +18344,8 @@ std::string_view webControlPageHtml()
         if (row.source === "gpio_buttons" ? push.lines.every((line) => line.removed) : controlsState.removed.has(row.source + "|" + (row.base || row.lines[0].key)))
           return;
         const words = (pins) => row.source === "gpio_encoders"
-          ? "A " + pins[0] + ", B " + pins[1] + ", push " + (pins[2] === null ? "none" : pins[2]) : "GPIO " + pins.join(" + ");
+          ? "A " + pins[0] + ", B " + pins[1] + ", push " + (pins[2] === null ? "none" : pins[2])
+          : pins.map((pin) => pin === null ? "Remote only" : "GPIO " + pin).join(" + ");
         let actions = [];
         if (row.source === "gpio_buttons") {
           push.lines.forEach((line) => {

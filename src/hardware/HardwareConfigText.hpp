@@ -455,7 +455,8 @@ inline bool knownKey(std::string_view section, std::string_view key)
     };
     if (section == "gpio_buttons")
         return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "hold_ms", "double_ms"}) ||
-            indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"});
+            indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"}) ||
+            indexedKey(key, "remote", 15, {"", "_single", "_double", "_triple", "_hold"});   // remote only: no pin
     if (section == "gpio_encoders")
         return key == "enabled" || indexedKey(key, "encoder", 7, {"_a", "_b", "_press_gpio", "_cw", "_ccw", "_press",
             "_invert", "_steps_per_event", "_single", "_double", "_triple", "_hold"});
@@ -931,6 +932,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
         if (line.kind != Kind::Key) continue;
         const bool actionKey =
             (line.section == "gpio_buttons" && line.key.size() > 1 && line.key[0] == 'd' && std::isdigit(static_cast<unsigned char>(line.key[1]))) ||
+            (line.section == "gpio_buttons" && line.key.rfind("remote", 0) == 0) ||
             (line.section == "pcf8574" && line.key.rfind("pin", 0) == 0) ||
             (line.section == "gpio_switches" && line.key.rfind("switch", 0) == 0 && line.key.find("_pins") == std::string::npos) ||
             ((line.section == "neorotary4" || line.section == "gpio_encoders") && line.key.rfind("encoder", 0) == 0 &&

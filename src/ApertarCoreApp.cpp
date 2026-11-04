@@ -12041,7 +12041,7 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
         for (const hwconf::ControlLine &line : row.lines) {
             if (line.key != key)
                 continue;
-            if (!hwconf::sectionOn(doc, section))
+            if (!hwconf::remoteOnly(row.base) && !hwconf::sectionOn(doc, section))
                 return errorReply(command.id, row.title + " is switched off: switch it on and save first.");
             if (line.actions.empty() || (line.actions.size() == 1 && line.actions[0] == "none"))
                 return errorReply(command.id, "Nothing is assigned to " + row.title + " " + line.label + ".");
