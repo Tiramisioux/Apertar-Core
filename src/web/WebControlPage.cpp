@@ -5799,6 +5799,13 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
                 <div class="pill-grid" id="settingsMediaTrimOptions"></div>
               </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Frame-rate phase lock</span>
+                </div>
+                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
+                <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsThermalCard">
@@ -16138,6 +16145,13 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsPreviewTdnOptions", toggleOptions, formatToggleLabel(!!snapshot.preview_tdn), async (value) => {
         try {
           await sendCommand({ cmd: "set_preview_tdn", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      buildOptionButtons("settingsFpsPhaseLockOptions", toggleOptions, formatToggleLabel(!!snapshot.fps_phase_lock), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_fps_phase_lock", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
           showToast(error.message, true);
         }
