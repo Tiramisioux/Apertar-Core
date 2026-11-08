@@ -11828,6 +11828,10 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
                 std::cerr << "ApertarCore clip merge: paused (" << why << ") " << name << " at " << done << "/" << plan.steps.size() << "\n";
             }
             std::unique_lock<std::mutex> lock(clipMergeMutex_);
+            // The clip list was read before this pause, and the worker's 2-s take check does not run until the scan ends: a take
+            // recorded now would stay split until the next trigger. Ask for one more scan once this one is through.
+            clipMergeRequested_ = true;
+            clipMergeReason_ = "after pause";
             clipMergeCv_.wait_for(lock, std::chrono::milliseconds(100), [this] { return !clipMergeWorkerRunning_.load(); });
         }
         if (paused) {
