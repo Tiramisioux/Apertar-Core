@@ -324,6 +324,14 @@ Core does not edit your tuning files. With the switch off it resolves the tuning
 
 `c++ -std=c++20 -I src tools/tuning_tdn_strip_test.cpp $(pkg-config --cflags --libs yaml-0.1)` builds the host test of the strip.
 
+### Split clips (frames per folder)
+
+On exFAT every new file walks all entries of its folder under the filesystem's lock, so a frame file costs more to create the fuller its clip folder is: about 14 ms at 45,000 frames (a 30-minute take at 25 fps), 35 % of the frame period (measured 2026-11-08, Apertar knowledge base `working/drop-frames/nvme-campaign/probe-exfat-dir.md`). `[storage] frames_per_folder=N` in `apertar-hardware.conf` (0, the default, keeps every frame in the clip folder; 100 to 100000) starts a new `part_NNN` folder inside the clip every N frames: frame f goes to `<clip>/part_<f / N>/` under its usual name, the numbering runs on across parts, and the WAV, `fps-ramp.txt` and the other sidecars stay in the clip folder, next to a `.parts` marker. Set it in the WebUI (Settings, System, Performance, "Frames per folder"), in the Config pane, or with `set_frames_per_folder value=N`; `APERTAR_CDNG_FRAMES_PER_FOLDER` wins over the file. It applies at the next take; the journal's `recording clip:` line ends in `frames_per_folder=N`. The storage pre-roll and MLV takes are never split. Core's clip list, playback, delete and download read both layouts.
+
+**Resolve and Premiere import one folder as one clip**, so a split clip is flattened before import (move `part_*/*.dng` into the clip folder).
+
+`c++ -std=c++17 -I src tools/frame_path_test.cpp` builds the host test.
+
 ### Write-path knobs for A/B tests
 
 Most of these knobs can also be set in a media tuning file, so a test night needs no systemd drop-in: `~/apertar-media-tune.conf` (template: `config/apertar-media-tune.conf`; `cp` it, no sudo) and, above it, the override file `/run/apertar-media/media-tune.override.conf`, which lives in RAM and is gone at reboot (edit it with `scripts/apertar-tune`). Sections `[default]`, `[exfat]`, `[pi-nvme]`, `[pi-nvme.exfat]` and so on pick the medium; the most specific hit wins. Precedence per knob: environment variable, then override file, then `~/apertar-media-tune.conf`, then the built-in default. Core reads the files at start and when a take starts; the page-cache drop and the per-frame writeback are fixed for the life of the process, so restart Core to apply a change. Core logs the values in effect (`ApertarCore media tune: ...`) and a warning for every key it ignores.
@@ -342,6 +350,7 @@ Environment variables of the Core service (a systemd drop-in with `Environment=`
 | `APERTAR_WEB_PREVIEW_RECORDING_FPS=N` | 30 | The WebUI live preview's frame rate while a raw take runs (`0` pauses it). Its downsample runs on libcamera's completion thread, inside the per-frame cycle, whenever a browser shows the preview (about 0.2 to 0.5 ms per frame). | - |
 | `APERTAR_RT_CAPTURE_PRIORITY=N` | off | `SCHED_FIFO` priority N (1 to 99) for libcamera's completion thread alone, set from Core when the first frame arrives; the writers and the WebUI keep their normal priorities. Needs `LimitRTPRIO` on the unit (the capture-priority drop-in). The preferred shape of the scheduling A/B. | - |
 | `APERTAR_RT=1` | off | The start script runs the whole Core process under `SCHED_FIFO` priority 70 on cores 1 to 3 with the best-effort I/O class (`APERTAR_RT_PRIORITY`, `APERTAR_RT_CPUS` adjust it), as cinemate runs cinepi-raw. An A/B instrument, not a recommendation: equal-priority FIFO threads never preempt each other, so the capture thread can wait behind FIFO writers. Needs `LimitRTPRIO` on the unit: install `config/apertar-core-capture-priority.conf` as a drop-in (`sudo install -m 0644 config/apertar-core-capture-priority.conf /etc/systemd/system/apertar-core.service.d/` and `daemon-reload`). | - |
+| `APERTAR_CDNG_FRAMES_PER_FOLDER=N` | 0 | Frames per `part_NNN` folder inside the clip (100 to 100000; 0 = one folder); see "Split clips". Wins over the hardware file's `[storage] frames_per_folder`. | - |
 | `APERTAR_MEDIA_TUNE=1` | off | Kernel-side knobs for the recording drive through the `apertar-media-tune` root helper (dirty-page cushion, scheduler, queue depth). | `kernel_tune` (`on` / `off`) |
 
 ## For Developers

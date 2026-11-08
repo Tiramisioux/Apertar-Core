@@ -5806,6 +5806,17 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
                 <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
               </section>
+              <section class="select-block" data-search="frames per folder part split clip folder dng take long">
+                <div class="select-topline">
+                  <span>Frames per folder</span>
+                </div>
+                <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: flatten a split clip first (tools/flatten_clip.py).</span>
+                <div class="field-stack">
+                  <input class="settings-input" id="settingsFramesPerFolderInput" type="number" min="0" max="100000" step="1" value="0">
+                  <button class="secondary-button" id="settingsFramesPerFolderApply" type="button">Apply</button>
+                </div>
+                <span class="subtle-note" id="settingsFramesPerFolderEnvNote" hidden>Set by APERTAR_CDNG_FRAMES_PER_FOLDER</span>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsThermalCard">
@@ -16169,6 +16180,21 @@ std::string_view webControlPageHtml()
         }
       });
 
+      const framesPerFolder = Number(systemState.frames_per_folder) || 0;
+      const framesPerFolderEnv = !!systemState.frames_per_folder_env;
+      const fpfInput = document.getElementById("settingsFramesPerFolderInput");
+      const fpfApply = document.getElementById("settingsFramesPerFolderApply");
+      const fpfEnvNote = document.getElementById("settingsFramesPerFolderEnvNote");
+      if (fpfInput) {
+        if (document.activeElement !== fpfInput)
+          fpfInput.value = String(framesPerFolder);
+        fpfInput.disabled = framesPerFolderEnv;
+      }
+      if (fpfApply)
+        fpfApply.disabled = framesPerFolderEnv;
+      if (fpfEnvNote)
+        fpfEnvNote.hidden = !framesPerFolderEnv;
+
       buildOptionButtons("settingsDateTimeOverlayOptions", toggleOptions, formatToggleLabel(dateTimeOverlayEnabled), async (value) => {
         try {
           await sendCommand({ cmd: "set_date_time_overlay_enabled", enabled: value === "On" ? "true" : "false" });
@@ -20611,6 +20637,17 @@ std::string_view webControlPageHtml()
         } catch (error) { showToast(error.message, true); }
       });
       document.getElementById("settingsRecordResolutionSelect").addEventListener("change", applyRecordResolutionSelection);
+      document.getElementById("settingsFramesPerFolderApply").addEventListener("click", async () => {
+        const input = document.getElementById("settingsFramesPerFolderInput");
+        const n = Number(input.value);
+        if (input.value.trim() === "" || !Number.isInteger(n) || !(n === 0 || (n >= 100 && n <= 100000))) {
+          showToast("Enter 0 (off) or a whole number from 100 to 100000.", true);
+          return;
+        }
+        try {
+          await sendCommand({ cmd: "set_frames_per_folder", value: String(n) });
+        } catch (error) { showToast(error.message, true); }
+      });
       document.addEventListener("click", (event) => {
         const link = event.target.closest ? event.target.closest("[data-ladder-link]") : null;
         if (!link) {

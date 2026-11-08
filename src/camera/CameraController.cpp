@@ -19,6 +19,7 @@
 #include "cdng/CdngEncoder.hpp"
 #include "camera/TuningTdnStrip.hpp"
 #include "cdng/BlackLevel.hpp"
+#include "cdng/FramePath.hpp"
 #include "cdng/ClearHdrCcmp.hpp"
 #include "cdng/LogCurve.hpp"
 #include "color/ColorProfileConfig.hpp"
@@ -4281,6 +4282,36 @@ public:
             return false;
         }
 
+        // Frames per folder: env APERTAR_CDNG_FRAMES_PER_FOLDER, else [storage] frames_per_folder, else 0; per take.
+        // N > 0: frame f goes to part_<f / N>/ (FramePath.hpp), part_000 and the .parts marker are made here.
+        framesPerFolder_ = 0;
+        {
+            std::lock_guard<std::mutex> partLock(partMutex_);
+            partsCreated_.clear();
+        }
+        if (recordingFormat_ != RecordingFormat::Mlv && !prerollTake_.load(std::memory_order_acquire)) {
+            const char *const env = std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER");
+            if (env && *env && !framepath::parseFramesPerFolder(env))
+                std::cerr << "ApertarCore recording: APERTAR_CDNG_FRAMES_PER_FOLDER=" << env
+                          << " is not 0 or a whole number from 100 to 100000: one folder\n";
+            framesPerFolder_ = bufferbudget::requestedFramesPerFolder(env, loadBufferConf());
+        }
+        if (framesPerFolder_ > 0) {
+            std::error_code partEc;
+            std::filesystem::create_directory(folderPath_ / framepath::partDirName(0), partEc);
+            if (partEc) {
+                if (error)
+                    *error = "Could not create " + (folderPath_ / framepath::partDirName(0)).string() + ": " + partEc.message();
+                return false;
+            }
+            {
+                std::lock_guard<std::mutex> partLock(partMutex_);
+                partsCreated_.insert(0);
+            }
+            std::ofstream marker(folderPath_ / framepath::kMarkerName, std::ios::trunc);
+            marker << "frames_per_folder=" << framesPerFolder_ << "\npattern=" << clipName_ << "_%09d.dng\n";
+        }
+
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
         const unsigned int formatWorkerCount = std::max(2u, std::min(4u, hardwareThreads));
         // Uncompressed cDNG is storage-bound: the medium decides how many writers make
@@ -4370,7 +4401,8 @@ public:
                                       : "sync")
                   << " writeback=" << (startWritebackPerFrame() ? "on" : "off")
                   << " sync_ms=" << syncMs
-                  << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no");
+                  << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no")
+                  << " frames_per_folder=" << framesPerFolder_;
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
@@ -4733,6 +4765,25 @@ public:
                     ::close(fd);
                 }
             }
+            // A split clip: each part folder that received files holds their directory entries (names, sizes,
+            // first clusters), so it is fsynced as the clip folder is; the clip folder still holds the part folders.
+            if (framesPerFolder_ > 0) {
+                std::vector<std::string> partDirs;
+                for (const std::string &path : files) {
+                    const std::string parent = path.substr(0, path.rfind('/'));
+                    if (parent != folderPathString_ && std::find(partDirs.begin(), partDirs.end(), parent) == partDirs.end())
+                        partDirs.push_back(parent);
+                }
+                for (const std::string &partDir : partDirs) {
+                    if (mediumGone_.load(std::memory_order_acquire))
+                        break;
+                    const int partFd = ::open(partDir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                    if (partFd >= 0) {
+                        ::fsync(partFd);
+                        ::close(partFd);
+                    }
+                }
+            }
             if (!mediumGone_.load(std::memory_order_acquire))
                 ::fsync(dirFd);
             lock.lock();
@@ -4902,10 +4953,25 @@ public:
         expectedRawBufferSize_ = 0;
     }
 
+    // A split take: make part_<part> once, on the copy side, before its first frame is queued (several copy threads
+    // may arrive here; the set and the mutex make each folder exactly once). A failed mkdir is logged; the writer's
+    // open then fails and the take ends as on any write failure.
+    void ensurePartFolder(uint64_t part)
+    {
+        std::lock_guard<std::mutex> partLock(partMutex_);
+        if (!partsCreated_.insert(part).second)
+            return;
+        const std::string path = folderPathString_ + "/" + framepath::partDirName(part);
+        if (::mkdir(path.c_str(), 0775) != 0 && errno != EEXIST)
+            std::cerr << "ApertarCore recording: could not create " << path << ": " << std::strerror(errno) << "\n";
+    }
+
     bool enqueue(std::vector<uint8_t> rawBytes,
                  RawFrameView frame,
                  CdngEncoder::Metadata metadata)
     {
+        if (framesPerFolder_ > 0 && recordingFormat_ != RecordingFormat::Mlv)
+            ensurePartFolder(framepath::partIndex(metadata.frameIndex, framesPerFolder_));
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_ || workers_.empty())
             return false;
@@ -4935,7 +5001,7 @@ public:
             std::move(rawBytes),
             frame,
             std::move(metadata),
-            mlv ? mlvPathString_ : (folderPathString_ + "/" + frameName),
+            mlv ? mlvPathString_ : framepath::framePath(folderPathString_, frameName, metadata.frameIndex, framesPerFolder_),
         });
         ++enqueuedFrames_;
         maxObservedQueueDepth_ = std::max<uint64_t>(maxObservedQueueDepth_, queue_.size());
@@ -5515,6 +5581,12 @@ private:
     std::atomic<unsigned int> liveWorkers_{0};
     std::atomic<int64_t> lastWriteProgressNs_{0};
     int mediaDirFd_ = -1;   // the clip folder, for the once-a-second sync
+    // [storage] frames_per_folder of this take (0 = every frame in the clip folder). Set in startAtFolder before any
+    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made on the copy side
+    // (ensurePartFolder, before the frame is queued), never by a writer.
+    unsigned framesPerFolder_ = 0;
+    std::mutex partMutex_;
+    std::unordered_set<uint64_t> partsCreated_;
     std::mutex writtenFilesMutex_;
     std::vector<std::string> writtenFiles_;   // written since the last sync tick   // steady_clock, last frame written (or the take's start)
     std::mutex exitMutex_;

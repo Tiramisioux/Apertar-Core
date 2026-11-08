@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include "cdng/FramePath.hpp"
+
 namespace apertar {
 
 struct BufferPlanInputs {
@@ -100,6 +102,7 @@ struct BufferConf {
     std::optional<unsigned> floorMb;    // buffer_ram_floor_mb     0..1048576
     std::optional<double> maxFraction;  // buffer_ram_max_fraction 0.1..0.75
     std::optional<unsigned> stopPercent;  // buffer_stop_percent    0 (never) or 50..99
+    std::optional<unsigned> framesPerFolder;  // frames_per_folder 0 (one folder) or 100..100000 (framepath::)
 };
 
 // Why `value` is not a good value of a buffer key, or "" when it is (or when the key is not one of the five).
@@ -121,6 +124,8 @@ inline std::string bufferConfProblem(const std::string &key, const std::string &
         const unsigned long percent = digits ? std::strtoul(value.c_str(), nullptr, 10) : 0;
         return (digits && (percent == 0 || (percent >= 50 && percent <= 99))) ? "" : "is not 0 (never) or a whole number from 50 to 99";
     }
+    if (key == "frames_per_folder")
+        return framepath::framesPerFolderProblem(value);
     if (key == "buffer_ram_floor_mb") {
         const bool digits = !value.empty() && value.size() <= 7 && value.find_first_not_of("0123456789") == std::string::npos;
         return (digits && std::strtoul(value.c_str(), nullptr, 10) <= (1u << 20)) ? "" : "is not a whole number of MiB from 0 to 1048576";
@@ -177,6 +182,8 @@ inline BufferConf parseBufferConf(const std::string &text)
             conf.stopPercent = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
         else if (key == "buffer_ram_floor_mb")
             conf.floorMb = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
+        else if (key == "frames_per_folder")
+            conf.framesPerFolder = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
     }
     return conf;
 }
@@ -294,6 +301,20 @@ inline std::string requestedBufferMode(const char *envValue, const BufferConf &c
     if (envValue && *envValue)
         return std::string(envValue) == "ram" ? "ram" : "frames";
     return conf.ram.value_or(false) ? "ram" : "frames";
+}
+
+// frames_per_folder of the next take: a set APERTAR_CDNG_FRAMES_PER_FOLDER wins (a bad value is 0, one folder), else the
+// file's frames_per_folder=, else 0. Published as an atomic (state frames_per_folder); the camera reads it again at each take.
+inline unsigned requestedFramesPerFolder(const char *envValue, const BufferConf &conf)
+{
+    if (envValue && *envValue)
+        return framepath::parseFramesPerFolder(envValue).value_or(0);
+    return conf.framesPerFolder.value_or(0);
+}
+inline std::atomic<unsigned> &framesPerFolderRequest()
+{
+    static std::atomic<unsigned> value{0};
+    return value;
 }
 
 }  // namespace bufferbudget

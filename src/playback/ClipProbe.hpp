@@ -193,23 +193,35 @@ public:
     explicit ClipFactsCache(int64_t coreStartMs = 0) : coreStartMs_(coreStartMs) {}
 
     // A folder is unchanged when its mtime is. exFAT: an added or deleted entry moves it (CONFIRMED on
-    // three takes, 2026-10-29); a file written in place does not, and frames are never rewritten.
+    // three takes, 2026-10-29); a file written in place does not, and frames are never rewritten. A split clip
+    // ([storage] frames_per_folder) gains frames inside its last part_NNN folder, which moves only that folder's
+    // mtime: for such a clip the key adds the last part's mtime (one more stat, in a root of a few entries).
     ClipFacts get(const std::filesystem::path &dir)
     {
-        struct stat st {};
-        const bool statOk = ::stat(dir.c_str(), &st) == 0;
-        const int64_t mtimeNs = statOk ? int64_t(st.st_mtim.tv_sec) * 1000000000LL + st.st_mtim.tv_nsec : 0;
+        const auto mtimeOf = [](const std::filesystem::path &path, bool &ok) {
+            struct stat st {};
+            ok = ::stat(path.c_str(), &st) == 0;
+            return ok ? int64_t(st.st_mtim.tv_sec) * 1000000000LL + st.st_mtim.tv_nsec : 0;
+        };
+        bool statOk = false;
+        const int64_t mtimeNs = mtimeOf(dir, statOk);
         const std::string key = dir.string();
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto it = entries_.find(key);
-            if (it != entries_.end() && it->second.mtimeNs == mtimeNs && statOk)
-                return it->second.facts;
+            if (it != entries_.end() && it->second.mtimeNs == mtimeNs && statOk) {
+                bool partOk = true;
+                const std::string &lastPart = it->second.facts.frames.lastPart;
+                if (lastPart.empty() || mtimeOf(dir / lastPart, partOk) == it->second.partMtimeNs)
+                    return it->second.facts;
+            }
         }
         ClipFacts facts = probeClip(dir, coreStartMs_);           // outside the lock
         probes_.fetch_add(1);
+        bool partOk = true;
+        const int64_t partMtimeNs = facts.frames.lastPart.empty() ? 0 : mtimeOf(dir / facts.frames.lastPart, partOk);
         std::lock_guard<std::mutex> lock(mutex_);
-        entries_[key] = {mtimeNs, facts};
+        entries_[key] = {mtimeNs, partMtimeNs, facts};
         return facts;
     }
     // The last facts for a folder, without probing: used while a hold lasts and nothing may read the card.
@@ -224,7 +236,7 @@ public:
     int probes() const { return probes_.load(); }
 
 private:
-    struct Entry { int64_t mtimeNs = 0; ClipFacts facts; };
+    struct Entry { int64_t mtimeNs = 0; int64_t partMtimeNs = 0; ClipFacts facts; };
     std::mutex mutex_;
     std::map<std::string, Entry> entries_;
     std::atomic<int> probes_{0};

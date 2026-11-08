@@ -70,6 +70,7 @@
 #include <functional>
 
 #include "playback/ClipProbe.hpp"
+#include "cdng/FramePath.hpp"
 #include "playback/PlaybackFrames.hpp"
 #include "playback/PlaybackHold.hpp"
 
@@ -256,7 +257,10 @@ std::string bufferSettingMembers()
         + ",\"storage_preroll_auto\":" + (storagepreroll::prerollAutomatic() ? "true" : "false")
         + ",\"storage_preroll_auto_env\":" + (storagepreroll::prerollAutomaticFromEnv() ? "true" : "false")
         + ",\"storage_preroll_fps\":" + storagepreroll::prerollFpsText(storagepreroll::prerollFps())
-        + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\"";
+        + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\""
+        + ",\"frames_per_folder\":" + std::to_string(bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire))
+        + ",\"frames_per_folder_env\":" + (std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") && *std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") ? "true" : "false")
+;
 }
 
 // Re-read the request after the hardware file changed (a save, or set_buffer_mode). The camera republishes it, with
@@ -268,6 +272,10 @@ void refreshBufferRequest()
     // The automatic pre-roll switch rides on the same refresh: published as atomics, so no reader parses the file.
     storagepreroll::publishAutomatic(std::getenv("APERTAR_STORAGE_PREROLL"),
         storagepreroll::parsePrerollConf(hardware::configStore().currentText()));
+    // frames_per_folder rides on it too ([storage]; the camera reads frames_per_folder again at each take).
+    const bufferbudget::BufferConf storageConf = bufferbudget::parseBufferConf(hardware::configStore().currentText());
+    bufferbudget::framesPerFolderRequest().store(
+        bufferbudget::requestedFramesPerFolder(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
 }
 
 // Record pressed while the safety-stop thread drains the previous take: cut that flush short, lock-free. Called before
@@ -5042,6 +5050,10 @@ buffer_ram_floor_mb=512
 buffer_ram_max_fraction=0.5
 # Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
 # buffer_stop_percent=90
+# Frames per folder: 0 keeps every frame of a take in its clip folder; 100 to 100000 starts a new part_NNN folder inside
+# the clip every that many frames (an exFAT create walks the whole folder, so long takes in one folder get slower).
+# Takes effect at the next take. Resolve and Premiere import one folder as one clip: split clips are merged first.
+# frames_per_folder=0
 
 [media]
 # Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
@@ -12497,6 +12509,34 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
     }
 
+    // frames_per_folder=<N> in [storage], through the store like set_buffer_mode. Allowed while recording: it applies to
+    // the next take.
+    if (command.name == "set_frames_per_folder") {
+        const auto value = command.string("value");
+        if (!value || !framepath::framesPerFolderProblem(*value).empty())
+            return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000.");
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::string base = command.string("base").value_or("");
+        hardware::StoreFlags flags;
+        flags.backup = true;
+        flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
+        const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
+            { { hwconf::Edit::Op::Set, "storage", "frames_per_folder", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        if (!result.ok) {
+            return errorReplyBody(command.id, result.error,
+                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
+                ",\"issues\":" + controlsIssuesJson(result.issues));
+        }
+        if (result.written) {
+            controlsErrors_ = controlsErrorCount(result.issues);
+            controlsWarnings_ = result.issues.size() - controlsErrors_.load();
+            wakeControlsWorker();
+        }
+        refreshBufferRequest();
+        return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
+            (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
+    }
+
     // The automatic storage pre-roll switch: preroll=on|off in [media], through the store like set_buffer_mode. The manual
     // storage_preroll command always works; this only decides Core start, card insert and format.
     if (command.name == "set_storage_preroll") {
@@ -12529,7 +12569,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();

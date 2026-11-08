@@ -802,7 +802,8 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
             const std::string problem = bufferbudget::bufferConfProblem(line.key, line.value);
             if (!problem.empty())
                 add(line.number, true, "buffer_value", line.section, line.key, line.value, line.key + "=" + line.value + " on line " +
-                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "buffer" ? " (frames)." : "."));
+                    N(line.number) + " " + problem + ": Core uses the default for " + line.key +
+                    (line.key == "buffer" ? " (frames)." : line.key == "frames_per_folder" ? " (0, one folder)." : "."));
         }
         if (line.section == "media") {
             // The storage pre-roll's keys (Core reads them at each request).

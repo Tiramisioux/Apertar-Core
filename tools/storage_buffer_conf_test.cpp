@@ -74,6 +74,21 @@ int main()
         check(!bufferbudget::parseBufferConf(text).ram, "trailing comment: ignored (as Core's Python reader keeps it in the value)");
     }
     {
+        // frames_per_folder (split a take into part_NNN folders) and its precedence
+        const auto conf = bufferbudget::parseBufferConf(head + "frames_per_folder=5000\n");
+        check(conf.framesPerFolder && *conf.framesPerFolder == 5000, "frames_per_folder=5000");
+        check(bufferbudget::requestedFramesPerFolder(nullptr, conf) == 5000, "frames_per_folder: the file when the env is unset");
+        check(bufferbudget::requestedFramesPerFolder("500", conf) == 500, "frames_per_folder: APERTAR_CDNG_FRAMES_PER_FOLDER wins");
+        check(bufferbudget::requestedFramesPerFolder("50", conf) == 0, "frames_per_folder: a bad env value is 0 (one folder)");
+        check(bufferbudget::requestedFramesPerFolder(nullptr, bufferbudget::parseBufferConf(head)) == 0, "frames_per_folder: default 0");
+        const std::string bad = head + "frames_per_folder=99\n";
+        const auto issues = bufferIssues(bad);
+        check(!bufferbudget::parseBufferConf(bad).framesPerFolder && issues.size() == 1 && issues[0].line == 4 && issues[0].error,
+              "frames_per_folder=99: unset, one error on line 4");
+        if (!issues.empty()) std::printf("      %s\n", issues[0].message.c_str());
+        check(bufferIssues(head + "frames_per_folder=0\n").empty(), "frames_per_folder=0 is valid");
+    }
+    {
         const std::string text = "[camera]\nbuffer=ram\n";
         check(!bufferbudget::parseBufferConf(text).ram, "buffer= in another section is ignored");
     }

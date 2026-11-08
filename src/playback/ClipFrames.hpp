@@ -22,6 +22,8 @@
 // by count, so for them number == position and nothing changes. A timelapse shot as DNG + JPEG
 // pairs gives one frame per stem, the DNG first (critic m9; the touch UI lists *.dng only).
 
+#include "cdng/FramePath.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -34,7 +36,7 @@
 namespace apertar::playback {
 
 struct FrameFile {
-    std::string name;        // file name inside the clip folder
+    std::string name;        // path inside the clip folder: the file name, or "part_000/<name>" in a split clip
     uint64_t number = 0;     // from "<clip>_<digits>.dng"; the position when a name has no number
     uint64_t bytes = 0;
 };
@@ -45,6 +47,8 @@ struct FrameList {
     uint64_t first = 0, last = 0;            // numbers of the first and last file
     uint64_t empty = 0;                      // 0-byte files (a pulled card leaves ~21-23)
     std::vector<std::pair<uint64_t, uint64_t>> gaps;   // [first missing number, how many]
+    uint64_t parts = 0;                      // part_* folders read ([storage] frames_per_folder; 0 = a flat clip)
+    std::string lastPart;                    // the highest-numbered of them ("" when flat), for the facts cache
 
     uint64_t count() const { return files.size(); }                    // FRAMES, the "N" of FRAME i / N
     uint64_t span() const { return files.empty() ? 0 : last - first + 1; }
@@ -109,10 +113,16 @@ inline FrameList listFrames(const std::filesystem::path &dir, std::string *error
     std::error_code ec;
     struct Candidate { std::string stem, name; uint64_t bytes; bool dng; };
     std::vector<Candidate> found;
+    // A split clip ([storage] frames_per_folder) keeps its frames in part_NNN folders, a partly merged one in both
+    // places: the root's frames, then every part's, each named by its path inside the clip folder. Frame names and
+    // numbers are unchanged across parts, so the sort below orders both layouts the same way.
+    std::vector<std::string> partDirs;
     for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
         if (ec) break;
-        if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) { ec.clear(); continue; }
         const std::string name = entry.path().filename().string();
+        if (entry.is_directory(ec) && !entry.is_symlink(ec) && framepath::isPartDirName(name)) { partDirs.push_back(name); continue; }
+        ec.clear();
+        if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) { ec.clear(); continue; }
         const bool dng = detail::endsWithNoCase(name, ".dng");
         const bool jpg = detail::endsWithNoCase(name, ".jpg") || detail::endsWithNoCase(name, ".jpeg");
         if (!dng && !jpg) continue;
@@ -121,6 +131,25 @@ inline FrameList listFrames(const std::filesystem::path &dir, std::string *error
         found.push_back({entry.path().stem().string(), name, bytes, dng});
     }
     if (ec && error) *error = "Could not read the clip folder: " + ec.message();
+    ec.clear();
+    std::sort(partDirs.begin(), partDirs.end(), [](const std::string &a, const std::string &b) {
+        return a.size() != b.size() ? a.size() < b.size() : a < b;   // part_999 before part_1000
+    });
+    for (const std::string &part : partDirs) {
+        for (const auto &entry : std::filesystem::directory_iterator(dir / part, ec)) {
+            if (ec) break;
+            if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) { ec.clear(); continue; }
+            const std::string name = entry.path().filename().string();
+            if (!detail::endsWithNoCase(name, ".dng")) continue;
+            const uint64_t bytes = entry.file_size(ec);
+            if (ec) { ec.clear(); continue; }
+            found.push_back({entry.path().stem().string(), part + "/" + name, bytes, true});
+        }
+        if (ec && error && error->empty()) *error = "Could not read " + part + " of the clip folder: " + ec.message();
+        ec.clear();
+    }
+    out.parts = partDirs.size();
+    if (!partDirs.empty()) out.lastPart = partDirs.back();
     // One frame per stem, the DNG first. A folder with DNGs ignores lone JPEGs (as the touch UI).
     const bool anyDng = std::any_of(found.begin(), found.end(), [](const Candidate &c) { return c.dng; });
     std::sort(found.begin(), found.end(), [](const Candidate &a, const Candidate &b) {
