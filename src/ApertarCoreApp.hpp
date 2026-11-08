@@ -132,6 +132,18 @@ private:
     std::string mediaTrimStateJson() const;
     bool mediaTrimMayRun() const;
     void waitForMediaTrim(const std::string &commandName, int blockMs);
+    // Merge worker for split clips ([storage] frames_per_folder, cdng/ClipMerge.hpp), on the trim worker's pattern:
+    // clipMerge() only requests a scan; one thread (nice 10) renames part_*/ frames back into the clip root while the
+    // camera is idle, re-checking clipMergeMayRun() before every rename; waitForClipMerge() pauses it for a take.
+    void clipMerge(const std::string &reason);
+    void runClipMerge();
+    void stopClipMerge();
+    bool clipMergeMayRun(std::string *why = nullptr) const;
+    void waitForClipMerge(const std::string &commandName, int blockMs);
+    std::string clipMergeStateJson() const;
+    void endClipMergeRename();
+    enum class ClipMergeOutcome { Done, Stopped, Shutdown };
+    ClipMergeOutcome mergeSplitClip(const std::filesystem::path &clip);
     MediaProfile mediaProfile() const;
     void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
@@ -297,6 +309,18 @@ private:
     bool mediaTrimUnsupported_ = false;             // exit 3, remembered until the mount id changes
     int mediaTrimUnsupportedMountId_ = -1;
     int mediaTrimFailures_ = 0;
+    // Merge worker state. clipMergeMutex_ guards the strings and the request; never held across a rename.
+    std::thread clipMergeThread_;
+    std::atomic<bool> clipMergeWorkerRunning_{false};
+    mutable std::mutex clipMergeMutex_;
+    std::condition_variable clipMergeCv_;
+    bool clipMergeRequested_ = false;
+    std::string clipMergeReason_;
+    std::string clipMergeActive_;                   // the clip being merged ("" when none)
+    std::string clipMergeLast_;                     // the last clip's result line
+    std::atomic<unsigned> clipMergePending_{0};     // clips with a .parts marker at the last scan
+    std::atomic<bool> clipMergeRenaming_{false};    // one rename is in flight
+    std::atomic<int64_t> clipMergeBlockUntilMs_{0}; // a take or media action began: no rename until then
     int mediaTrimBackoffRounds_ = 0;
     int64_t mediaTrimBackoffUntilMs_ = 0;
     std::string mediaTrimLastResult_ = "none";

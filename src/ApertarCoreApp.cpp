@@ -52,7 +52,10 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -70,6 +73,7 @@
 #include <functional>
 
 #include "playback/ClipProbe.hpp"
+#include "cdng/ClipMerge.hpp"
 #include "cdng/FramePath.hpp"
 #include "playback/PlaybackFrames.hpp"
 #include "playback/PlaybackHold.hpp"
@@ -260,7 +264,8 @@ std::string bufferSettingMembers()
         + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\""
         + ",\"frames_per_folder\":" + std::to_string(bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire))
         + ",\"frames_per_folder_env\":" + (std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") && *std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") ? "true" : "false")
-;
+        + ",\"clip_merge_enabled\":" + (bufferbudget::clipMergeRequest().load(std::memory_order_acquire) ? "true" : "false")
+        + ",\"clip_merge_env_off\":" + (bufferbudget::clipMergeEnvOff(std::getenv("APERTAR_CLIP_MERGE")) ? "true" : "false");
 }
 
 // Re-read the request after the hardware file changed (a save, or set_buffer_mode). The camera republishes it, with
@@ -272,10 +277,12 @@ void refreshBufferRequest()
     // The automatic pre-roll switch rides on the same refresh: published as atomics, so no reader parses the file.
     storagepreroll::publishAutomatic(std::getenv("APERTAR_STORAGE_PREROLL"),
         storagepreroll::parsePrerollConf(hardware::configStore().currentText()));
-    // frames_per_folder rides on it too ([storage]; the camera reads frames_per_folder again at each take).
+    // frames_per_folder and clip_merge ride on it too ([storage]; the camera reads frames_per_folder again at each take).
     const bufferbudget::BufferConf storageConf = bufferbudget::parseBufferConf(hardware::configStore().currentText());
     bufferbudget::framesPerFolderRequest().store(
         bufferbudget::requestedFramesPerFolder(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
+    bufferbudget::clipMergeRequest().store(
+        bufferbudget::requestedClipMerge(std::getenv("APERTAR_CLIP_MERGE"), storageConf), std::memory_order_release);
 }
 
 // Record pressed while the safety-stop thread drains the previous take: cut that flush short, lock-free. Called before
@@ -5054,6 +5061,8 @@ buffer_ram_max_fraction=0.5
 # the clip every that many frames (an exFAT create walks the whole folder, so long takes in one folder get slower).
 # Takes effect at the next take. Resolve and Premiere import one folder as one clip: split clips are merged first.
 # frames_per_folder=0
+# Merge split clips back into one folder while the camera is idle (on, the default) or leave them split (off).
+# clip_merge=on
 
 [media]
 # Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
@@ -8019,6 +8028,11 @@ bool ApertarCoreApp::start()
         mediaTrimWorkerRunning_.store(true);
         mediaTrimThread_ = std::thread(&ApertarCoreApp::runMediaTrim, this);
     }
+    if (!clipMergeWorkerRunning_.load() && !clipMergeThread_.joinable()) {
+        clipMergeWorkerRunning_.store(true);
+        clipMergeThread_ = std::thread(&ApertarCoreApp::runClipMerge, this);
+        clipMerge("start");
+    }
     if (!storagePrerollThread_.joinable()) {
         storagePrerollRunning_.store(true, std::memory_order_release);
         storagePrerollThread_ = std::thread(&ApertarCoreApp::runStoragePreroll, this);
@@ -9010,6 +9024,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
         const MediaDeleteScope deleteScope(mediaDeleteActive_);
+        waitForClipMerge("media_delete", 0);   // the merge worker leaves the clip before it goes (at most one rename)
         const uint64_t freeBeforeDelete = mediaFreeBytesNow(options_.mediaRoot);
 
         const std::string kind = *requestedKind;
@@ -9092,6 +9107,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
         const MediaDeleteScope deleteScope(mediaDeleteActive_);
+        waitForClipMerge("media_delete", 0);   // the merge worker leaves the clip before it goes (at most one rename)
         const uint64_t freeBeforeDelete = mediaFreeBytesNow(options_.mediaRoot);
 
         const std::filesystem::path mediaRoot(options_.mediaRoot);
@@ -9564,6 +9580,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << mediaTrimStateJson()
         << ",\"media_trim_enabled\":" << (mediaTrimSetting_.load() ? "true" : "false")
         << ",\"media_trim_env_off\":" << (mediaTrimEnvOff() ? "true" : "false")
+        << clipMergeStateJson()
         << "," << bufferMembers(bufferStatus.used, bufferStatus.capacity, bufferStatus.mode)
         << ",\"media_total_bytes\":" << mediaTotalBytes
         << ",\"media_used_percent\":" << jsonNumberOrNull(mediaUsedPercent, 1)
@@ -10921,6 +10938,7 @@ void ApertarCoreApp::runMediaWatcher()
             if (current.mounted()) {
                 applyMediaTuning(profile, true);
                 trimMedia("mount");   // once per mount; the worker waits for an idle medium
+                clipMerge("mount");   // split clips on the new card; the merge worker waits for an idle medium too
                 // The trim above is requested first; the pre-roll thread waits for it, then settles, then runs.
                 storagepreroll::MountChange change;
                 change.havePrevious = havePrevious;
@@ -11033,6 +11051,7 @@ void ApertarCoreApp::runBufferEvents()
 void ApertarCoreApp::stopMediaWatcher()
 {
     stopStoragePreroll();
+    stopClipMerge();
     stopMediaTrim();
     mediaWatcherRunning_.store(false, std::memory_order_release);
     {
@@ -11545,6 +11564,7 @@ void ApertarCoreApp::runMediaTrim()
             mediaTrimFailures_ = 0;
             mediaTrimBackoffRounds_ = 0;
             finish("trimmed", bytes, ms);
+            clipMerge("trim");
         } else if (code == 3) {
             mediaTrimUnsupported_ = true;
             mediaTrimUnsupportedMountId_ = mountId;
@@ -11592,6 +11612,320 @@ void ApertarCoreApp::stopMediaTrim()
     mediaTrimCv_.notify_all();
     if (mediaTrimThread_.joinable())
         mediaTrimThread_.join();
+}
+
+// ---- Merge worker for split clips ---------------------------------------------------------------------------------
+// A take recorded with [storage] frames_per_folder=N keeps its frames in <clip>/part_NNN/ and a .parts marker in the
+// clip root. Resolve and Premiere import one folder as one clip, so this worker moves the frames back into the root
+// while the camera is idle: oldest clip first, part_000 first, frame order, so a half-merged clip is always a flat
+// prefix plus intact parts (clipmerge::prefixInvariant) and a power cut leaves a state the next scan continues from.
+// Every rename into the root walks the root's entries (exFAT), so a clip of N frames costs about 158 ns x N^2
+// (probe-exfat-dir.md: ~5 min for 45,000): never during a take. [storage] clip_merge=off or APERTAR_CLIP_MERGE=0
+// leaves clips split (the NVMe campaign does, for its A/B).
+
+namespace {
+int64_t clipMergeNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void fsyncFolder(const std::filesystem::path &dir)
+{
+    const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd >= 0) {
+        ::fsync(fd);
+        ::close(fd);
+    }
+}
+// rename without replacing an existing target (exFAT supports RENAME_NOREPLACE); 0 or errno.
+int renameNoReplace(const std::filesystem::path &from, const std::filesystem::path &to)
+{
+#if defined(SYS_renameat2)
+    constexpr unsigned kRenameNoReplace = 1u;   // RENAME_NOREPLACE
+    if (::syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), kRenameNoReplace) == 0)
+        return 0;
+    return errno;
+#else
+    struct stat st {};
+    if (::lstat(to.c_str(), &st) == 0)
+        return EEXIST;
+    return ::rename(from.c_str(), to.c_str()) == 0 ? 0 : errno;
+#endif
+}
+clipmerge::Listing listClip(const std::filesystem::path &clip, std::error_code &ec)
+{
+    clipmerge::Listing listing;
+    for (const auto &entry : std::filesystem::directory_iterator(clip, ec)) {
+        const std::string name = entry.path().filename().string();
+        std::error_code typeEc;
+        if (entry.is_directory(typeEc) && framepath::isPartDirName(name)) {
+            std::vector<std::string> files;
+            std::error_code partEc;
+            for (const auto &file : std::filesystem::directory_iterator(entry.path(), partEc))
+                files.push_back(file.path().filename().string());
+            if (partEc) {
+                ec = partEc;
+                return listing;
+            }
+            listing.parts.emplace_back(name, std::move(files));
+        } else if (name == framepath::kMarkerName) {
+            listing.hasMarker = true;
+        } else if (entry.is_regular_file(typeEc)) {
+            listing.rootFiles.push_back(name);
+        }
+    }
+    return listing;
+}
+}  // namespace
+
+// Only requests a scan; the worker does it. Repeated requests coalesce.
+void ApertarCoreApp::clipMerge(const std::string &reason)
+{
+    if (!clipMergeWorkerRunning_.load())
+        return;
+    {
+        std::lock_guard<std::mutex> lock(clipMergeMutex_);
+        clipMergeRequested_ = true;
+        clipMergeReason_ = reason;
+    }
+    clipMergeCv_.notify_all();
+}
+
+// True when a rename may run now. Takes no lock the command path holds (mediaTrimMutex_ is only ever held briefly).
+bool ApertarCoreApp::clipMergeMayRun(std::string *why) const
+{
+    const auto no = [&](const char *reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (!bufferbudget::clipMergeRequest().load(std::memory_order_acquire)) return no("switched off");
+    if (camera_.isRecording()) return no("recording");
+    if (storagepreroll::prerollActive()) return no("pre-roll");
+    if (bufferbudget::safetyStopState().active.load(std::memory_order_acquire)) return no("safety-stop flush");
+    if (soundRecordingActive()) return no("sound recording");
+    if (camera_.timelapseActive()) return no("timelapse");
+    if (camera_.mediaWritesPending()) return no("writes pending");
+    if (mediaDeleteActive_.load()) return no("media delete");
+    if (camera_.state() == CameraState::Standby) return no("standby");
+    if (clipMergeNowMs() < clipMergeBlockUntilMs_.load()) return no("recording");   // a take or media action is starting
+    if (!mediaSnapshot().mounted()) return no("media not mounted");
+    {
+        std::lock_guard<std::mutex> lock(mediaTrimMutex_);
+        if (mediaTrimBusy_) return no("trim running");
+    }
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        if (mediaSpeedTestRunning_) return no("media speed test");
+    }
+    return true;
+}
+
+void ApertarCoreApp::runClipMerge()
+{
+    ::setpriority(PRIO_PROCESS, static_cast<id_t>(::syscall(SYS_gettid)), 10);
+    bool wasRecording = false;
+    while (clipMergeWorkerRunning_.load()) {
+        std::string reason;
+        {
+            std::unique_lock<std::mutex> lock(clipMergeMutex_);
+            // Woken by a request, or every 2 s to notice a take's end (any stop path: button, safety stop, failure).
+            clipMergeCv_.wait_for(lock, std::chrono::seconds(2),
+                                  [this] { return clipMergeRequested_ || !clipMergeWorkerRunning_.load(); });
+            if (!clipMergeWorkerRunning_.load())
+                break;
+            const bool recording = camera_.isRecording();
+            if (!clipMergeRequested_ && wasRecording && !recording) {
+                clipMergeRequested_ = true;
+                clipMergeReason_ = "take";
+            }
+            wasRecording = recording;
+            if (!clipMergeRequested_)
+                continue;
+            clipMergeRequested_ = false;
+            reason = clipMergeReason_;
+        }
+        if (!bufferbudget::clipMergeRequest().load() || !mediaSnapshot().mounted())
+            continue;
+
+        // The clips with a .parts marker, oldest first (folder time, then name: clip numbers restart with each date).
+        const std::filesystem::path root(options_.mediaRoot);
+        std::vector<std::pair<int64_t, std::filesystem::path>> clips;
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator(root, ec)) {
+            std::error_code e2;
+            if (!entry.is_directory(e2) || !std::filesystem::exists(entry.path() / framepath::kMarkerName, e2))
+                continue;
+            struct stat st {};
+            const int64_t mtime = ::stat(entry.path().c_str(), &st) == 0 ? int64_t(st.st_mtim.tv_sec) : 0;
+            clips.emplace_back(mtime, entry.path());
+        }
+        std::sort(clips.begin(), clips.end());
+        clipMergePending_.store(static_cast<unsigned>(clips.size()));
+        if (clips.empty())
+            continue;
+        std::cerr << "ApertarCore clip merge: scan (" << reason << ") pending=" << clips.size() << "\n";
+        bool shutdown = false;
+        for (const auto &clip : clips) {
+            const ClipMergeOutcome outcome = mergeSplitClip(clip.second);
+            if (outcome == ClipMergeOutcome::Shutdown) {
+                shutdown = true;
+                break;
+            }
+            if (outcome == ClipMergeOutcome::Done && clipMergePending_.load() > 0)
+                clipMergePending_.fetch_sub(1);
+            if (!bufferbudget::clipMergeRequest().load())
+                break;
+        }
+        if (shutdown)
+            break;
+    }
+}
+
+// One clip, start to end (or to a stop). Waits, without renaming, while clipMergeMayRun() says no.
+ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::filesystem::path &clip)
+{
+    const std::string name = clip.filename().string();
+    const auto stopped = [&](const std::string &why) {
+        std::cerr << "ApertarCore clip merge: stopped (" << why << ") " << name << "\n";
+        std::lock_guard<std::mutex> lock(clipMergeMutex_);
+        clipMergeActive_.clear();
+        clipMergeLast_ = name + ": stopped (" + why + ")";
+        return ClipMergeOutcome::Stopped;
+    };
+    std::error_code ec;
+    const clipmerge::Listing listing = listClip(clip, ec);
+    if (ec)
+        return stopped("could not read the folder: " + ec.message());
+    if (!clipmerge::prefixInvariant(listing))
+        return stopped("frames out of order; run tools/flatten_clip.py");
+    const clipmerge::Plan plan = clipmerge::plan(listing);
+    if (plan.nothingToDo)
+        return ClipMergeOutcome::Done;
+    {
+        std::lock_guard<std::mutex> lock(clipMergeMutex_);
+        clipMergeActive_ = name;
+    }
+    std::cerr << "ApertarCore clip merge: start " << name << " files=" << plan.steps.size() << " parts=" << listing.parts.size()
+              << (plan.conflict ? " (stops before " + plan.conflictName + ": already in the clip root)" : std::string()) << "\n";
+    const auto started = std::chrono::steady_clock::now();
+    uint64_t renameNs = 0;
+    size_t done = 0;
+    bool paused = false;
+    for (size_t i = 0; i < plan.steps.size(); ++i) {
+        const clipmerge::Step &step = plan.steps[i];
+        // Re-checked before every rename; the flag is set first so waitForClipMerge sees it or this sees the block.
+        for (;;) {
+            if (!clipMergeWorkerRunning_.load())
+                return ClipMergeOutcome::Shutdown;
+            clipMergeRenaming_.store(true);
+            std::string why;
+            if (clipMergeMayRun(&why))
+                break;
+            endClipMergeRename();
+            if (why == "switched off" || why == "media not mounted")
+                return stopped(why);
+            if (!paused) {
+                paused = true;
+                std::cerr << "ApertarCore clip merge: paused (" << why << ") " << name << " at " << done << "/" << plan.steps.size() << "\n";
+            }
+            std::unique_lock<std::mutex> lock(clipMergeMutex_);
+            clipMergeCv_.wait_for(lock, std::chrono::milliseconds(100), [this] { return !clipMergeWorkerRunning_.load(); });
+        }
+        if (paused) {
+            paused = false;
+            std::cerr << "ApertarCore clip merge: resumed " << name << " at " << done << "/" << plan.steps.size() << "\n";
+        }
+        std::error_code existsEc;
+        if (!std::filesystem::exists(clip, existsEc)) {
+            endClipMergeRename();
+            return stopped("deleted");
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const int err = renameNoReplace(clip / step.partDir / step.name, clip / step.name);
+        renameNs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+        endClipMergeRename();
+        if (err != 0) {
+            if (!std::filesystem::exists(clip, existsEc))
+                return stopped("deleted");
+            return stopped(std::string(err == EEXIST ? "already in the clip root: " : "rename failed: ") + step.name +
+                           (err == EEXIST ? "" : std::string(" ") + std::strerror(err)));
+        }
+        ++done;
+        // A part whose last frame just moved goes at once; the root is fsynced every 1000 renames.
+        const bool lastOfPart = i + 1 == plan.steps.size() || plan.steps[i + 1].partDir != step.partDir;
+        if (lastOfPart && std::find(plan.removeAfterSteps.begin(), plan.removeAfterSteps.end(), step.partDir) != plan.removeAfterSteps.end())
+            std::filesystem::remove(clip / step.partDir, existsEc);
+        if (done % 1000 == 0)
+            fsyncFolder(clip);
+        if (done % 5000 == 0)
+            std::cerr << "ApertarCore clip merge: " << name << " " << done << "/" << plan.steps.size() << " per_file_ms="
+                      << std::fixed << std::setprecision(2) << (renameNs / 1e6) / done << std::defaultfloat << "\n";
+    }
+    for (const std::string &part : plan.emptyPartsToRemove)
+        std::filesystem::remove(clip / part, ec);
+    fsyncFolder(clip);
+    if (plan.conflict)
+        return stopped("already in the clip root: " + plan.conflictName + "; run tools/flatten_clip.py");
+    if (plan.removeMarker) {
+        std::filesystem::remove(clip / framepath::kMarkerName, ec);
+        fsyncFolder(clip);
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    const double perFileMs = done > 0 ? (renameNs / 1e6) / done : 0.0;
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(1) << name << ": " << done << " files in " << seconds << " s, " << std::setprecision(2)
+         << perFileMs << " ms per file";
+    std::cerr << "ApertarCore clip merge: done " << name << " files=" << done << " seconds=" << std::fixed << std::setprecision(1)
+              << seconds << " per_file_ms=" << std::setprecision(2) << perFileMs << std::defaultfloat
+              << (plan.problem.empty() ? std::string() : " (" + plan.problem + ")") << "\n";
+    std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    clipMergeActive_.clear();
+    clipMergeLast_ = line.str() + (plan.problem.empty() ? "" : " (" + plan.problem + ")");
+    return plan.problem.empty() ? ClipMergeOutcome::Done : ClipMergeOutcome::Stopped;
+}
+
+// The rename flag goes down under the mutex, so waitForClipMerge's predicate wait cannot miss the wake.
+void ApertarCoreApp::endClipMergeRename()
+{
+    {
+        std::lock_guard<std::mutex> lock(clipMergeMutex_);
+        clipMergeRenaming_.store(false);
+    }
+    clipMergeCv_.notify_all();
+}
+
+// A take, a still, a time-lapse, a media action or a delete must not overlap a rename: block new renames for blockMs
+// and wait for the one in flight (one rename: well under 100 ms even at 60,000 files, probe-exfat-dir.md).
+void ApertarCoreApp::waitForClipMerge(const std::string &commandName, int blockMs)
+{
+    if (!clipMergeWorkerRunning_.load())
+        return;
+    if (blockMs > 0)
+        clipMergeBlockUntilMs_.store(clipMergeNowMs() + blockMs);
+    std::unique_lock<std::mutex> lock(clipMergeMutex_);
+    if (!clipMergeRenaming_.load())
+        return;
+    if (!clipMergeCv_.wait_for(lock, std::chrono::milliseconds(1000), [this] { return !clipMergeRenaming_.load(); }))
+        std::cerr << "ApertarCore clip merge: " << commandName << " waited 1 s for a rename\n";
+}
+
+// The merge fields of the state JSON, with a leading comma.
+std::string ApertarCoreApp::clipMergeStateJson() const
+{
+    std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    return ",\"clip_merge_pending\":" + std::to_string(clipMergePending_.load()) +
+        ",\"clip_merge_active\":\"" + escapeJson(clipMergeActive_) + "\"" +
+        ",\"clip_merge_last\":\"" + escapeJson(clipMergeLast_) + "\"";
+}
+
+void ApertarCoreApp::stopClipMerge()
+{
+    clipMergeWorkerRunning_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    }
+    clipMergeCv_.notify_all();
+    if (clipMergeThread_.joinable())
+        clipMergeThread_.join();
 }
 
 // A take, a still, a time-lapse or a media action (format, eject, mount, speed test) must not overlap a trim.
@@ -12272,8 +12606,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return errorReply(command.id, "Wait for the media speed test to finish first.");
     // A trim never overlaps a take or a media action: wait at most 2 s for a running one, then end it.
     if (command.name == "record_start" || command.name == "capture_photo" ||
-        (command.name == "timelapse_start" && !camera_.timelapseActive()) || mediaAction)
+        (command.name == "timelapse_start" && !camera_.timelapseActive()) || mediaAction) {
         waitForMediaTrim(command.name, 5000);
+        waitForClipMerge(command.name, 5000);
+    }
     if (command.name == "user_activity" || command.name == "wake" ||
         command.name.rfind("set_", 0) == 0 || command.name == "capture_photo" ||
         command.name == "record_start" || command.name == "record_stop" ||
@@ -12509,19 +12845,31 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
     }
 
-    // frames_per_folder=<N> in [storage], through the store like set_buffer_mode. Allowed while recording: it applies to
-    // the next take.
-    if (command.name == "set_frames_per_folder") {
-        const auto value = command.string("value");
-        if (!value || !framepath::framesPerFolderProblem(*value).empty())
-            return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000.");
+    // frames_per_folder=<N> and clip_merge=on|off in [storage], through the store like set_buffer_mode. Allowed while
+    // recording: frames_per_folder applies to the next take, clip_merge to the merge worker's next rename.
+    if (command.name == "set_frames_per_folder" || command.name == "set_clip_merge") {
+        const bool fpf = command.name == "set_frames_per_folder";
+        std::string key, value;
+        if (fpf) {
+            const auto v = command.string("value");
+            if (!v || !framepath::framesPerFolderProblem(*v).empty())
+                return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000.");
+            key = "frames_per_folder";
+            value = *v;
+        } else {
+            const auto enabled = command.string("enabled");
+            if (!enabled || (*enabled != "true" && *enabled != "false" && *enabled != "1" && *enabled != "0"))
+                return errorReply(command.id, "set_clip_merge needs enabled=true or enabled=false.");
+            key = "clip_merge";
+            value = (*enabled == "true" || *enabled == "1") ? "on" : "off";
+        }
         hardware::HardwareConfigStore &store = hardware::configStore();
         const std::string base = command.string("base").value_or("");
         hardware::StoreFlags flags;
         flags.backup = true;
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
-            { { hwconf::Edit::Op::Set, "storage", "frames_per_folder", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+            { { hwconf::Edit::Op::Set, "storage", key, value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
         if (!result.ok) {
             return errorReplyBody(command.id, result.error,
                 "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
@@ -12533,8 +12881,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             wakeControlsWorker();
         }
         refreshBufferRequest();
+        if (!fpf && bufferbudget::clipMergeRequest().load())
+            clipMerge("switch");
         return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
-            (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
+            (result.written ? "true" : "false") + ",\"apply\":\"" + (fpf ? "next_take" : "now") + "\"," +
+            bufferSettingMembers() + clipMergeStateJson());
     }
 
     // The automatic storage pre-roll switch: preroll=on|off in [media], through the store like set_buffer_mode. The manual
@@ -12569,7 +12920,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -12602,6 +12953,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"sensor_mono\":" << (camera_.sensorMono() ? "true" : "false")
              << ",\"media_state\":\"" << mediaState.stateName() << "\""
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
+             << clipMergeStateJson()
              << "," << settingsBody(camera_.settings());
         return okReply(command.id, body.str());
     }

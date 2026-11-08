@@ -103,6 +103,7 @@ struct BufferConf {
     std::optional<double> maxFraction;  // buffer_ram_max_fraction 0.1..0.75
     std::optional<unsigned> stopPercent;  // buffer_stop_percent    0 (never) or 50..99
     std::optional<unsigned> framesPerFolder;  // frames_per_folder 0 (one folder) or 100..100000 (framepath::)
+    std::optional<bool> clipMerge;            // clip_merge=on|off: Core's merge worker flattens split clips when idle
 };
 
 // Why `value` is not a good value of a buffer key, or "" when it is (or when the key is not one of the five).
@@ -126,6 +127,8 @@ inline std::string bufferConfProblem(const std::string &key, const std::string &
     }
     if (key == "frames_per_folder")
         return framepath::framesPerFolderProblem(value);
+    if (key == "clip_merge")
+        return (value == "on" || value == "off") ? "" : "is not on or off";
     if (key == "buffer_ram_floor_mb") {
         const bool digits = !value.empty() && value.size() <= 7 && value.find_first_not_of("0123456789") == std::string::npos;
         return (digits && std::strtoul(value.c_str(), nullptr, 10) <= (1u << 20)) ? "" : "is not a whole number of MiB from 0 to 1048576";
@@ -184,6 +187,8 @@ inline BufferConf parseBufferConf(const std::string &text)
             conf.floorMb = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
         else if (key == "frames_per_folder")
             conf.framesPerFolder = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
+        else if (key == "clip_merge")
+            conf.clipMerge = value == "on";
     }
     return conf;
 }
@@ -314,6 +319,17 @@ inline unsigned requestedFramesPerFolder(const char *envValue, const BufferConf 
 inline std::atomic<unsigned> &framesPerFolderRequest()
 {
     static std::atomic<unsigned> value{0};
+    return value;
+}
+// The merge worker's switch: [storage] clip_merge (default on); APERTAR_CLIP_MERGE=0 forces it off.
+inline bool clipMergeEnvOff(const char *envValue) { return envValue && std::string(envValue) == "0"; }
+inline bool requestedClipMerge(const char *envValue, const BufferConf &conf)
+{
+    return !clipMergeEnvOff(envValue) && conf.clipMerge.value_or(true);
+}
+inline std::atomic<bool> &clipMergeRequest()
+{
+    static std::atomic<bool> value{true};
     return value;
 }
 

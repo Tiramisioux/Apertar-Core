@@ -5810,12 +5810,21 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Frames per folder</span>
                 </div>
-                <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: flatten a split clip first (tools/flatten_clip.py).</span>
+                <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
                 <div class="field-stack">
                   <input class="settings-input" id="settingsFramesPerFolderInput" type="number" min="0" max="100000" step="1" value="0">
                   <button class="secondary-button" id="settingsFramesPerFolderApply" type="button">Apply</button>
                 </div>
                 <span class="subtle-note" id="settingsFramesPerFolderEnvNote" hidden>Set by APERTAR_CDNG_FRAMES_PER_FOLDER</span>
+              </section>
+              <section class="select-block" data-search="merge split clips flatten part folder idle">
+                <div class="select-topline">
+                  <span>Merge split clips</span>
+                </div>
+                <span class="subtle-note" id="settingsClipMergeNote">When the camera is idle it moves the frames of a split clip back into one folder, oldest clip first. It pauses while recording.</span>
+                <div class="pill-grid" id="settingsClipMergeOptions"></div>
+                <span class="subtle-note" id="settingsClipMergeStatus"></span>
+                <span class="subtle-note" id="settingsClipMergeLast" hidden></span>
               </section>
             </div>
 
@@ -16194,6 +16203,30 @@ std::string_view webControlPageHtml()
         fpfApply.disabled = framesPerFolderEnv;
       if (fpfEnvNote)
         fpfEnvNote.hidden = !framesPerFolderEnv;
+      const clipMergeEnvOff = !!systemState.clip_merge_env_off;
+      const clipMergeNote = document.getElementById("settingsClipMergeNote");
+      if (clipMergeNote)
+        clipMergeNote.textContent = "When the camera is idle it moves the frames of a split clip back into one folder, oldest clip first. It pauses while recording."
+          + (clipMergeEnvOff ? " Forced off by APERTAR_CLIP_MERGE=0." : "");
+      buildOptionButtons("settingsClipMergeOptions", toggleOptions, formatToggleLabel(!!systemState.clip_merge_enabled && !clipMergeEnvOff), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_clip_merge", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      const clipMergeStatus = document.getElementById("settingsClipMergeStatus");
+      if (clipMergeStatus) {
+        const mergeActive = typeof systemState.clip_merge_active === "string" ? systemState.clip_merge_active : "";
+        clipMergeStatus.textContent = "pending: " + (Number(systemState.clip_merge_pending) || 0)
+          + (mergeActive ? ", merging " + mergeActive : "");
+      }
+      const clipMergeLast = document.getElementById("settingsClipMergeLast");
+      if (clipMergeLast) {
+        const mergeLast = typeof systemState.clip_merge_last === "string" ? systemState.clip_merge_last : "";
+        clipMergeLast.textContent = mergeLast;
+        clipMergeLast.hidden = !mergeLast;
+      }
 
       buildOptionButtons("settingsDateTimeOverlayOptions", toggleOptions, formatToggleLabel(dateTimeOverlayEnabled), async (value) => {
         try {

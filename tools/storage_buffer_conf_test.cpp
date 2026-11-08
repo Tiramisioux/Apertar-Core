@@ -89,6 +89,17 @@ int main()
         check(bufferIssues(head + "frames_per_folder=0\n").empty(), "frames_per_folder=0 is valid");
     }
     {
+        // clip_merge (the merge worker's switch): default on, off in the file, APERTAR_CLIP_MERGE=0 forces off
+        check(bufferbudget::requestedClipMerge(nullptr, bufferbudget::parseBufferConf(head)), "clip_merge: default on");
+        const auto off = bufferbudget::parseBufferConf(head + "clip_merge=off\n");
+        check(off.clipMerge && !*off.clipMerge && !bufferbudget::requestedClipMerge(nullptr, off), "clip_merge=off");
+        const auto on = bufferbudget::parseBufferConf(head + "clip_merge=on\n");
+        check(!bufferbudget::requestedClipMerge("0", on) && bufferbudget::requestedClipMerge("1", on), "clip_merge: APERTAR_CLIP_MERGE=0 forces off");
+        const auto issues = bufferIssues(head + "clip_merge=yes\n");
+        check(issues.size() == 1 && issues[0].error, "clip_merge=yes: one error");
+        if (!issues.empty()) std::printf("      %s\n", issues[0].message.c_str());
+    }
+    {
         const std::string text = "[camera]\nbuffer=ram\n";
         check(!bufferbudget::parseBufferConf(text).ram, "buffer= in another section is ignored");
     }
