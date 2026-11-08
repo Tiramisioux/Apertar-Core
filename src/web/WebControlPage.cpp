@@ -14455,6 +14455,7 @@ std::string_view webControlPageHtml()
     // Touch / pen: long-press a pill to pick it up (pointer events); tap a palette pill to add it; x removes.
     const CLIP_DEFAULT_TEMPLATE = "{format}_{date}_{clip}";
     const CLIP_PRESETS = [
+      { value: "{format}_{date}_{clip}_{tc}", label: "Standard" },   // clipname::kStandardTemplate
       { value: "{format}_{date}_{clip}", label: "Original" },
       { value: "{format}_{date_}_{tc-}_{clip}", label: "Time of day, dashes" },
       { value: "{format}_{date_}_{tc}_{clip}", label: "Time of day, compact" }

@@ -1196,10 +1196,17 @@ std::string nextClipFolderName(const std::filesystem::path &root, const CaptureS
     if (!parsed.ok)
         parsed = parse(kDefaultTemplate);
     const Values values = clipNameValues(settings, sensor, now);
+    // A time token makes a new name at every take: the numbering then looks at the folders already there.
+    std::vector<std::string> existingNames;
+    if (hasTimeToken(parsed)) {
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator(root, ec))
+            existingNames.push_back(entry.path().filename().string());
+    }
     const int clip = nextClipNumber(parsed, values, [&](const std::string &name) {
         std::error_code ec;
         return std::filesystem::exists(root / name, ec);
-    });
+    }, existingNames);
     if (clip == 0)
         throw std::runtime_error("Could not allocate a unique clip folder.");
     return expand(parsed, values, clip);
@@ -5204,7 +5211,7 @@ private:
                                                     const std::string &sensor = std::string())
     {
         // The template decides the name (default {format}_{date}_{clip} = cDNG_26-10-28_C0001, as always);
-        // the number is the lowest C#### whose folder does not exist yet.
+        // the number is the lowest C#### not used yet that day (src/util/ClipName.hpp nextClipNumber).
         const std::filesystem::path root = mediaRootPath(mediaRoot);
         return root / nextClipFolderName(root, settings, sensor, std::chrono::system_clock::now());
     }
@@ -11824,6 +11831,10 @@ std::string CameraController::clipNameSensorLocked() const
 
 void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
 {
+    // The example is the next take's name. During a take it keeps its last value: with a time token the numbering lists
+    // the medium's root, and on exFAT a listing takes the lock every frame create needs.
+    if (recording_ || prerollTake_)
+        return;
     try {
         out.clipNameExample = nextClipFolderName(mediaRootPath(mediaRoot_), out, clipNameSensorLocked(),
                                                  std::chrono::system_clock::now());

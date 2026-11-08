@@ -3,7 +3,8 @@
 // Clip folder names from a user template (std only; no camera or filesystem code).
 //
 // A template is ONE string: {tokens} in braces, every other character literal. The default,
-// "{format}_{date}_{clip}", makes exactly the names the camera always made (cDNG_26-10-28_C0001).
+// "{format}_{date}_{clip}", makes exactly the names the camera always made (cDNG_26-10-28_C0001). The UIs' first
+// preset, kStandardTemplate, adds the take's start timecode (HHMMSSFF, the {tc} token): cDNG_26-10-28_C0001_01400812.
 // Every token and every literal produces only [A-Za-z0-9._-], so a name is a safe folder name and a
 // safe file prefix (DNG frames, <folder>.wav, <folder>.mp4 all derive from the folder name).
 //
@@ -21,6 +22,7 @@
 namespace apertar::clipname {
 
 inline constexpr const char *kDefaultTemplate = "{format}_{date}_{clip}";
+inline constexpr const char *kStandardTemplate = "{format}_{date}_{clip}_{tc}";   // the WebUI's and the touch UI's "Standard" preset
 inline constexpr std::size_t kMaxTemplateChars = 200;
 inline constexpr std::size_t kMaxNameChars = 100;
 inline constexpr std::size_t kMaxTextChars = 24;
@@ -282,14 +284,68 @@ inline Parsed parse(const std::string &tmpl)
     return r;
 }
 
-// The next free clip number: the lowest N in 1..9999 whose expanded name does not exist yet (the rule the
-// camera always used; with the default template it is byte-identical). Returns 0 if all are taken.
-inline int nextClipNumber(const Parsed &parsed, const Values &values,
-                          const std::function<bool(const std::string &)> &exists)
+// Tokens whose value changes from one take to the next on the same day.
+inline bool isTimeToken(const std::string &name)
 {
-    for (int clip = 1; clip <= 9999; ++clip)
-        if (!exists(expand(parsed, values, clip)))
-            return clip;
+    return name == "time" || name == "time-" || name == "tc" || name == "tc-";
+}
+
+inline bool hasTimeToken(const Parsed &parsed)
+{
+    for (const Part &p : parsed.parts)
+        if (p.kind == Part::Kind::Token && isTimeToken(p.text))
+            return true;
+    return false;
+}
+
+namespace detail {
+
+// '\x01' in `pattern` stands for one time value: one or more of [0-9-].
+inline bool matchTimeWildcards(const std::string &pattern, std::size_t p, const std::string &name, std::size_t i)
+{
+    if (p == pattern.size())
+        return i == name.size();
+    if (pattern[p] == '\x01') {
+        for (std::size_t j = i; j < name.size() && ((name[j] >= '0' && name[j] <= '9') || name[j] == '-'); ++j)
+            if (matchTimeWildcards(pattern, p + 1, name, j + 1))
+                return true;
+        return false;
+    }
+    return i < name.size() && name[i] == pattern[p] && matchTimeWildcards(pattern, p + 1, name, i + 1);
+}
+
+} // namespace detail
+
+// True when `name` is what this template makes for this clip number at any time of the same day: the time tokens
+// match any time, and a name without them (the same template minus the time, e.g. cDNG_26-10-28_C0001 for
+// "{format}_{date}_{clip}_{tc}") counts too.
+inline bool sameClipAnyTime(const Parsed &parsed, const Values &values, int clip, const std::string &name)
+{
+    std::vector<Part> wild = parsed.parts, timeless;
+    for (Part &p : wild)
+        if (p.kind == Part::Kind::Token && isTimeToken(p.text)) { p.kind = Part::Kind::Text; p.text = "\x01"; }
+    for (const Part &p : parsed.parts)
+        if (!(p.kind == Part::Kind::Token && isTimeToken(p.text))) timeless.push_back(p);
+    return detail::matchTimeWildcards(expand(wild, values, clip), 0, name, 0) || expand(timeless, values, clip) == name;
+}
+
+// The next free clip number: the lowest N in 1..9999 whose expanded name does not exist yet (the rule the camera
+// always used). A template with a time token makes a new name at every take, so for it N is also taken when any of
+// `existingNames` (the folders on the medium) is clip N at another time of the day (sameClipAnyTime). Returns 0 if all
+// are taken.
+inline int nextClipNumber(const Parsed &parsed, const Values &values,
+                          const std::function<bool(const std::string &)> &exists,
+                          const std::vector<std::string> &existingNames = {})
+{
+    const bool timed = hasTimeToken(parsed);
+    for (int clip = 1; clip <= 9999; ++clip) {
+        if (exists(expand(parsed, values, clip)))
+            continue;
+        if (timed && std::any_of(existingNames.begin(), existingNames.end(),
+                                 [&](const std::string &n) { return sameClipAnyTime(parsed, values, clip, n); }))
+            continue;
+        return clip;
+    }
     return 0;
 }
 
