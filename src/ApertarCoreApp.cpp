@@ -8029,6 +8029,9 @@ bool ApertarCoreApp::start()
         mediaTrimThread_ = std::thread(&ApertarCoreApp::runMediaTrim, this);
     }
     if (!clipMergeWorkerRunning_.load() && !clipMergeThread_.joinable()) {
+        // Publish [storage] clip_merge before the first scan: the atomic starts as true, and the T37 block below that
+        // refreshes it runs after this, so a camera with the merge off would begin merging at every start.
+        refreshBufferRequest();
         clipMergeWorkerRunning_.store(true);
         clipMergeThread_ = std::thread(&ApertarCoreApp::runClipMerge, this);
         clipMerge("start");
