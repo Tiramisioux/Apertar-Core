@@ -5718,6 +5718,16 @@ std::string_view webControlPageHtml()
                 <button class="secondary-button" id="ejectMediaButton" type="button">Eject Media</button>
                 <span class="subtle-note">Unmounts current media and prepares removable media for safe removal.</span>
               </div>
+              <div class="settings-action-row" id="clipSplitRow" hidden>
+                <span class="input-label">Split long takes (frames per folder)</span>
+                <div class="pill-grid" id="clipSplitOptions"></div>
+                <span class="subtle-note" id="clipSplitNote"></span>
+              </div>
+              <div class="settings-action-row" id="clipMergeRow" hidden>
+                <span class="input-label">Merge split clips</span>
+                <div class="pill-grid" id="clipMergeOptions"></div>
+                <span class="subtle-note" id="clipMergeNote"></span>
+              </div>
             </div>
 
             <div class="settings-card" id="settingsFormatMediaCard" data-search="format card ssd storage erase exfat">
@@ -13858,6 +13868,20 @@ std::string_view webControlPageHtml()
         snapshot.storage_preroll_last = source.storage_preroll_last;
       if (typeof source.buffer_note === "string")
         snapshot.buffer_note = source.buffer_note;
+      if (typeof source.frames_per_folder === "number")
+        snapshot.frames_per_folder = source.frames_per_folder;
+      if (typeof source.frames_per_folder_env === "boolean")
+        snapshot.frames_per_folder_env = source.frames_per_folder_env;
+      if (typeof source.clip_merge_enabled === "boolean")
+        snapshot.clip_merge_enabled = source.clip_merge_enabled;
+      if (typeof source.clip_merge_env_off === "boolean")
+        snapshot.clip_merge_env_off = source.clip_merge_env_off;
+      if (typeof source.clip_merge_pending === "number")
+        snapshot.clip_merge_pending = source.clip_merge_pending;
+      if (typeof source.clip_merge_active === "string")
+        snapshot.clip_merge_active = source.clip_merge_active;
+      if (typeof source.clip_merge_last === "string")
+        snapshot.clip_merge_last = source.clip_merge_last;
       if (source.recording_capabilities)
         snapshot.recording_capabilities = source.recording_capabilities;
       if (typeof source.lossy_dng_ratio === "string")
@@ -14029,6 +14053,12 @@ std::string_view webControlPageHtml()
           break;
         case "set_storage_preroll":
           snapshot.storage_preroll_auto = payload.value === "on";
+          break;
+        case "set_frames_per_folder":
+          snapshot.frames_per_folder = Number(payload.value) || 0;
+          break;
+        case "set_clip_merge":
+          snapshot.clip_merge_enabled = payload.enabled === true;
           break;
         case "set_prores_profile":
           snapshot.prores_profile = payload.value;
@@ -15212,12 +15242,21 @@ std::string_view webControlPageHtml()
       await queueNextPhotoInSequence();
     }
 
+    // 200 s -> "3 min 20 s"; 45 s -> "45 s".
+    function formatFolderDuration(seconds) {
+      const total = Math.round(seconds);
+      const minutes = Math.floor(total / 60);
+      const rest = total % 60;
+      return minutes > 0 ? minutes + " min" + (rest > 0 ? " " + rest + " s" : "") : rest + " s";
+    }
+
     function renderSnapshot(snapshot) {
-      // /api/state carries the write-buffer and storage pre-roll fields under "system"; the page reads them at the top level.
+      // /api/state carries the write-buffer, storage pre-roll, split and merge fields under "system"; the page reads them at the top level.
       const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
       if (systemFields) {
         for (const key of Object.keys(systemFields)) {
-          if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_")) && snapshot[key] === undefined)
+          if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_") || key.startsWith("frames_per_folder")
+               || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
             snapshot[key] = systemFields[key];
         }
       }
@@ -15852,6 +15891,74 @@ std::string_view webControlPageHtml()
           setText("storagePrerollAutoNote", fromEnv
             ? "Set by APERTAR_STORAGE_PREROLL"
             : "On: runs when Core starts and when a card is inserted or formatted. Off: only the button runs it.");
+        }
+      }
+      // Split long takes: [storage] frames_per_folder (0 = one folder, else frames per part folder). Merge: [storage]
+      // clip_merge, which joins the parts when the camera is idle. Both from the env are shown but locked, like the pre-roll.
+      const clipSplitRow = document.getElementById("clipSplitRow");
+      if (clipSplitRow) {
+        const splitKnown = typeof snapshot.frames_per_folder === "number";
+        clipSplitRow.hidden = !splitKnown;
+        if (splitKnown) {
+          const perFolder = snapshot.frames_per_folder;
+          // Off, the presets, and a value from the config file that is not a preset (Core takes 0 or 100-100000).
+          const presets = [1000, 2000, 5000, 10000];
+          if (perFolder > 0 && !presets.includes(perFolder))
+            presets.push(perFolder), presets.sort((a, b) => a - b);
+          const splitContainer = document.getElementById("clipSplitOptions");
+          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 ? String(perFolder) : "Off", async (value) => {
+            const wanted = value === "Off" ? 0 : Number(value);
+            if (wanted === perFolder)
+              return;
+            try {
+              await sendCommand({ cmd: "set_frames_per_folder", value: wanted });
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 3);
+          const splitFromEnv = snapshot.frames_per_folder_env === true;
+          if (splitFromEnv && splitContainer)
+            for (const button of splitContainer.querySelectorAll("button"))
+              button.disabled = true;
+          const fps = Number(snapshot.fps);
+          const perFolderTime = perFolder > 0 && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
+          setText("clipSplitNote", (splitFromEnv ? "Set by APERTAR_CDNG_FRAMES_PER_FOLDER. " : "")
+            + (perFolder > 0
+              ? "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
+              : "All frames of a take in one folder. On exFAT, writing slows down as the folder grows, and long takes can drop frames."));
+        }
+      }
+      const clipMergeRow = document.getElementById("clipMergeRow");
+      if (clipMergeRow) {
+        const mergeKnown = typeof snapshot.clip_merge_enabled === "boolean";
+        clipMergeRow.hidden = !mergeKnown;
+        if (mergeKnown) {
+          const mergeOn = snapshot.clip_merge_enabled;
+          const mergeContainer = document.getElementById("clipMergeOptions");
+          buildOptionButtonsInto(mergeContainer, ["On", "Off"], mergeOn ? "On" : "Off", async (value) => {
+            if ((value === "On") === mergeOn)
+              return;
+            try {
+              await sendCommand({ cmd: "set_clip_merge", enabled: value === "On" });
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 2);
+          const mergeEnvOff = snapshot.clip_merge_env_off === true;
+          if (mergeEnvOff && mergeContainer)
+            for (const button of mergeContainer.querySelectorAll("button"))
+              button.disabled = true;
+          const active = typeof snapshot.clip_merge_active === "string" ? snapshot.clip_merge_active : "";
+          const pending = typeof snapshot.clip_merge_pending === "number" ? snapshot.clip_merge_pending : 0;
+          const last = typeof snapshot.clip_merge_last === "string" ? snapshot.clip_merge_last : "";
+          const status = active
+            ? "Merging " + active + (pending > 1 ? " (" + pending + " clips waiting)" : "") + "."
+            : (pending > 0 ? pending + " split clip" + (pending === 1 ? "" : "s") + " waiting." : (last ? "Last: " + last + "." : ""));
+          setText("clipMergeNote", (mergeEnvOff ? "Turned off by APERTAR_CLIP_MERGE. " : "")
+            + (mergeOn
+              ? "Joins the parts into one folder when the camera is idle; pauses when a take starts. A 30-minute take takes a few minutes."
+              : "Split clips stay in their part folders.")
+            + (status ? " " + status : ""));
         }
       }
       const prerollLast = document.getElementById("storagePrerollLast");
