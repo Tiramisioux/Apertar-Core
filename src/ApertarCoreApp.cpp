@@ -11005,7 +11005,21 @@ void ApertarCoreApp::runBufferEvents()
     std::string sentPrerollLast = storagepreroll::prerollLast();
     double sentPrerollFps = storagepreroll::prerollFps();
     uint64_t sentDropped = camera_.recordingDroppedFrames();
+    std::string sentMerge = clipMergeStateJson();
+    auto sentMergeAt = std::chrono::steady_clock::now();
     while (bufferEventsRunning_.load(std::memory_order_acquire)) {
+        // {"event":"clip_merge",...}: the merge progress for the touch UI, at most once a second, and only when it
+        // changed (silent during a take: the merge is paused and nothing moves).
+        {
+            std::string merge = clipMergeStateJson();
+            const auto now = std::chrono::steady_clock::now();
+            if (merge != sentMerge && now - sentMergeAt >= std::chrono::milliseconds(900)) {
+                publishEvent("{\"event\":\"clip_merge\"" + merge
+                             + ",\"clip_merge_enabled\":" + (bufferbudget::clipMergeRequest().load(std::memory_order_acquire) ? "true" : "false") + "}");
+                sentMerge = std::move(merge);
+                sentMergeAt = now;
+            }
+        }
         const auto buffer = camera_.frameBufferStatus();
         // The request, the plan note, the safety stop flag or its threshold changed (a button, a save, a take's plan,
         // the safety stop, the drain): one event, also when idle.
@@ -11678,6 +11692,46 @@ clipmerge::Listing listClip(const std::filesystem::path &clip, std::error_code &
     }
     return listing;
 }
+
+// A split clip's frames: in its root (merged) and in its part folders (left). Reads the root and the first and last
+// part: parts merge in order, so the ones between are full (frames_per_folder from .parts; all of them are read when
+// the marker gives no number).
+struct SplitClipCount { uint64_t inRoot = 0; uint64_t inParts = 0; };
+SplitClipCount countSplitClip(const std::filesystem::path &clip)
+{
+    SplitClipCount out;
+    uint64_t perFolder = 0;
+    {
+        std::ifstream marker(clip / framepath::kMarkerName);
+        std::string line;
+        while (std::getline(marker, line))
+            if (line.rfind("frames_per_folder=", 0) == 0)
+                perFolder = std::strtoull(line.c_str() + 18, nullptr, 10);
+    }
+    std::vector<std::string> parts;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(clip, ec)) {
+        const std::string name = entry.path().filename().string();
+        std::error_code typeEc;
+        if (entry.is_directory(typeEc) && framepath::isPartDirName(name))
+            parts.push_back(name);
+        else if (entry.is_regular_file(typeEc) && clipmerge::detail::isDng(name))
+            ++out.inRoot;
+    }
+    std::sort(parts.begin(), parts.end(), clipmerge::detail::partLess);
+    const auto dngsIn = [&clip](const std::string &part) {
+        uint64_t n = 0;
+        std::error_code partEc;
+        for (const auto &file : std::filesystem::directory_iterator(clip / part, partEc))
+            if (clipmerge::detail::isDng(file.path().filename().string())) ++n;
+        return n;
+    };
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const bool edge = i == 0 || i + 1 == parts.size();
+        out.inParts += (edge || perFolder == 0) ? dngsIn(parts[i]) : perFolder;
+    }
+    return out;
+}
 }  // namespace
 
 // Only requests a scan; the worker does it. Repeated requests coalesce.
@@ -11763,6 +11817,16 @@ void ApertarCoreApp::runClipMerge()
         }
         std::sort(clips.begin(), clips.end());
         clipMergePending_.store(static_cast<unsigned>(clips.size()));
+        std::vector<ClipMergeCount> queue;
+        for (const auto &clip : clips) {
+            const SplitClipCount count = countSplitClip(clip.second);
+            queue.push_back({clip.second.filename().string(), count.inRoot, count.inRoot + count.inParts});
+        }
+        {
+            std::lock_guard<std::mutex> lock(clipMergeMutex_);
+            clipMergeQueue_ = std::move(queue);
+            clipMergeQueueIndex_ = 0;
+        }
         if (clips.empty())
             continue;
         std::cerr << "ApertarCore clip merge: scan (" << reason << ") pending=" << clips.size() << "\n";
@@ -11778,6 +11842,15 @@ void ApertarCoreApp::runClipMerge()
             if (!bufferbudget::clipMergeRequest().load())
                 break;
         }
+        {
+            // The scan is through: nothing is being merged now (a stopped clip still counts in clip_merge_pending).
+            std::lock_guard<std::mutex> lock(clipMergeMutex_);
+            clipMergeQueue_.clear();
+            clipMergeQueueIndex_ = 0;
+            clipMergePaused_.clear();
+        }
+        clipMergeClipDone_.store(0);
+        clipMergeClipTotal_.store(0);
         if (shutdown)
             break;
     }
@@ -11791,6 +11864,7 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
         std::cerr << "ApertarCore clip merge: stopped (" << why << ") " << name << "\n";
         std::lock_guard<std::mutex> lock(clipMergeMutex_);
         clipMergeActive_.clear();
+        clipMergePaused_.clear();
         clipMergeLast_ = name + ": stopped (" + why + ")";
         return ClipMergeOutcome::Stopped;
     };
@@ -11806,6 +11880,17 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
     {
         std::lock_guard<std::mutex> lock(clipMergeMutex_);
         clipMergeActive_ = name;
+        clipMergePaused_.clear();
+        for (size_t q = 0; q < clipMergeQueue_.size(); ++q)
+            if (clipMergeQueue_[q].name == name) clipMergeQueueIndex_ = q;
+    }
+    {
+        const uint64_t inRoot = static_cast<uint64_t>(std::count_if(listing.rootFiles.begin(), listing.rootFiles.end(),
+                                                                    [](const std::string &f) { return clipmerge::detail::isDng(f); }));
+        clipMergeClipDone_.store(inRoot);
+        clipMergeClipTotal_.store(inRoot + plan.steps.size());
+        clipMergeRunRenames_.store(0);
+        clipMergeRunRenameNs_.store(0);
     }
     std::cerr << "ApertarCore clip merge: start " << name << " files=" << plan.steps.size() << " parts=" << listing.parts.size()
               << (plan.conflict ? " (stops before " + plan.conflictName + ": already in the clip root)" : std::string()) << "\n";
@@ -11831,6 +11916,7 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
                 std::cerr << "ApertarCore clip merge: paused (" << why << ") " << name << " at " << done << "/" << plan.steps.size() << "\n";
             }
             std::unique_lock<std::mutex> lock(clipMergeMutex_);
+            clipMergePaused_ = why;
             // The clip list was read before this pause, and the worker's 2-s take check does not run until the scan ends: a take
             // recorded now would stay split until the next trigger. Ask for one more scan once this one is through.
             clipMergeRequested_ = true;
@@ -11839,6 +11925,10 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
         }
         if (paused) {
             paused = false;
+            {
+                std::lock_guard<std::mutex> lock(clipMergeMutex_);
+                clipMergePaused_.clear();
+            }
             std::cerr << "ApertarCore clip merge: resumed " << name << " at " << done << "/" << plan.steps.size() << "\n";
         }
         std::error_code existsEc;
@@ -11857,6 +11947,9 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
                            (err == EEXIST ? "" : std::string(" ") + std::strerror(err)));
         }
         ++done;
+        clipMergeClipDone_.fetch_add(1, std::memory_order_relaxed);
+        clipMergeRunRenames_.fetch_add(1, std::memory_order_relaxed);
+        clipMergeRunRenameNs_.store(renameNs, std::memory_order_relaxed);
         // A part whose last frame just moved goes at once; the root is fsynced every 1000 renames.
         const bool lastOfPart = i + 1 == plan.steps.size() || plan.steps[i + 1].partDir != step.partDir;
         if (lastOfPart && std::find(plan.removeAfterSteps.begin(), plan.removeAfterSteps.end(), step.partDir) != plan.removeAfterSteps.end())
@@ -11886,6 +11979,9 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
               << (plan.problem.empty() ? std::string() : " (" + plan.problem + ")") << "\n";
     std::lock_guard<std::mutex> lock(clipMergeMutex_);
     clipMergeActive_.clear();
+    clipMergePaused_.clear();
+    for (ClipMergeCount &c : clipMergeQueue_)
+        if (c.name == name && plan.problem.empty()) c.inRoot = c.total;   // through: the bars stay where they are
     clipMergeLast_ = line.str() + (plan.problem.empty() ? "" : " (" + plan.problem + ")");
     return plan.problem.empty() ? ClipMergeOutcome::Done : ClipMergeOutcome::Stopped;
 }
@@ -11925,9 +12021,50 @@ bool ApertarCoreApp::clipMergeIsActive(const std::string &clipName) const
 std::string ApertarCoreApp::clipMergeStateJson() const
 {
     std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    // Progress: the clips before the one being merged are through, the ones after it have their root's frames done.
+    // Time left from the model of probe-exfat-dir.md / clip-split-verify.md: a rename costs a + b x (files already in
+    // the root), a = 0.1 ms, b = 0.32 us; a is corrected by this clip's own renames once there are 200 of them.
+    const uint64_t clipDone = clipMergeClipDone_.load(std::memory_order_relaxed);
+    const uint64_t clipTotal = std::max(clipDone, clipMergeClipTotal_.load(std::memory_order_relaxed));
+    const bool merging = !clipMergeActive_.empty() && clipMergeQueueIndex_ < clipMergeQueue_.size();
+    const double b = 0.32e-6;
+    double a = 1.0e-4;
+    const uint64_t runRenames = clipMergeRunRenames_.load(std::memory_order_relaxed);
+    if (merging && runRenames >= 200 && clipDone >= runRenames) {
+        const double meanInRoot = double(clipDone) - double(runRenames) / 2.0;
+        a = std::max(2.0e-5, double(clipMergeRunRenameNs_.load(std::memory_order_relaxed)) / 1e9 / double(runRenames) - b * meanInRoot);
+    }
+    const auto cost = [&](uint64_t inRoot, uint64_t total) {
+        const double r = double(inRoot), t = double(std::max(inRoot, total));
+        return (t - r) * a + b * (t * t - r * r) / 2.0;
+    };
+    uint64_t allDone = 0, allTotal = 0, clipsLeft = 0;
+    double etaS = 0.0;
+    for (size_t q = 0; q < clipMergeQueue_.size(); ++q) {
+        const ClipMergeCount &c = clipMergeQueue_[q];
+        allTotal += c.total;
+        if (merging && q < clipMergeQueueIndex_) {
+            allDone += c.total;
+        } else if (merging && q == clipMergeQueueIndex_) {
+            allDone += std::min(clipDone, c.total);
+            etaS += cost(clipDone, clipTotal);
+            ++clipsLeft;
+        } else {
+            allDone += c.inRoot;
+            etaS += cost(c.inRoot, c.total);
+            ++clipsLeft;
+        }
+    }
     return ",\"clip_merge_pending\":" + std::to_string(clipMergePending_.load()) +
         ",\"clip_merge_active\":\"" + escapeJson(clipMergeActive_) + "\"" +
-        ",\"clip_merge_last\":\"" + escapeJson(clipMergeLast_) + "\"";
+        ",\"clip_merge_last\":\"" + escapeJson(clipMergeLast_) + "\"" +
+        ",\"clip_merge_paused\":\"" + escapeJson(clipMergePaused_) + "\"" +
+        ",\"clip_merge_clip_done\":" + std::to_string(merging ? clipDone : 0) +
+        ",\"clip_merge_clip_total\":" + std::to_string(merging ? clipTotal : 0) +
+        ",\"clip_merge_all_done\":" + std::to_string(std::min(allDone, allTotal)) +
+        ",\"clip_merge_all_total\":" + std::to_string(allTotal) +
+        ",\"clip_merge_all_clips\":" + std::to_string(clipsLeft) +
+        ",\"clip_merge_eta_s\":" + std::to_string(static_cast<uint64_t>(etaS + 0.5));
 }
 
 void ApertarCoreApp::stopClipMerge()
@@ -12967,7 +13104,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_state\":\"" << mediaState.stateName() << "\""
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
-             << "," << settingsBody(camera_.settings());
+             << "," << settingsBody(camera_.settings())
+             << clipMergeStateJson();
         return okReply(command.id, body.str());
     }
 

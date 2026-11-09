@@ -322,6 +322,17 @@ private:
     std::atomic<unsigned> clipMergePending_{0};     // clips with a .parts marker at the last scan
     std::atomic<bool> clipMergeRenaming_{false};    // one rename is in flight
     std::atomic<int64_t> clipMergeBlockUntilMs_{0}; // a take or media action began: no rename until then
+    // Progress (KB clip-merge-progress-plan.md), counted from the disk at each scan: a clip's frames in its root are
+    // done, the ones in its parts are left, so it comes back after a power-off. Under clipMergeMutex_: the scan's
+    // clips in order and the one being merged. Atomics: the clip being merged and its renames this run (time left).
+    struct ClipMergeCount { std::string name; uint64_t inRoot = 0; uint64_t total = 0; };
+    std::vector<ClipMergeCount> clipMergeQueue_;
+    size_t clipMergeQueueIndex_ = 0;
+    std::string clipMergePaused_;                   // why the merge waits ("" while it renames)
+    std::atomic<uint64_t> clipMergeClipDone_{0};
+    std::atomic<uint64_t> clipMergeClipTotal_{0};
+    std::atomic<uint64_t> clipMergeRunRenames_{0};
+    std::atomic<uint64_t> clipMergeRunRenameNs_{0};
     int mediaTrimBackoffRounds_ = 0;
     int64_t mediaTrimBackoffUntilMs_ = 0;
     std::string mediaTrimLastResult_ = "none";
