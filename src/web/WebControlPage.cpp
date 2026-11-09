@@ -193,6 +193,24 @@ std::string_view webControlPageHtml()
       z-index: 1;
     }
 
+    /* Clip merge: a faint grey fill in the READY pill while the camera is idle and the merge runs (as the touch UI). */
+    .status-pill.merge-fill::after {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--merge-fill, 0%);
+      background: #ffffff;
+      opacity: 0.18;
+      transition: width 0.4s linear;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .status-pill.merge-fill > * {
+      position: relative;
+      z-index: 1;
+    }
+
     /* After a buffer safety stop: normal READY pill, text and dot hidden (space kept),
        only the green bar draining. */
     .status-pill.buffer-drain::before {
@@ -1703,6 +1721,16 @@ std::string_view webControlPageHtml()
       border-radius: 999px;
       background: #ffffff;
       transition: width 0.22s ease;
+    }
+
+    /* Clip merge progress: the READY pill's faint grey, a little stronger on the dark track. */
+    .progress-fill.merge {
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .progress-track.merge-track {
+      margin-top: 6px;
+      height: 4px;
     }
 
     .capture-list {
@@ -4664,6 +4692,7 @@ std::string_view webControlPageHtml()
                   <div class="telemetry-label">Space left</div>
                   <div class="telemetry-sublabel" id="storageSub">Media root</div>
                   <div class="progress-track"><div class="progress-fill" id="storageProgress"></div></div>
+                  <div class="progress-track merge-track" id="storageMergeTrack" hidden><div class="progress-fill merge" id="storageMergeBar"></div></div>
                 </div>
               </div>
 
@@ -5728,6 +5757,18 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="clipMergeOptions"></div>
                 <span class="subtle-note" id="clipMergeNote"></span>
               </div>
+              <section class="select-block" id="clipMergeProgress" hidden>
+                <div class="select-topline">
+                  <span>Current clip</span>
+                  <span class="select-value" id="clipMergeClipValue">--</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill merge" id="clipMergeClipBar"></div></div>
+                <div class="select-topline" style="margin-top:12px;">
+                  <span>All clips</span>
+                  <span class="select-value" id="clipMergeAllValue">--</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill merge" id="clipMergeAllBar"></div></div>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsFormatMediaCard" data-search="format card ssd storage erase exfat">
@@ -15242,6 +15283,33 @@ std::string_view webControlPageHtml()
       await queueNextPhotoInSequence();
     }
 
+    // The merge progress from Core's clip_merge_* fields, for the Media card and the Storage tile (KB
+    // clip-merge-progress-plan.md). active: a clip waits or is being merged; the bars show then.
+    function clipMergeProgress(snapshot) {
+      const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+      const on = snapshot.clip_merge_enabled === true;
+      const clipDone = num(snapshot.clip_merge_clip_done), clipTotal = num(snapshot.clip_merge_clip_total);
+      const allDone = num(snapshot.clip_merge_all_done), allTotal = num(snapshot.clip_merge_all_total);
+      const clips = num(snapshot.clip_merge_all_clips), pending = num(snapshot.clip_merge_pending);
+      const eta = num(snapshot.clip_merge_eta_s);
+      const paused = typeof snapshot.clip_merge_paused === "string" ? snapshot.clip_merge_paused : "";
+      const clipName = typeof snapshot.clip_merge_active === "string" ? snapshot.clip_merge_active : "";
+      const pct = (done, total) => (total > 0 ? Math.min(100, Math.floor(100 * done / total)) : 0);
+      const etaText = eta < 60 ? "under a minute" : (eta < 5400 ? "about " + Math.round(eta / 60) + " min"
+        : "about " + Math.floor(eta / 3600) + " h " + Math.round((eta % 3600) / 60) + " min");
+      const active = on && clips > 0 && allTotal > 0;
+      const clipsText = clips + " clip" + (clips === 1 ? "" : "s");
+      return {
+        on, active, paused,
+        clipPercent: pct(clipDone, clipTotal),
+        allPercent: pct(allDone, allTotal),
+        clipText: clipName ? clipName + " · " + pct(clipDone, clipTotal) + " % (" + clipDone.toLocaleString() + " / " + clipTotal.toLocaleString() + ")" : "Waiting",
+        allText: clipsText + " · " + pct(allDone, allTotal) + " %" + (paused ? " · paused (" + paused + ")" : " · " + etaText + " left"),
+        summary: !on ? (pending > 0 ? pending + " split clip" + (pending === 1 ? "" : "s") + ", merge off" : "")
+          : (active ? (paused ? "Merge paused (" + paused + ")" : "Merging " + clipsText + " · " + etaText) : "")
+      };
+    }
+
     // 200 s -> "3 min 20 s"; 45 s -> "45 s".
     function formatFolderDuration(seconds) {
       const total = Math.round(seconds);
@@ -15959,6 +16027,19 @@ std::string_view webControlPageHtml()
               ? "Joins the parts into one folder when the camera is idle; pauses when a take starts. A 30-minute take takes a few minutes."
               : "Split clips stay in their part folders.")
             + (status ? " " + status : ""));
+          const progress = clipMergeProgress(snapshot);
+          const progressBlock = document.getElementById("clipMergeProgress");
+          if (progressBlock) {
+            progressBlock.hidden = !progress.active;
+            if (progress.active) {
+              setText("clipMergeClipValue", progress.clipText);
+              setText("clipMergeAllValue", progress.allText);
+              document.getElementById("clipMergeClipBar").style.width = progress.clipPercent + "%";
+              document.getElementById("clipMergeAllBar").style.width = progress.allPercent + "%";
+            }
+          }
+          if (mergeOn && !progress.active && !active && pending === 0)
+            setText("clipMergeNote", document.getElementById("clipMergeNote").textContent + " Nothing to merge.");
         }
       }
       const prerollLast = document.getElementById("storagePrerollLast");
@@ -16459,12 +16540,30 @@ std::string_view webControlPageHtml()
                 formatVolts(snapshot.system.battery_voltage_v),
                 batteryInputPresent ? batteryType : snapshot.system.battery_label,
                 isFinite(profileBatteryPercent) ? profileBatteryPercent : 0);
+      const storageMerge = clipMergeProgress(snapshot);
       setMetric(
         "storage",
         hasMedia ? formatStorage(snapshot.system.media_free_bytes) : "No Media",
-        snapshot.system.media_label,
+        hasMedia && storageMerge.summary ? storageMerge.summary : snapshot.system.media_label,
         hasMedia ? snapshot.system.media_used_percent : 0
       );
+      const storageMergeTrack = document.getElementById("storageMergeTrack");
+      if (storageMergeTrack) {
+        storageMergeTrack.hidden = !(hasMedia && storageMerge.active);
+        document.getElementById("storageMergeBar").style.width = storageMerge.allPercent + "%";
+      }
+      // The READY pill fills in grey with all clips, only while the camera is idle: not during a take (the frame
+      // buffer bar has the pill then), the pre-roll or anything else that pauses the merge.
+      const mergePill = document.querySelector(".status-pill");
+      if (mergePill) {
+        const label = document.getElementById("recordingStatus");
+        const mergeFillOn = hasMedia && storageMerge.active && !storageMerge.paused && !!label && label.textContent === "READY";
+        mergePill.classList.toggle("merge-fill", mergeFillOn);
+        if (mergeFillOn)
+          mergePill.style.setProperty("--merge-fill", storageMerge.allPercent + "%");
+        else
+          mergePill.style.removeProperty("--merge-fill");
+      }
       setMetric(
         "timeLeft",
         mediaRemainingText,
