@@ -117,19 +117,25 @@ inline FrameList listFrames(const std::filesystem::path &dir, std::string *error
     // places: the root's frames, then every part's, each named by its path inside the clip folder. Frame names and
     // numbers are unchanged across parts, so the sort below orders both layouts the same way.
     std::vector<std::string> partDirs;
-    for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (ec) break;
-        const std::string name = entry.path().filename().string();
-        if (entry.is_directory(ec) && !entry.is_symlink(ec) && framepath::isPartDirName(name)) { partDirs.push_back(name); continue; }
-        ec.clear();
-        if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) { ec.clear(); continue; }
-        const bool dng = detail::endsWithNoCase(name, ".dng");
-        const bool jpg = detail::endsWithNoCase(name, ".jpg") || detail::endsWithNoCase(name, ".jpeg");
-        if (!dng && !jpg) continue;
-        const uint64_t bytes = entry.file_size(ec);
-        if (ec) { ec.clear(); continue; }
-        found.push_back({entry.path().stem().string(), name, bytes, dng});
-    }
+    const auto readRoot = [&](bool framesOnly) {
+        for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec) break;
+            const std::string name = entry.path().filename().string();
+            if (entry.is_directory(ec) && !entry.is_symlink(ec) && framepath::isPartDirName(name)) {
+                if (!framesOnly) partDirs.push_back(name);
+                continue;
+            }
+            ec.clear();
+            if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) { ec.clear(); continue; }
+            const bool dng = detail::endsWithNoCase(name, ".dng");
+            const bool jpg = detail::endsWithNoCase(name, ".jpg") || detail::endsWithNoCase(name, ".jpeg");
+            if (!dng && !jpg) continue;
+            const uint64_t bytes = entry.file_size(ec);
+            if (ec) { ec.clear(); continue; }
+            found.push_back({entry.path().stem().string(), name, bytes, dng});
+        }
+    };
+    readRoot(false);
     if (ec && error) *error = "Could not read the clip folder: " + ec.message();
     ec.clear();
     std::sort(partDirs.begin(), partDirs.end(), [](const std::string &a, const std::string &b) {
@@ -146,6 +152,14 @@ inline FrameList listFrames(const std::filesystem::path &dir, std::string *error
             found.push_back({entry.path().stem().string(), part + "/" + name, bytes, true});
         }
         if (ec && error && error->empty()) *error = "Could not read " + part + " of the clip folder: " + ec.message();
+        ec.clear();
+    }
+    // The merge worker may have moved frames from a part into the root after the root was read and before their part
+    // was: read the root once more (frames only move part -> root, so each frame is in one of the reads; the stem
+    // dedup below drops the doubles). Not an mtime check: exFAT keeps 10 ms, and a rename can share the tick. A split
+    // clip's root holds a few entries until the merge, so the second read is cheap where it matters.
+    if (!partDirs.empty()) {
+        readRoot(true);
         ec.clear();
     }
     out.parts = partDirs.size();

@@ -8461,7 +8461,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
                 return response;
             }
         } else {
-            facts = clipFactsCache().get(*itemPath);
+            facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
             if (!facts.ok) {
                 response.status = 404;
                 response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
@@ -8506,7 +8506,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = "{\"ok\":false,\"error\":\"This clip was removed.\",\"gone\":true}";
             return response;
         }
-        const playback::ClipFacts facts = clipFactsCache().get(*itemPath);
+        const playback::ClipFacts facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
         if (!facts.ok) {
             response.status = 404;
             response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
@@ -11916,6 +11916,12 @@ void ApertarCoreApp::waitForClipMerge(const std::string &commandName, int blockM
 }
 
 // The merge fields of the state JSON, with a leading comma.
+bool ApertarCoreApp::clipMergeIsActive(const std::string &clipName) const
+{
+    std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    return !clipMergeActive_.empty() && clipMergeActive_ == clipName;
+}
+
 std::string ApertarCoreApp::clipMergeStateJson() const
 {
     std::lock_guard<std::mutex> lock(clipMergeMutex_);

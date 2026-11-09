@@ -10,6 +10,7 @@
 // Black level: the first value, as the touch UI does (dngdecoder.cpp:963-966).
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -79,6 +80,20 @@ inline size_t dngRowBytes(const DngInfo &info)
 // when done (the writer's POSIX_FADV_DONTNEED, CdngEncoder.cpp:1779), so playback leaves memory
 // as it found it before the next take (critic M4, operator P19).
 inline int openDngFrame(const char *path) { return ::open(path, O_RDONLY | O_CLOEXEC); }
+
+// A frame by its path inside the clip folder. A split clip's "part_NNN/<name>" may have moved into the clip root since
+// the listing (the merge worker); frames only move that way, one rename each, so trying the part first and the root
+// second cannot miss a frame. The name is the same in both places (FramePath.hpp).
+inline int openClipFrame(const std::string &dir, const std::string &relativeName)
+{
+    const int fd = openDngFrame((dir + "/" + relativeName).c_str());
+    if (fd >= 0 || errno != ENOENT)
+        return fd;
+    const std::size_t slash = relativeName.find('/');
+    if (slash == std::string::npos || relativeName.compare(0, 5, "part_") != 0)
+        return fd;
+    return openDngFrame((dir + "/" + relativeName.substr(slash + 1)).c_str());
+}
 inline void closeDngFrame(int fd)
 {
     if (fd < 0) return;

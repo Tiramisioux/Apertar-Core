@@ -141,6 +141,7 @@ private:
     bool clipMergeMayRun(std::string *why = nullptr) const;
     void waitForClipMerge(const std::string &commandName, int blockMs);
     std::string clipMergeStateJson() const;
+    bool clipMergeIsActive(const std::string &clipName) const;   // the merge worker is moving this clip's frames now
     void endClipMergeRename();
     enum class ClipMergeOutcome { Done, Stopped, Shutdown };
     ClipMergeOutcome mergeSplitClip(const std::filesystem::path &clip);

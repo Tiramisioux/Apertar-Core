@@ -201,7 +201,7 @@ FrameOut frameJpeg(const std::string &clipId, const std::filesystem::path &dir, 
     }
     niceThread();
     const auto started = std::chrono::steady_clock::now();
-    const int fd = openDngFrame((dir / frame.name).string().c_str());
+    const int fd = openClipFrame(dir.string(), frame.name);
     if (fd < 0) {
         out.status = 404;
         out.error = "The frame file is gone.";

@@ -131,7 +131,7 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
 
     for (const FrameFile &file : f.frames.files) {         // the first frame with a picture
         if (file.bytes == 0) continue;
-        const int fd = openDngFrame((dir / file.name).string().c_str());
+        const int fd = openClipFrame(dir.string(), file.name);
         std::string err;
         f.haveFirst = readDngInfo(fd, f.first, err);
         closeDngFrame(fd);
@@ -196,7 +196,9 @@ public:
     // three takes, 2026-10-29); a file written in place does not, and frames are never rewritten. A split clip
     // ([storage] frames_per_folder) gains frames inside its last part_NNN folder, which moves only that folder's
     // mtime: for such a clip the key adds the last part's mtime (one more stat, in a root of a few entries).
-    ClipFacts get(const std::filesystem::path &dir)
+    // merging = the merge worker is moving this clip's frames into its root: every rename moves the root's mtime, but
+    // the frames and their count stay, so the cached facts are kept (openClipFrame finds a frame that has moved).
+    ClipFacts get(const std::filesystem::path &dir, bool merging = false)
     {
         const auto mtimeOf = [](const std::filesystem::path &path, bool &ok) {
             struct stat st {};
@@ -209,6 +211,8 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto it = entries_.find(key);
+            if (it != entries_.end() && merging && it->second.facts.ok)
+                return it->second.facts;
             if (it != entries_.end() && it->second.mtimeNs == mtimeNs && statOk) {
                 bool partOk = true;
                 const std::string &lastPart = it->second.facts.frames.lastPart;
