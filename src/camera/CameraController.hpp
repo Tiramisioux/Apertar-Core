@@ -99,10 +99,15 @@ public:
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
-    // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
-    // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors).
+    // T34: the mode ladder. Any of rungs / enabled / rampReady / aspects; dryRun only validates. Fills the
+    // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
+    // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
+    // saved in a take too, with no check or apply, by replacing the file's aspects= line and putting it last, or
+    // writing the whole file when it is missing or empty (a filter unchanged from Core's copy writes nothing);
+    // refused for a bad label, a file that cannot be read whole, or a failed write.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                       std::optional<bool> rampReady, bool dryRun, std::string *json, std::string *error);
+                       std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
+                       std::string *json, std::string *error);
     std::string modeLadderJson() const;
     // A preset that names a mode (namesMode) must be the one the ladder would pick for its FPS;
     // one that names none follows the ladder. False with *error otherwise.
@@ -185,7 +190,11 @@ private:
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;
-    void saveModeLadderLocked() const;
+    bool saveModeLadderLocked() const;   // false (and logged) when atomicWrite failed, also after its rename
+    // The aspect filter's own save: the aspects= line of mode_ladder.conf replaced and put last (a missing or
+    // empty file is written whole). True when the file holds aspects; false with *error when the file could not
+    // be read whole or the write did not reach it.
+    bool saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;

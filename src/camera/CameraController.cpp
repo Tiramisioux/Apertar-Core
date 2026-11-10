@@ -414,6 +414,23 @@ std::filesystem::path modeLadderPath()
     return std::filesystem::temp_directory_path() / "apertar-core-mode_ladder.conf";
 }
 
+// mode_ladder.conf as text, true only when the whole file was read. A read can fail after the open (an I/O
+// error; a directory opens but cannot be read) and leave a short or empty text while the ifstream still reads as
+// good (libstdc++ catches the error inside operator<<), so the text's size is compared with file_size, which
+// also fails on a directory.
+bool readModeLadderFile(const std::filesystem::path &path, std::string &text)
+{
+    std::ifstream file(path);
+    if (!file)
+        return false;
+    std::stringstream content;
+    content << file.rdbuf();
+    text = content.str();
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    return !ec && text.size() == size;
+}
+
 std::filesystem::path persistedSettingsPath()
 {
     const char *xdgConfig = std::getenv("XDG_CONFIG_HOME");
@@ -10971,12 +10988,43 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     }
 }
 
-void CameraController::saveModeLadderLocked() const
+bool CameraController::saveModeLadderLocked() const
 {
     std::error_code ec;
     std::filesystem::create_directories(modeLadderPath().parent_path(), ec);
-    if (!settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
-        std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
+    if (settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
+        return true;
+    std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
+    return false;
+}
+
+// A filter save keeps the rest of mode_ladder.conf as it is on disk: memory can hold less than the file (a
+// resolutions line this Core could not read loads as no ladder), and a filter click must not erase it.
+bool CameraController::saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const
+{
+    const std::filesystem::path path = modeLadderPath();
+    std::error_code ec;
+    std::string text;
+    // Never write over a file that could not be read whole. When exists ends in an error rather than "no such
+    // file", the path is read too, so a lookup error is refused as a read error is.
+    if ((std::filesystem::exists(path, ec) || ec) && !readModeLadderFile(path, text)) {
+        std::cerr << "ApertarCore mode ladder: could not read " << path << "\n";
+        *error = "Could not read mode_ladder.conf: the aspect filter is not saved.";
+        return false;
+    }
+    ladder::Ladder fresh = modeLadder_;
+    fresh.aspects = aspects;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (settingsFile::atomicWrite(path, text.empty() ? ladder::fileText(fresh) : ladder::withAspectsLine(text, aspects)))
+        return true;
+    // atomicWrite also fails after its rename, when the directory cannot be synced: the file then holds the
+    // new filter, and the reply must say so. Only a file read back whole is trusted.
+    std::cerr << "ApertarCore mode ladder: could not write " << path << "\n";
+    std::string after;
+    if (readModeLadderFile(path, after) && ladder::parseFile(after).aspects == aspects)
+        return true;
+    *error = "Could not write mode_ladder.conf: the aspect filter is not saved.";
+    return false;
 }
 
 // The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
@@ -11078,14 +11126,40 @@ std::string CameraController::modeLadderJson() const
 }
 
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                                     std::optional<bool> rampReady, bool dryRun, std::string *json, std::string *error)
+                                     std::optional<bool> rampReady, const std::optional<std::string> &aspects,
+                                     bool dryRun, std::string *json, std::string *error)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> aspectList;
+    if (aspects) {
+        std::string parseError;
+        if (!ladder::parseAspects(*aspects, aspectList, parseError)) {
+            *error = parseError;
+            return false;
+        }
+    }
+    // The aspect filter alone changes only what the WebUI lists, never the mode: no take refusal, no check
+    // that could refuse it, no apply, no settings event. Only the file's aspects= line is replaced (a missing
+    // or empty file is written whole), and a filter unchanged from Core's copy writes nothing. The reply shows
+    // the errors as get_mode_ladder does.
+    if (aspects && !rungs && !enabled && !rampReady) {
+        ladder::Ladder shown = modeLadder_;
+        shown.aspects = aspectList;
+        if (!dryRun && aspectList != modeLadder_.aspects) {
+            if (!saveModeLadderAspectsLocked(aspectList, error))
+                return false;
+            modeLadder_.aspects = aspectList;
+        }
+        std::vector<std::string> shownErrors, shownWarnings;
+        ladder::validate(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
+        *json = modeLadderJsonLocked(shown, shownErrors, shownWarnings);
+        return true;
+    }
     if (recording_ && !dryRun) {
         *error = "Stop recording before changing the mode ladder.";
         return false;
     }
-    ladder::Ladder draft = modeLadder_;
+    ladder::Ladder draft = modeLadder_;   // keeps the aspect filter unless aspects is given
     if (rungs) {
         std::string parseError;
         if (!ladder::parseRungs(*rungs, draft.rungs, parseError)) {
@@ -11098,6 +11172,8 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         draft.enabled = *enabled;
     if (rampReady)
         draft.rampReady = *rampReady;
+    if (aspects)
+        draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
     ladder::validate(draft, ladderStatesLocked(draft, settings_), errors, warnings);
     if (dryRun) {
@@ -11128,10 +11204,18 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         *error = lastError_;
         return false;
     }
-    saveModeLadderLocked();
+    const bool saved = saveModeLadderLocked();
     emitSettingsEventLocked();
     std::vector<std::string> shownErrors, shownWarnings;
     ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
+    // The apply already ran. A failed write warns that the ladder is lost when Core restarts, unless the file
+    // reads back whole as this ladder: atomicWrite also fails after its rename, when the directory cannot be synced.
+    // The WebUI shows this warning as an error toast by its start (showLadderWriteWarning).
+    if (!saved) {
+        std::string written;
+        if (!readModeLadderFile(modeLadderPath(), written) || written != ladder::fileText(modeLadder_))
+            shownWarnings.push_back("Could not write mode_ladder.conf: this ladder is lost when Core restarts.");
+    }
     *json = modeLadderJsonLocked(modeLadder_, shownErrors, shownWarnings);
     return true;
 }

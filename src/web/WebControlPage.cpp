@@ -6733,7 +6733,11 @@ std::string_view webControlPageHtml()
       ladderFetching: false,
       ladderFetchedMs: -10000,
       ladderSeenActive: null,
-      ladderAspects: [],       // the aspect filter of Activated sensor modes; empty = All
+      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (mode_ladder.conf) when Core keeps it; empty = All
+      ladderAspectsPending: false,   // a filter click not saved yet: Core's replies leave ladderAspects alone
+      ladderAspectsTimer: 0,
+      ladderAspectsSaving: false,
+      ladderAspectsSaveAgain: false,
       ladderOpen: { chdr: true, "4k": true, crop: false, "2k": false },
       fetchInFlight: false,
       fetchQueued: false,
@@ -7679,8 +7683,8 @@ std::string_view webControlPageHtml()
     // ---- Mode Ladder (T34) -----------------------------------------------------------------------
     // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
     // its max. Core owns the ladder (get_mode_ladder, set_mode_ladder). The editor keeps a draft of
-    // the resolutions, refuses a change that would make it illegal, asks Core about the draft
-    // (dry_run) and saves it with Save ladder. A resolution: Core's mode identity (width, height,
+    // the resolutions, refuses a change that would make it illegal and saves it on the camera
+    // 200 ms after the last edit. A resolution: Core's mode identity (width, height,
     // bits, clear_hdr), its compression (comp) and its max FPS (thr, "" = its ceiling).
     const ladderCompressions = [
       { value: "none", label: "Uncompressed", factor: 1 },
@@ -8058,7 +8062,8 @@ std::string_view webControlPageHtml()
         window.requestAnimationFrame(() => card.scrollIntoView({ behavior: "smooth", block: "start" }));
     }
 
-    // get_mode_ladder and dry runs change nothing, so they skip sendCommand's snapshot patching.
+    // get_mode_ladder and the aspect filter change no camera setting, so they skip sendCommand's snapshot
+    // patching.
     async function ladderRequest(payload) {
       const response = await fetch("/api/command", {
         method: "POST",
@@ -8087,7 +8092,14 @@ std::string_view webControlPageHtml()
       }
     }
 
-    // A dirty draft survives a refetch; Save and Revert replace it.
+    // The aspect filter Core saved: the labels as ladderAspectText writes them, [] = All.
+    function ladderAspectsFromServer(server) {
+      return server && Array.isArray(server.aspects) ? server.aspects.map(String) : [];
+    }
+
+    // A draft not yet saved survives a refetch; a refetch after a failed save replaces it. The aspect
+    // filter follows Core, except while a click on it waits to be saved, and only from a reply that has it:
+    // an older Core's reply has no aspects field and leaves the screen-only filter as it is.
     function applyModeLadder(modeLadder, resetDraft) {
       if (!modeLadder || typeof modeLadder !== "object")
         return;
@@ -8097,6 +8109,8 @@ std::string_view webControlPageHtml()
       if (!keepDraft) {
         state.ladderDraft = ladderDraftFromServer(modeLadder);
       }
+      if (!state.ladderAspectsPending && Array.isArray(modeLadder.aspects))
+        state.ladderAspects = ladderAspectsFromServer(modeLadder);
       renderLadderEditor();
     }
 
@@ -8290,8 +8304,8 @@ std::string_view webControlPageHtml()
       return item;
     }
 
-    // Rows are rebuilt only here: after Core's ladder arrives, Save, Revert or a local edit. The
-    // 1 s poll never rebuilds them, so typing a max keeps its focus.
+    // Rows are rebuilt only here: after Core's ladder arrives or a local edit. The 1 s poll never
+    // rebuilds them, so typing a max keeps its focus.
     function renderLadderRows() {
       const list = document.getElementById("settingsModeLadderList");
       if (!list)
@@ -8328,30 +8342,34 @@ std::string_view webControlPageHtml()
           aspects.push({ text, ratio: entry.width / entry.height });
       });
       aspects.sort((a, b) => a.ratio - b.ratio);
-      state.ladderAspects = state.ladderAspects.filter((text) => aspects.some((aspect) => aspect.text === text));
+      // Only the display is cut to this pool: the saved filter stays whole. When none of its ratios is
+      // offered (an empty or late pool, another sensor) every mode is listed, as with All, and it is kept.
+      const shownAspects = state.ladderAspects.filter((text) => aspects.some((aspect) => aspect.text === text));
       const filters = document.getElementById("settingsSensorModeAspectFilters");
       filters.classList.toggle("hidden", pool.length === 0);
-      // Several ratios at once: a click turns one on or off, All clears the choice.
+      // Several ratios at once: a click turns one on or off, All clears the choice. Saved on the camera when
+      // Core keeps it, in a take too: the filter changes only this list.
       const aspectOptions = [{ value: "all", label: "All", enabled: true }]
         .concat(aspects.map((aspect) => ({ value: aspect.text, label: aspect.text, enabled: true })));
       buildOptionButtons("settingsSensorModeAspectFilters", aspectOptions,
-        state.ladderAspects.length === 0 ? "all" : "", (value) => {
+        shownAspects.length === 0 ? "all" : "", (value) => {
           if (value === "all")
-            state.ladderAspects = [];
+            setLadderAspects([]);
           else if (state.ladderAspects.includes(value))
-            state.ladderAspects = state.ladderAspects.filter((text) => text !== value);
+            setLadderAspects(state.ladderAspects.filter((text) => text !== value));
           else
-            state.ladderAspects = state.ladderAspects.concat([value]);
-          renderSensorModes();
+            setLadderAspects(state.ladderAspects.concat([value]));
         });
+      // All is lit when no offered ratio is chosen; a ratio pill when it is one of the chosen.
       Array.from(filters.children).forEach((button, index) =>
-        button.classList.toggle("active", index > 0 && state.ladderAspects.includes(aspectOptions[index].value)));
+        button.classList.toggle("active", index === 0 ? shownAspects.length === 0
+          : shownAspects.includes(aspectOptions[index].value)));
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
       (imx585Selected(state.snapshot) ? imx585LadderGroups : ladderGroups).forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
-          && (state.ladderAspects.length === 0 || state.ladderAspects.includes(ladderAspectText(entry))))
+          && (shownAspects.length === 0 || shownAspects.includes(ladderAspectText(entry))))
           .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
@@ -8494,11 +8512,21 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
     }
 
+    // Core applied the ladder but could not write mode_ladder.conf: its reply warns that the ladder is lost
+    // when Core restarts. That warning is shown as an error; the ladder's other warnings are left as they are.
+    function showLadderWriteWarning(modeLadder) {
+      const warnings = modeLadder && Array.isArray(modeLadder.warnings) ? modeLadder.warnings.map(String) : [];
+      const lost = warnings.find((warning) => warning.startsWith("Could not write mode_ladder.conf"));
+      if (lost)
+        showToast(lost, true);
+    }
+
     async function setModeLadderEnabled(enabled) {
       state.ladderToggling = true;
       try {
         const result = await sendCommand({ cmd: "set_mode_ladder", enabled: enabled ? "true" : "false" });
         applyModeLadder(result.mode_ladder, false);
+        showLadderWriteWarning(result.mode_ladder);
       } catch (error) {
         showToast(error.message, true);
       } finally {
@@ -8519,6 +8547,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
         applyModeLadder(result.mode_ladder, false);
+        showLadderWriteWarning(result.mode_ladder);
       } catch (error) {
         showToast(error.message, true);
         await fetchModeLadder(true);
@@ -8527,6 +8556,70 @@ std::string_view webControlPageHtml()
         if (state.ladderSaveAgain) {
           state.ladderSaveAgain = false;
           void saveModeLadder();
+        }
+      }
+    }
+
+    // The aspect filter is saved on the camera (set_mode_ladder aspects, its own line in mode_ladder.conf):
+    // a click shows at once and is sent 200 ms after the last one, as a ladder edit is. Core takes the
+    // filter alone in a take too, and leaves the resolutions as they are. Only a Core whose ladder has an
+    // aspects field keeps it: an older one (a tab left open while Core restarted on another branch) would
+    // run the click as a ladder save, so there the filter only changes the screen.
+    function setLadderAspects(next) {
+      state.ladderAspects = next;
+      if (state.ladderServer && Array.isArray(state.ladderServer.aspects)) {
+        state.ladderAspectsPending = true;
+        clearTimeout(state.ladderAspectsTimer);
+        state.ladderAspectsTimer = window.setTimeout(saveLadderAspects, 200);
+      }
+      renderSensorModes();
+    }
+
+    async function saveLadderAspects() {
+      // A reply without the field may have landed since the click: that Core keeps no filter.
+      if (!(state.ladderServer && Array.isArray(state.ladderServer.aspects))) {
+        state.ladderAspectsPending = false;
+        return;
+      }
+      if (state.ladderAspectsSaving) {
+        state.ladderAspectsSaveAgain = true;
+        return;
+      }
+      state.ladderAspectsSaving = true;
+      const sent = state.ladderAspects.join(",");
+      try {
+        const result = await ladderRequest({ cmd: "set_mode_ladder", aspects: sent });
+        if (!state.ladderAspectsSaveAgain && state.ladderAspects.join(",") === sent)
+          state.ladderAspectsPending = false;   // no newer click: Core's filter is the one on screen
+        // Core changed only the filter: take just that from its reply and redraw only this card, so the
+        // Mode Ladder draft is left as it is and a row being typed in is not rebuilt.
+        if (result.mode_ladder && Array.isArray(result.mode_ladder.aspects)) {
+          state.ladderServer = Object.assign({}, state.ladderServer, { aspects: result.mode_ladder.aspects });
+          if (!state.ladderAspectsPending)
+            state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
+        } else {
+          // An older Core, without the field: it kept no filter. The click stays on screen, and from now
+          // on clicks only change the screen; one made while this save was on its way is not sent.
+          delete state.ladderServer.aspects;
+          clearTimeout(state.ladderAspectsTimer);
+          state.ladderAspectsSaveAgain = false;
+          state.ladderAspectsPending = false;
+        }
+        renderSensorModes();
+      } catch (error) {
+        // Not saved: back to the filter Core has, and the clicks after it are dropped.
+        clearTimeout(state.ladderAspectsTimer);
+        state.ladderAspectsSaveAgain = false;
+        state.ladderAspectsPending = false;
+        state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
+        renderSensorModes();
+        showToast(error.message, true);
+        await fetchModeLadder(false);
+      } finally {
+        state.ladderAspectsSaving = false;
+        if (state.ladderAspectsSaveAgain) {
+          state.ladderAspectsSaveAgain = false;
+          void saveLadderAspects();
         }
       }
     }
