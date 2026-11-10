@@ -1,5 +1,7 @@
 // The IMX283 sensor modes Core offers: the 57 non-experimental modes of the cinemate-port driver
-// (Tiramisioux/imx283-v4l2-driver, branch cinemate-port, experimental_modes=0). Pure, std only;
+// (Tiramisioux/imx283-v4l2-driver, branch cinemate-port, experimental_modes=0). The table matches the
+// driver's mode tables at 68b7dc9, the build on the rig since 2026-11-10 (they are the same in
+// cinemate-modes cb925e5); recheck it when the driver changes. Pure, std only;
 // host-tested by tools/imx283_modes_test.cpp.
 //
 // Core's resolution is the ACTIVE picture. The driver delivers a larger TRANSPORT frame: the active
