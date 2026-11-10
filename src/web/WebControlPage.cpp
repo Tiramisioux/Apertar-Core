@@ -7715,6 +7715,12 @@ std::string_view webControlPageHtml()
     function ladderAspectText(mode) {
       if (imx585Selected(state.snapshot))
         return imx585RatioLabel(mode.width, mode.height);
+      // An IMX283 size is named as the Record pane names it ("3:2", "1.37:1"); a size outside its tables keeps the decimal.
+      if (sensorNameLower(state.snapshot).indexOf("imx283") !== -1) {
+        const imx283Label = imx283CropRatioLabel(mode.width + "x" + mode.height);
+        if (imx283Label)
+          return imx283Label;
+      }
       const ratio = mode.height > 0 ? mode.width / mode.height : 16 / 9;
       return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
     }
