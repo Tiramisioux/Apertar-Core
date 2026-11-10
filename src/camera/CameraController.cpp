@@ -4611,7 +4611,12 @@ public:
         // The raw copy pool survives the take: the next take's first frames would
         // otherwise allocate and page in 16.6 MB each on libcamera's completion thread.
         workerCount_ = 0;
-        stopping_ = false;
+        // Writers left behind on a medium called gone still wait on this flag. Clearing it sent one that was only
+        // slow (a nearly full NVMe, 5 s without progress) back to waiting for frames: it never returned, liveWorkers_
+        // stayed 1 and startAtFolder refused every take until Core restarted (2026-11-10). startAtFolder clears it
+        // once they are gone.
+        if (joinAll)
+            stopping_ = false;
     }
 
     // The safety-stop flush can be cut short by a new record press (ApertarCoreApp::handleCommand, no controller
