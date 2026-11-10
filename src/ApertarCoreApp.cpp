@@ -11957,9 +11957,15 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
             std::filesystem::remove(clip / step.partDir, existsEc);
         if (done % 1000 == 0)
             fsyncFolder(clip);
-        if (done % 5000 == 0)
+        if (done % 5000 == 0) {
+            // std::cerr is shared: leave its float format as found, or every later double on it prints fixed.
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             std::cerr << "ApertarCore clip merge: " << name << " " << done << "/" << plan.steps.size() << " per_file_ms="
                       << std::fixed << std::setprecision(2) << (renameNs / 1e6) / done << std::defaultfloat << "\n";
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
+        }
     }
     for (const std::string &part : plan.emptyPartsToRemove)
         std::filesystem::remove(clip / part, ec);
@@ -11975,9 +11981,13 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
     std::ostringstream line;
     line << std::fixed << std::setprecision(1) << name << ": " << done << " files in " << seconds << " s, " << std::setprecision(2)
          << perFileMs << " ms per file";
+    const std::ios_base::fmtflags flags = std::cerr.flags();
+    const std::streamsize precision = std::cerr.precision();
     std::cerr << "ApertarCore clip merge: done " << name << " files=" << done << " seconds=" << std::fixed << std::setprecision(1)
               << seconds << " per_file_ms=" << std::setprecision(2) << perFileMs << std::defaultfloat
               << (plan.problem.empty() ? std::string() : " (" + plan.problem + ")") << "\n";
+    std::cerr.flags(flags);
+    std::cerr.precision(precision);
     std::lock_guard<std::mutex> lock(clipMergeMutex_);
     clipMergeActive_.clear();
     clipMergePaused_.clear();

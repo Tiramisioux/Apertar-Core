@@ -4566,6 +4566,9 @@ public:
         }
         const uint64_t timedJobs = losslessTimedJobs_.load(std::memory_order_relaxed);
         if (timedJobs > 0) {
+            // std::cerr is shared: leave its float format as found, or every later double on it prints fixed.
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             const double averageWallUs = static_cast<double>(
                 losslessWorkerWallUs_.load(std::memory_order_relaxed)) / timedJobs;
             const double averageCpuUs = static_cast<double>(
@@ -4613,15 +4616,21 @@ public:
                           << losslessProfiledSourceRows_.load(std::memory_order_relaxed)
                           << std::defaultfloat << "\n";
             }
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
         }
         const double stopSeconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - stopStarted).count();
         if (stopSeconds > 0.20) {
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             std::cerr << "ApertarCore recorder stop time: "
                       << std::fixed << std::setprecision(3) << stopSeconds
                       << "s format=" << toString(recordingFormat_)
                       << " discarded_on_stop=" << summary.discardedOnStop
                       << "\n";
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
         }
 
         unregisterFlushAbort();   // before mutex_: abortSafetyFlush takes the registry mutex first, then mutex_
