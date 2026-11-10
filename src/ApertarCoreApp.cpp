@@ -9462,6 +9462,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_phase_lock_dur_us\":" << phaseLockStatus.durationUs
         << ",\"fps_phase_lock_pushes\":" << phaseLockStatus.pushes
         << ",\"fps_phase_lock_saturated\":" << (phaseLockStatus.saturated ? "true" : "false")
+        << ",\"fps_phase_lock_locked\":" << (phaseLockStatus.locked ? "true" : "false")
         << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
         << ",\"timelapse_active\":" << (timelapseActive ? "true" : "false")
         << ",\"timelapse_interval_seconds\":" << timelapseIntervalSeconds
@@ -13078,6 +13079,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         const MediaSnapshot mediaState = mediaSnapshot();
         const bool soundRecording = soundRecordingActive();
         const bool recording = camera_.isRecording() || soundRecording;
+        // The lock's state as /api/state carries it (design §8.1): err_us is the last frame's grid error.
+        const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
         std::ostringstream body;
         body << "\"state\":\"" << toString(camera_.state()) << "\""
              << ",\"standby\":" << (camera_.state() == CameraState::Standby ? "true" : "false")
@@ -13089,6 +13092,12 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
              << ",\"controls_errors\":" << controlsErrors_.load()
              << ",\"controls_warnings\":" << controlsWarnings_.load()
+             << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
+             << ",\"fps_phase_lock_err_us\":" << jsonNumber(phaseLockStatus.errorUs, 1)
+             << ",\"fps_phase_lock_dur_us\":" << phaseLockStatus.durationUs
+             << ",\"fps_phase_lock_pushes\":" << phaseLockStatus.pushes
+             << ",\"fps_phase_lock_saturated\":" << (phaseLockStatus.saturated ? "true" : "false")
+             << ",\"fps_phase_lock_locked\":" << (phaseLockStatus.locked ? "true" : "false")
              << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
              << ",\"timelapse_active\":" << (camera_.timelapseActive() ? "true" : "false")
              << ",\"timelapse_interval_seconds\":" << camera_.timelapseIntervalSeconds()

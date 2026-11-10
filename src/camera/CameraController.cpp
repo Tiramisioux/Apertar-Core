@@ -98,6 +98,7 @@
 #include <fcntl.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-heap.h>
+#include <linux/v4l2-subdev.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -2441,8 +2442,13 @@ libcamera::ControlList controlsForSettings(const CaptureSettings &settings,
         : 41666;
     const int64_t frameDurationUs = limitedPreview
         ? std::max(nominalFrameDurationUs, int64_t(exposureUs)) : nominalFrameDurationUs;
-    const int64_t maximumFrameDurationUs = settings.photoModeEnabled && !settings.shutterAuto
+    int64_t maximumFrameDurationUs = settings.photoModeEnabled && !settings.shutterAuto
         ? std::max(frameDurationUs, int64_t(exposureUs) + (limitedPreview ? 0 : 100000)) : frameDurationUs;
+    // Fix A (design §7.3): with the phase lock on, the base pin is {d, d+1} like the lock's own pin, so camera
+    // start, fps changes, ramp steps and the still restore keep HBLANK at its minimum and floor to whole lines
+    // instead of hopping the line length. With the lock off it stays {d, d}.
+    if (settings.fpsPhaseLock && !settings.photoModeEnabled)
+        maximumFrameDurationUs = frameDurationUs + 1;
     const int64_t frameDurationRange[2] = { frameDurationUs, maximumFrameDurationUs };
     controls.set(libcamera::controls::FrameDurationLimits,
                  libcamera::Span<const int64_t, 2>(frameDurationRange));
@@ -7537,7 +7543,12 @@ public:
     void stop()
     {
 #if APERTARCORE_HAS_LIBCAMERA
-        { std::lock_guard lock(recordingFrameMutex_); recordingFramesEnabled_ = false; }
+        {
+            std::lock_guard lock(recordingFrameMutex_);
+            recordingFramesEnabled_ = false;
+            takePending_ = false;
+            phaseLockReleasedForRamp_ = false;
+        }
         running_ = false;
 
         if (camera_) {
@@ -7551,8 +7562,10 @@ public:
         {
             std::lock_guard<std::mutex> lock(controlsMutex_);
             pendingControls_.clear();
-            phaseLock_.release();
+            phaseLock_.release(PhaseLockArmReason::Stream);
             phaseLockDurationUs_.reset();
+            forgetPhaseLockStretch();
+            phaseLockLineUs_ = 0.0;   // read again at the next stream start
         }
         setPrerollFps(0.0);   // a reconfigure ends a storage pre-roll's frame-rate override
 
@@ -7603,7 +7616,13 @@ public:
     bool reconfigure(const CaptureSettings &settings, std::string *error, bool forPhoto = false)
     {
 #if APERTARCORE_HAS_LIBCAMERA
+        // Leaving photo mode restarts the stream: the phase lock's next arm reports the photo exit, not the restart.
+        const bool photoModeExit = settings_.photoModeEnabled && !settings.photoModeEnabled;
         stop();
+        if (photoModeExit) {
+            std::lock_guard<std::mutex> lock(controlsMutex_);
+            phaseLock_.release(PhaseLockArmReason::PhotoModeExit);
+        }
         photoStreamOverride_ = forPhoto;
         return start(settings, error);
 #else
@@ -7630,6 +7649,7 @@ public:
         constrainExposureMetering(sanitized, exposureMeteringModes());
         longExposureTimingUsed_ |= sanitized.photoModeEnabled && sanitized.longExposureEnabled;
 
+        bool fpsChanged = false;
         {
             std::unique_lock settingsLock(sessionSettingsMutex_);
             std::lock_guard<std::mutex> lock(controlsMutex_);
@@ -7638,14 +7658,27 @@ public:
                                                    camera_->controls(),
                                                    Resolution{ configuredSensorWidth_, configuredSensorHeight_ },
                                                    camera_->properties(), monochromeSensor_);
-            if (std::fabs(settings_.fps - sanitized.fps) > 1e-9 || settings_.fpsPhaseLock != sanitized.fpsPhaseLock ||
+            fpsChanged = std::fabs(settings_.fps - sanitized.fps) > 1e-9;
+            if (fpsChanged || settings_.fpsPhaseLock != sanitized.fpsPhaseLock ||
                 settings_.photoModeEnabled != sanitized.photoModeEnabled) {
-                phaseLock_.release();
+                // The next arm reports why (the trace's arm=): the fps change once its grace has passed, a photo
+                // mode exit, or the switch. A stretch already sent stays tracked: its request is still queued.
+                phaseLock_.release(fpsChanged ? PhaseLockArmReason::FpsChange
+                                   : settings_.photoModeEnabled != sanitized.photoModeEnabled ? PhaseLockArmReason::PhotoModeExit
+                                   : PhaseLockArmReason::Enable);
                 phaseLockDurationUs_.reset();
             }
-            if (std::fabs(settings_.fps - sanitized.fps) > 1e-9)
+            if (fpsChanged)
                 noteFpsChange(settings_.fps, sanitized.fps, sanitized.shutterUs);
             settings_ = sanitized;
+            vblankOnlyPins_ = sanitized.fpsPhaseLock && !sanitized.photoModeEnabled;
+        }
+        // A Speed Ramp take: its first fps change releases the phase lock until the take stops, so no arm pulls a
+        // ramp's frames off their rate. The grace noteFpsChange started covers the frames before this is set.
+        if (fpsChanged) {
+            std::lock_guard lock(recordingFrameMutex_);
+            if (takePending_ || recordingFramesEnabled_)
+                phaseLockReleasedForRamp_ = true;
         }
         return true;
 #else
@@ -7668,6 +7701,19 @@ public:
             setError(error, "Monochrome MLV is not supported. Select cDNG or H.264 instead.");
             return false;
         }
+        // takePending_ (design §6.2 step 5): this camera's take is decided, so the phase lock starts no stretch
+        // from here on. Every failure below withdraws it; a take that opened its gate keeps it until its stop.
+        { std::lock_guard lock(recordingFrameMutex_); takePending_ = true; }
+        struct TakePendingGuard {
+            CameraSession *session;
+            ~TakePendingGuard() {
+                std::lock_guard lock(session->recordingFrameMutex_);
+                if (!session->recordingFramesEnabled_) {
+                    session->takePending_ = false;
+                    session->phaseLockReleasedForRamp_ = false;
+                }
+            }
+        } withdrawOnFailure{this};
         recordingClock_ = RecordingClock();
         recordingGapEstimate_ = 0;
         {
@@ -7819,7 +7865,13 @@ public:
         emitMediaWriteState();
         // Close the frame gate before finalizing audio, and wait for an in-flight
         // enqueue/observe pair. Video must not grow after the WAV endpoint is fixed.
-        { std::lock_guard lock(recordingFrameMutex_); recordingFramesEnabled_ = false; }
+        // takePending_ goes with the gate: the phase lock may stretch again, and a Speed Ramp's release ends.
+        {
+            std::lock_guard lock(recordingFrameMutex_);
+            recordingFramesEnabled_ = false;
+            takePending_ = false;
+            phaseLockReleasedForRamp_ = false;
+        }
         if (recordingGapEstimate_ > 0 || requeueFailures_ > 0) {
             std::cerr << "ApertarCore capture stats: "
                       << "dropped_gap_estimate=" << recordingGapEstimate_
@@ -7887,7 +7939,8 @@ public:
 #endif
     }
     // Storage pre-roll frame rate: fps > 0 makes applyControls keep exactly that fps (no lossless/ladder clamp) and pins
-    // {period, period} FrameDurationLimits on every request; 0 ends both. Idempotent, callable at any time.
+    // {period, period}, or {period, period + 1} with the phase lock on (fix A), FrameDurationLimits on every request;
+    // 0 ends both. Idempotent, callable at any time.
     void setPrerollFps(double fps)
     {
 #if APERTARCORE_HAS_LIBCAMERA
@@ -8263,6 +8316,7 @@ public:
         status.durationUs = phaseLockDurationUs_.value_or(0);
         status.pushes = phaseLock_.pushes;
         status.saturated = phaseLockSaturated_;
+        status.locked = phaseLock_.locked;
         return status;
 #else
         return {};
@@ -8317,6 +8371,61 @@ private:
             break;
         }
         std::cerr << "ApertarCore could not reset stopped sensor timing after long exposure.\n";
+    }
+
+    // Q's line time H (design §7.3): (mode width + HBLANK) / PIXEL_RATE from this camera's own subdev, found by
+    // of_node as resetStoppedSensorTiming finds it. HBLANK is the control's minimum: the lock's {d, d+1} pins keep
+    // it there (fix A), whatever a {d, d} pin set before the lock came on. Read once per stream start, after the
+    // mode is configured; 0 when a read fails, and the lock then pins whole microseconds. Logged only with the lock
+    // on or APERTAR_PHASE_LOCK_LOG set.
+    double readSensorLineUs()
+    {
+        const bool log = settings_.fpsPhaseLock || boolEnvValue("APERTAR_PHASE_LOCK_LOG", false);
+        const std::string cameraId = camera_->id();
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
+            if (ec) break;
+            const std::string node = entry.path().filename().string();
+            if (node.rfind("v4l-subdev", 0) != 0) continue;
+            const auto ofNode = std::filesystem::canonical(entry.path() / "device/of_node", ec);
+            const bool matchesDeviceTree = !ec && ofNode.string() == "/sys/firmware/devicetree" + cameraId;
+            ec.clear();
+            std::ifstream nameFile(entry.path() / "name");
+            std::string name;
+            std::getline(nameFile, name);
+            if (!matchesDeviceTree && name != cameraId) continue;
+
+            const int fd = ::open(("/dev/" + node).c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) break;
+            v4l2_subdev_format format{};
+            format.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+            format.pad = 0;
+            v4l2_query_ext_ctrl hblank{};
+            hblank.id = V4L2_CID_HBLANK;
+            v4l2_ext_control pixelRate{};
+            pixelRate.id = V4L2_CID_PIXEL_RATE;
+            v4l2_ext_controls controls{};
+            controls.which = V4L2_CTRL_WHICH_CUR_VAL;
+            controls.count = 1;
+            controls.controls = &pixelRate;
+            const bool read = ::ioctl(fd, VIDIOC_SUBDEV_G_FMT, &format) == 0 &&
+                              ::ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &hblank) == 0 &&
+                              ::ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0;
+            ::close(fd);
+            if (!read || format.format.width == 0 || pixelRate.value64 <= 0)
+                break;
+            const double lineUs = (static_cast<double>(format.format.width) + static_cast<double>(hblank.minimum)) * 1e6 /
+                                  static_cast<double>(pixelRate.value64);
+            if (log)
+                std::cerr << "ApertarCore phase-lock: line_ns=" << std::llround(lineUs * 1000.0)
+                          << " width=" << format.format.width << " hblank_min=" << hblank.minimum
+                          << " pixel_rate=" << pixelRate.value64 << " vmax_step=" << phaseLockVmaxStep() << "\n";
+            return lineUs;
+        }
+        if (log)
+            std::cerr << "ApertarCore phase-lock: no line time from the sensor subdev, the lock pins whole microseconds and lands "
+                         "within 50 us\n";
+        return 0.0;
     }
 
     bool configureAndStart(const CaptureSettings &settings, std::string *error)
@@ -8800,6 +8909,19 @@ private:
             std::cerr << "ApertarCore preview crop: native_max=" << maximum->toString()
                       << " applied=" << (applied ? applied->toString() : "pipeline-default") << '\n';
         }
+        // Phase lock: Q's line time for this mode, and the start controls' pin, which every initial request runs
+        // with, so the stretch can count the frames already decided from the first frame on.
+        const double lineUs = readSensorLineUs();
+        {
+            std::lock_guard<std::mutex> lock(controlsMutex_);
+            phaseLockLineUs_ = lineUs;
+            vblankOnlyPins_ = settings_.fpsPhaseLock && !settings_.photoModeEnabled;
+            forgetPhaseLockStretch();
+            const auto limits = initialControls.get(libcamera::controls::FrameDurationLimits);
+            phaseLockSentPeriodNs_ = limits && limits->size() == 2 ? pinPeriodNs((*limits)[0], (*limits)[1]) : 0;
+            phaseLockRequestPeriodNs_.assign(requests_.size(), phaseLockSentPeriodNs_);
+            phaseLockCompletedNs_.fill(phaseLockSentPeriodNs_);
+        }
         if (camera_->start(&initialControls) != 0) {
             setError(error, "Failed to start libcamera capture.");
             return false;
@@ -8933,27 +9055,131 @@ private:
         return true;
     }
 
-    // Frame-rate phase lock: one servo step per completed frame, referenced to
-    // CLOCK_BOOTTIME (the SensorTimestamp domain, which is also where the audio
-    // samples are stamped, so no audio change is needed). Runs on the completion thread.
-    void stepFramePhaseLock(libcamera::Request *request)
+    // The VMAX quantum in lines (design §7.3): IMX585 2 (MEASURED, T56: 14.8 µs steps at HMAX 550); every other
+    // family 1 (UNCONFIRMED; the IMX283's comes from its driver map later).
+    int phaseLockVmaxStep() const
+    {
+        return sensorFamily_ == SensorFamily::Imx585 ? 2 : 1;
+    }
+
+    // The period in ns that a FrameDurationLimits {min, max} pin gives (controlsMutex_, for H). min != max takes
+    // libcamera's default blanking: whole lines of H, VMAX floored to the step. {d, d} lands on the helper's
+    // (HMAX, VMAX) lattice next to d. Without H: whole microseconds.
+    int64_t pinPeriodNs(int64_t minUs, int64_t maxUs) const
+    {
+        if (maxUs == minUs || !(phaseLockLineUs_ > 0.0))
+            return minUs * 1000;
+        const int64_t step = phaseLockVmaxStep();
+        const int64_t lines = static_cast<int64_t>(std::floor(static_cast<double>(minUs) / phaseLockLineUs_)) / step * step;
+        return std::llround(static_cast<double>(lines) * phaseLockLineUs_ * 1000.0);
+    }
+
+    // controlsMutex_: no stretch waits for a request, and none is awaited. Called when FramePhaseLock's hold has
+    // ended, and when a stretch never runs (its request could not carry it or failed to queue, the stream stopped):
+    // then nothing holds the PI or a take's gate for it, and no "not seen" follows.
+    void forgetPhaseLockStretch()
+    {
+        phaseLockStretchPendingUs_ = 0;
+        phaseLockStretchSentUs_ = 0;
+        phaseLockStretchNs_ = 0;
+        phaseLockStretchEchoed_ = false;
+        phaseLock_.cancelStretch();
+    }
+
+    // APERTAR_PHASE_LOCK_LOG for the trace, read at most once per second of sensor time, not per frame
+    // (controlsMutex_).
+    bool phaseLockTraceOn(int64_t timestampNs)
+    {
+        if (phaseLockTraceReadNs_ < 0 || timestampNs < phaseLockTraceReadNs_ ||
+            timestampNs - phaseLockTraceReadNs_ >= 1000000000) {
+            phaseLockTraceReadNs_ = timestampNs;
+            phaseLockTraceOn_ = boolEnvValue("APERTAR_PHASE_LOCK_LOG", false);
+        }
+        return phaseLockTraceOn_;
+    }
+
+    // One trace line per frame (design §7.4, §10 Part 1): the grid slot and error, the lines the frame ran (v, 0
+    // without H or a FrameDuration, or with the lock off), the lock state, and on the frame they come from the arm,
+    // the pin pushed and the stretch requested for the next request, "echo" on the frame that echoes the stretch's
+    // pin and "landed" on the stretched frame. Integers only, built in one string (controlsMutex_), which the caller
+    // writes with one call.
+    std::string phaseLockTraceLine(const FramePhaseLock::Decision &decision, int64_t timestampNs, int64_t lines,
+                                   bool echo)
+    {
+        std::string line;
+        line.reserve(256);
+        char number[24];
+        const auto put = [&](const char *key, int64_t value) {
+            line += key;
+            const int length = std::snprintf(number, sizeof(number), "%lld", static_cast<long long>(value));
+            if (length > 0)
+                line.append(number, static_cast<size_t>(length));
+        };
+        line += "ApertarCore phase-lock trace:";
+        put(" slot=", decision.slot);
+        put(" ts=", timestampNs);
+        put(" err_ns=", decision.errorNs);
+        put(" v=", lines);
+        put(" lock=", decision.active ? 1 : 0);
+        put(" locked=", decision.locked ? 1 : 0);
+        if (decision.rearmed) {
+            line += " arm=";
+            line += phaseLockArmReasonName(decision.armReason);
+        }
+        if (decision.pushDuration)
+            put(" push=", decision.durationUs);
+        if (decision.stretch)
+            put(" stretch=", decision.stretchUs);
+        if (echo)
+            line += " echo";
+        if (decision.stretchLanded)
+            line += " landed";
+        line += '\n';
+        return line;
+    }
+
+    // Frame-rate phase lock on one absolute grid (design §7.2-§7.4): one step per completed
+    // frame, referenced to CLOCK_BOOTTIME (the SensorTimestamp domain, which is also where the
+    // audio samples are stamped, so no audio change is needed). Runs on the completion thread.
+    // Returns true while a stretch is in flight, lock on or off: the take's first-frame gate waits it out. With
+    // APERTAR_PHASE_LOCK_LOG on, `trace` gets the frame's trace line, for the caller to write outside controlsMutex_.
+    bool stepFramePhaseLock(libcamera::Request *request, std::string &trace)
     {
         const auto timestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
-        if (!timestamp)
-            return;
         bool recording = false;
+        bool releasedForRamp = false;
         {
             std::lock_guard lock(recordingFrameMutex_);
-            recording = recordingFramesEnabled_;
+            // A decided take counts from its start, not from its gate: no stretch may land in it (§6.2 step 5).
+            recording = takePending_ || recordingFramesEnabled_;
+            releasedForRamp = phaseLockReleasedForRamp_;
+        }
+        // A still capture owns the request controls (requeueRequest), so no stretch is decided meanwhile.
+        bool photoBusy = false;
+        {
+            std::lock_guard lock(photoCaptureMutex_);
+            photoBusy = !pendingPhotoCaptures_.empty() || stillExposureActive_ || restoreStillPreviewControls_;
         }
         // settings_ is read here under the shared session-settings lock the
         // completion callback holds; controlsMutex_ guards the lock state itself.
         std::lock_guard<std::mutex> lock(controlsMutex_);
+        // This request has left the queue; its pin still decides the frames up to kPhaseLockPinDelayFrames after
+        // its own (the sensor's VBLANK delay, fpsRampGraceFrames).
+        int64_t completedNs = 0;
+        if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size()) {
+            completedNs = phaseLockRequestPeriodNs_[cookie];
+            phaseLockRequestPeriodNs_[cookie] = 0;
+        }
+        std::copy_backward(phaseLockCompletedNs_.begin(), phaseLockCompletedNs_.end() - 1, phaseLockCompletedNs_.end());
+        phaseLockCompletedNs_[0] = completedNs;
+        if (!timestamp)
+            return phaseLock_.stretchAge >= 0;
         // After an FPS change the sensor runs the old period for a few frames; a servo
         // armed on the new nominal would bank that as phase error and sit on its clamp
-        // for hundreds of frames. Stay released until the ramp grace has passed (T31).
+        // for hundreds of frames. Stay released until the ramp grace has passed (T31), and for the rest of a
+        // Speed Ramp take once it has changed its fps.
         const bool enabled = settings_.fpsPhaseLock && !settings_.photoModeEnabled && settings_.fps > 1.0 &&
-            !inFpsRampGrace(static_cast<int64_t>(*timestamp / 1000));
+            !releasedForRamp && !inFpsRampGrace(static_cast<int64_t>(*timestamp / 1000));
         const bool wasActive = phaseLock_.active;
         if (!wasActive) {
             // Gains tune on the Pi without a rebuild (Cinemate kept them as live keys
@@ -8975,31 +9201,100 @@ private:
             }();
             phaseLock_.tuning = tuning;
         }
-        const FramePhaseLock::Decision decision =
-            phaseLock_.step(enabled, recording, settings_.fps, static_cast<int64_t>(*timestamp));
+        // The grid's period is the take's exact rational rate (25 -> 25000/1000, 23.976 -> 24000/1001).
+        const auto [rateNum, rateDen] = recordingFrameRate(settings_.fps);
+        const double periodNs = 1e9 * static_cast<double>(rateDen) / static_cast<double>(rateNum);
+        const bool traceOn = phaseLockTraceOn(static_cast<int64_t>(*timestamp));
+        // This frame's FrameDuration, for the in-flight sum, the stretched frame and the trace's v only.
+        int64_t frameDurationUs = 0;
+        if (enabled || phaseLockStretchSentUs_ > 0 || traceOn) {
+            if (const auto frameDuration = request->metadata().get(libcamera::controls::FrameDuration);
+                frameDuration && *frameDuration > 0)
+                frameDurationUs = normalizeFrameDurationToUs(static_cast<int64_t>(*frameDuration), settings_.fps);
+        }
+        const bool prerollPinned = prerollPinUs_.load(std::memory_order_acquire) > 0;
+        FramePhaseLock::Input in;
+        in.enabled = enabled;
+        in.recording = recording;
+        // No stretch while this arm's saturated flag is latched (at a mode's top fps the frames cannot hold T, so
+        // the phase would drift off again after every stretch), while a storage pre-roll pin owns every request, or
+        // while a still capture does (its requests carry no stretch, which would be decided and cancelled every frame).
+        in.stretchAllowed = !(phaseLockSaturated_ && wasActive) && !prerollPinned && !photoBusy;
+        in.prerollPinned = prerollPinned;
+        in.rateNum = rateNum;
+        in.rateDen = rateDen;
+        in.timestampNs = static_cast<int64_t>(*timestamp);
+        in.lineUs = phaseLockLineUs_;
+        in.vmaxStep = phaseLockVmaxStep();
+        if (enabled) {
+            // Everything already decided between this frame's start and the frame a stretch sent now
+            // would lengthen (design §7.4): this frame's own FrameDuration, the kPhaseLockPinDelayFrames
+            // requests completed last, and the requests still queued. With fewer, the stretch misses the slot
+            // by what it leaves out (at 24 fps about 7.4 µs per base pin).
+            double excessNs = frameDurationUs > 0 ? static_cast<double>(frameDurationUs) * 1000.0 - periodNs : 0.0;
+            for (const int64_t ns : phaseLockCompletedNs_)
+                if (ns > 0) excessNs += static_cast<double>(ns) - periodNs;
+            for (const int64_t ns : phaseLockRequestPeriodNs_)
+                if (ns > 0) excessNs += static_cast<double>(ns) - periodNs;
+            in.inFlightExcessNs = std::llround(excessNs);
+        }
+        // The stretch in flight, lock on or off: the echo of its pin (the IPA reports the limits it validated for
+        // the request) shows it went out; from that frame on, the stretched frame is the first whose FrameDuration
+        // is the stretch's own period, kPhaseLockPinDelayFrames later on this sensor.
+        bool echo = false;
+        if (phaseLockStretchSentUs_ > 0) {
+            if (!phaseLockStretchEchoed_) {
+                const auto echoedLimits = request->metadata().get(libcamera::controls::FrameDurationLimits);
+                echo = echoedLimits && echoedLimits->size() == 2 && (*echoedLimits)[0] == phaseLockStretchSentUs_;
+                phaseLockStretchEchoed_ = echo;
+            }
+            in.stretchLanded = phaseLockStretchEchoed_ && frameDurationUs > 0 &&
+                std::llabs(frameDurationUs * 1000 - phaseLockStretchNs_) <=
+                    FramePhaseLock::landingToleranceNs(phaseLockLineUs_);
+        }
+        in.requestCount = static_cast<int>(requests_.size());
+        const FramePhaseLock::Decision decision = phaseLock_.step(in);
+        // The grid error of every frame, lock on or off (fps_phase_lock_err_us).
+        lastPhaseErrorUs_ = decision.phaseErrorUs;
+        // Before the early return below, so the trace also runs with the lock off (test 1.2). v only with the
+        // lock's {d, d+1} pins, which keep the line at HBLANK's minimum (fix A); a {d, d} pin re-chooses it.
+        if (traceOn)
+            trace = phaseLockTraceLine(decision, in.timestampNs,
+                vblankOnlyPins_ && frameDurationUs > 0 && phaseLockLineUs_ > 0.0
+                    ? std::llround(static_cast<double>(frameDurationUs) / phaseLockLineUs_) : 0, echo);
+        if (decision.stretchNotSeen && phaseLockStretchSentUs_ > 0)
+            std::cerr << "ApertarCore phase-lock: stretch not seen stretch_us=" << phaseLockStretchSentUs_
+                      << " echo=" << (phaseLockStretchEchoed_ ? 1 : 0) << "\n";
+        if (decision.stretchesStopped)
+            std::cerr << "ApertarCore phase-lock: stretches stopped after " << FramePhaseLock::kStopStretchesAfterNotSeen
+                      << " not seen in a row, the PI pulls in alone until the next arm\n";
+        if (!decision.holding)
+            forgetPhaseLockStretch();
         if (!decision.active) {
             if (wasActive)
                 std::cerr << "ApertarCore phase-lock: released\n";
             phaseLockDurationUs_.reset();
             phaseLockSaturated_ = false;
-            return;
+            return decision.holding;
         }
         if (decision.rearmed) {
+            // No return: the arm frame is a full frame, and its push and stretch go out below.
             phaseLockDurationUs_.reset();
             phaseLockSaturated_ = false;
-            // Requests already in flight carry Core's own pin (controlsForSettings: the
-            // truncated nominal period); their echoes are not saturation.
-            recentPhaseLockPins_.fill(0);
-            recentPhaseLockPins_[0] = static_cast<int64_t>(1000000.0 / settings_.fps);
-            recentPhaseLockPinIndex_ = 1;
+            // Requests already in flight carry Core's own pin (controlsForSettings: the truncated nominal period)
+            // or the last arm's; their echoes are not saturation. The ring keeps what it has.
+            recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] =
+                static_cast<int64_t>(1000000.0 / settings_.fps);
             std::cerr << "ApertarCore phase-lock: armed fps=" << settings_.fps
                       << " nominal_us=" << phaseLock_.nominalUs << " ref=boottime"
                       << " kp=" << phaseLock_.tuning.proportional << " ki=" << phaseLock_.tuning.integral
-                      << " deadband_us=" << phaseLock_.tuning.deadbandUs << " clamp_us=" << phaseLock_.tuning.clampUs << "\n";
-            return;
+                      << " deadband_us=" << phaseLock_.tuning.deadbandUs << " clamp_us=" << phaseLock_.tuning.clampUs
+                      << " reason=" << phaseLockArmReasonName(decision.armReason) << "\n";
         }
+        if (decision.takePhaseKept)
+            std::cerr << "ApertarCore phase-lock: the take keeps its own phase err_us="
+                      << std::lround(decision.phaseErrorUs) << " (not synced)\n";
         if (decision.servoRan) {
-            lastPhaseErrorUs_ = decision.phaseErrorUs;
             // Saturation: the IPA echoes the validated FrameDurationLimits in the
             // metadata. A pinned {d,d+1} (or Core's own {d,d}) whose lower end comes
             // back as something we never pinned was clamped to the mode's limits; at
@@ -9011,7 +9306,7 @@ private:
                 bool pinned = false;
                 for (const int64_t pin : recentPhaseLockPins_)
                     pinned = pinned || (pin != 0 && pin == echoedUs);
-                if (!pinned && recentPhaseLockPins_[0] != 0) {
+                if (!pinned) {
                     phaseLockSaturated_ = true;
                     std::cerr << "ApertarCore phase-lock: saturated echoed_us=" << echoedUs
                               << " requested_us=" << decision.durationUs << " nominal_us=" << phaseLock_.nominalUs << "\n";
@@ -9020,11 +9315,21 @@ private:
         }
         if (decision.pushDuration)
             phaseLockDurationUs_ = decision.durationUs;
+        // The stretch rides the next request only (requeueRequest); the lock pin follows it.
+        // A stretch decided on the frame the previous hold ends keeps nothing of the old one: its echo and its
+        // sent pin are cleared before it goes out.
+        if (decision.stretch) {
+            phaseLockStretchPendingUs_ = decision.stretchUs;
+            phaseLockStretchSentUs_ = 0;
+            phaseLockStretchNs_ = decision.stretchNs;
+            phaseLockStretchEchoed_ = false;
+        }
         if (decision.servoRan && (phaseLock_.frames % 250) == 0 && boolEnvValue("APERTAR_PHASE_LOCK_LOG", false))
             std::cerr << "ApertarCore phase-lock: frames=" << phaseLock_.frames
                       << " err_us=" << std::lround(decision.phaseErrorUs)
                       << " dur_us=" << decision.durationUs
                       << " pushes=" << phaseLock_.pushes << "\n";
+        return decision.holding;
     }
 
     void requeueRequest(libcamera::Request *request)
@@ -9100,6 +9405,8 @@ private:
 
         // Phase lock: pin this request's frame duration. Set after every merge above,
         // so it wins; skipped while a still capture owns the exposure.
+        bool carriesStretch = false;
+        int64_t sentPeriodBeforeNs = 0;
         {
             bool photoBusy = false;
             {
@@ -9111,6 +9418,7 @@ private:
             // clears the pin under controlsMutex_ when photo mode, fps or the switch
             // changes, so the pin's presence is the only condition needed.
             std::lock_guard<std::mutex> lock(controlsMutex_);
+            int64_t stretchUs = 0;
             if (phaseLockDurationUs_ && !photoBusy) {
                 // {d, d+1}, not {d, d}: the qbc libcamera's IMX585 helper re-chooses the
                 // line length (HMAX) for every single-value pin, so 1 us pushes became
@@ -9118,17 +9426,41 @@ private:
                 // hardware-log 2026-10-26). A range takes libcamera's default blanking:
                 // HMAX stays at the mode minimum and the frame rounds down to whole lines,
                 // as on Cinemate's libcamera, so the servo dithers adjacent line counts.
-                const int64_t range[2] = { *phaseLockDurationUs_, *phaseLockDurationUs_ + 1 };
+                // A stretch (design §7.4) replaces the lock pin on this one request.
+                stretchUs = phaseLockStretchPendingUs_;
+                const int64_t pinUs = stretchUs > 0 ? stretchUs : *phaseLockDurationUs_;
+                const int64_t range[2] = { pinUs, pinUs + 1 };
                 request->controls().set(libcamera::controls::FrameDurationLimits,
                                         libcamera::Span<const int64_t, 2>(range));
-                recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = *phaseLockDurationUs_;
             }
             // Storage pre-roll: the exact period on every request, so the take cannot fall back to an older limit.
+            // {p, p+1} with the lock on (fix A), like the base pin; it overrides a lock or stretch pin.
             if (const int64_t prerollPin = prerollPinUs_.load(std::memory_order_acquire); prerollPin > 0 && !photoBusy) {
-                const int64_t range[2] = { prerollPin, prerollPin };
+                const int64_t range[2] = { prerollPin, vblankOnlyPins_ ? prerollPin + 1 : prerollPin };
                 request->controls().set(libcamera::controls::FrameDurationLimits,
                                         libcamera::Span<const int64_t, 2>(range));
+                stretchUs = 0;
             }
+            // A stretch sent now: the lock looks for its echo and its frame. One this request cannot carry (no lock
+            // pin, a still capture, the pre-roll pin) never runs, so nothing waits for it.
+            if (stretchUs > 0) {
+                phaseLockStretchSentUs_ = stretchUs;
+                phaseLockStretchPendingUs_ = 0;
+            } else if (phaseLockStretchPendingUs_ > 0) {
+                forgetPhaseLockStretch();
+            }
+            carriesStretch = stretchUs > 0;
+            // The pin this request actually carries, from the merges above or from here: the saturation ring
+            // takes it (so a pre-roll's p is no false "saturated"), and so does the period record the stretch
+            // counts. A request without the control keeps the limits the IPA was given last.
+            sentPeriodBeforeNs = phaseLockSentPeriodNs_;
+            if (const auto limits = request->controls().get(libcamera::controls::FrameDurationLimits);
+                limits && limits->size() == 2) {
+                recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = (*limits)[0];
+                phaseLockSentPeriodNs_ = pinPeriodNs((*limits)[0], (*limits)[1]);
+            }
+            if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size())
+                phaseLockRequestPeriodNs_[cookie] = phaseLockSentPeriodNs_;
         }
 
         if (running_.load() && camera_) {
@@ -9138,6 +9470,13 @@ private:
                     std::cerr << "ApertarCore drop[requeue-failed]: total="
                               << requeueFailures_ << "\n";
                 }
+                // Not in flight after all, nor the stretch it carried, and the IPA never got its limits.
+                std::lock_guard<std::mutex> lock(controlsMutex_);
+                phaseLockSentPeriodNs_ = sentPeriodBeforeNs;
+                if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size())
+                    phaseLockRequestPeriodNs_[cookie] = 0;
+                if (carriesStretch)
+                    forgetPhaseLockStretch();
             }
         }
     }
@@ -9217,7 +9556,10 @@ private:
             }
         }
 
-        stepFramePhaseLock(request);
+        std::string phaseLockTrace;
+        const bool phaseLockHolding = stepFramePhaseLock(request, phaseLockTrace);
+        if (!phaseLockTrace.empty())
+            std::cerr << phaseLockTrace;
         capturePhotoFrame(request, whiteBalance);
         bool recoveredPreview = false;
         bool exposePreview = true;
@@ -9244,6 +9586,10 @@ private:
                     const int64_t expected = int64_t(std::llround(1000000 / settings_.fps));
                     ready = (!timestamp || *timestamp / 1000 >= recordingStartBootUs_) &&
                         (!duration || std::abs(normalizeFrameDurationToUs(*duration, settings_.fps) - expected) <= std::max<int64_t>(500, expected / 50));
+                    // A stretch the lock sent before the take was decided must not land in it: wait until the
+                    // stretched frame has run plus 2 frames, lock on or off (design §6.2 step 5), at most N + 6
+                    // frames. A stretch that never went out holds nothing.
+                    ready = ready && !phaseLockHolding;
                     if (ready) waitingForRecordingCadence_ = false;
                 }
                 if (ready) {
@@ -10410,6 +10756,30 @@ private:
     // of an older pin reads as saturation.
     std::array<int64_t, 16> recentPhaseLockPins_{};
     size_t recentPhaseLockPinIndex_ = 0;
+    // The grid lock's inputs (T57, all controlsMutex_). Q's line time H in µs, read from this camera's subdev at
+    // each stream start (0: unknown, whole-µs pins). Whether the base and pre-roll pins are {d, d+1}
+    // (settings_.fpsPhaseLock and not photo mode), mirrored for requeueRequest, which cannot read settings_.
+    double phaseLockLineUs_ = 0.0;
+    bool vblankOnlyPins_ = false;
+    // The stretch (design §7.4): decided for the next request (pending), then the pin that request carries
+    // (sent), the period its frame gets and whether the IPA has echoed the pin, until FramePhaseLock stops
+    // tracking it (forgetPhaseLockStretch). 0: none.
+    int64_t phaseLockStretchPendingUs_ = 0;
+    int64_t phaseLockStretchSentUs_ = 0;
+    int64_t phaseLockStretchNs_ = 0;
+    bool phaseLockStretchEchoed_ = false;
+    // A request's pin decides the frame this many frames after the request's own (the sensor's VBLANK delay;
+    // test 1.5 checks it on the rig from the trace's echo-to-landed distance).
+    static constexpr size_t kPhaseLockPinDelayFrames = 2;
+    // The period in ns each queued request's FrameDurationLimits gives, by request cookie (0: not in flight);
+    // the period of the limits the IPA was given last, which a request without the control keeps; and the
+    // periods of the kPhaseLockPinDelayFrames requests completed last, whose pins still act on the next frames.
+    std::vector<int64_t> phaseLockRequestPeriodNs_;
+    int64_t phaseLockSentPeriodNs_ = 0;
+    std::array<int64_t, kPhaseLockPinDelayFrames> phaseLockCompletedNs_{};
+    // APERTAR_PHASE_LOCK_LOG for the per-frame trace, and the sensor time it was read at (-1: not yet).
+    bool phaseLockTraceOn_ = false;
+    int64_t phaseLockTraceReadNs_ = -1;
     mutable std::mutex whiteBalanceMutex_;
 
     WhiteBalanceMeasurement whiteBalanceMeasured_;
@@ -10432,6 +10802,12 @@ private:
     RecordingClock recordingClock_;
     std::mutex recordingFrameMutex_;
     bool recordingFramesEnabled_ = false;
+    // A take of this camera is decided: set in startRecording after its refusals, withdrawn by its failures, and
+    // cleared with the gate at the stop (design §6.2 step 5). The phase lock's "recording" (recordingFrameMutex_).
+    bool takePending_ = false;
+    // A Speed Ramp take changed its fps (applyControls): the phase lock stays released until the take stops, is
+    // withdrawn or the stream stops (recordingFrameMutex_).
+    bool phaseLockReleasedForRamp_ = false;
     bool waitingForRecordingCadence_ = false;
     int64_t recordingStartBootUs_ = 0;
     Mpu6050RecordingSession gyroRecorder_;
@@ -12166,11 +12542,11 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
 // the queue's safety stop and the dropped-frames warning are off (prerollTake_). The fps is the sensor's maximum for
 // the running mode (prerollMaximumFps: it overrides the lossless-JPEG cap, the mode ladder and the speed-ramp limits).
 // It is applied directly (never through ladderRewriteLocked, so the ladder never switches resolution) and gets past the
-// session's own sanitiser by session_->setPrerollFps, which also pins {period, period} FrameDurationLimits on every
-// request. No reconfigure: the sensor mode is chosen by size and bit depth, not by fps. startStoragePreroll waits
-// (at most 1 s) until a completed frame reports the new period, so the whole take runs at full speed. settings_ is
-// changed without commit (not saved, no settings event) and restored from a copy in finishStoragePreroll. Both calls
-// are made by Core's storage pre-roll thread only.
+// session's own sanitiser by session_->setPrerollFps, which also pins {period, period}, or {period, period + 1} with
+// the phase lock on (fix A), FrameDurationLimits on every request. No reconfigure: the sensor mode is chosen by size
+// and bit depth, not by fps. startStoragePreroll waits (at most 1 s) until a completed frame reports the new period,
+// so the whole take runs at full speed. settings_ is changed without commit (not saved, no settings event) and
+// restored from a copy in finishStoragePreroll. Both calls are made by Core's storage pre-roll thread only.
 bool CameraController::startStoragePreroll(std::string *error, double *fpsOut)
 {
     std::lock_guard<std::mutex> lock(mutex_);
