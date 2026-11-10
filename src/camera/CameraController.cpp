@@ -4960,9 +4960,12 @@ public:
         expectedRawBufferSize_ = 0;
     }
 
-    // A split take: make part_<part> once, on the copy side, before its first frame is queued (several copy threads
-    // may arrive here; the set and the mutex make each folder exactly once). A failed mkdir is logged; the writer's
-    // open then fails and the take ends as on any write failure.
+    // A split take: make part_<part> once, on a writer thread, before the first frame of that part is written (several
+    // writers may arrive here; the set and the mutex make each folder exactly once, and a writer that finds the part
+    // already made waits for its mkdir to finish). Not on the copy side: a mkdir that waits behind queued writes on
+    // exFAT over USB held the copy worker for >= 6 frame periods and cost 3 copy-slot drops at frame 40,000 (SSD night 2,
+    // 2026-11-09). A writer that waits is absorbed by the queue. A failed mkdir is logged; the open then fails and the
+    // take ends as on any write failure.
     void ensurePartFolder(uint64_t part)
     {
         std::lock_guard<std::mutex> partLock(partMutex_);
@@ -4977,8 +4980,6 @@ public:
                  RawFrameView frame,
                  CdngEncoder::Metadata metadata)
     {
-        if (framesPerFolder_ > 0 && recordingFormat_ != RecordingFormat::Mlv)
-            ensurePartFolder(framepath::partIndex(metadata.frameIndex, framesPerFolder_));
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_ || workers_.empty())
             return false;
@@ -5283,6 +5284,8 @@ private:
             const uint64_t cpuStartedUs = timeLossless ? currentThreadCpuTimeUs() : 0;
             bool completed = false;
             try {
+                if (framesPerFolder_ > 0)
+                    ensurePartFolder(framepath::partIndex(job.metadata.frameIndex, framesPerFolder_));
                 if (lossyEncoder) {
                     lossyEncoder->writeDngFile(job.path, job.frame, job.metadata);
                     // The lossy writer stores asynchronously and only logged its
