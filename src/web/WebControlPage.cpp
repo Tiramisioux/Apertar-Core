@@ -5907,7 +5907,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsBootConfigCard" data-search="boot config config.txt firmware sensor camera overlay dtoverlay imx477 imx577 imx585 imx294 mono link frequency csi lane rp1 overclock clock i2c i2s spi audio dpi display waveshare hyperpixel hdmi reboot">
+            <div class="settings-card" id="settingsBootConfigCard" data-search="boot config config.txt firmware sensor camera overlay dtoverlay imx477 imx577 imx585 imx294 imx283 oneincheye mono link frequency csi lane rp1 overclock clock i2c i2s spi audio dpi display waveshare hyperpixel hdmi reboot">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Boot Config</h3>

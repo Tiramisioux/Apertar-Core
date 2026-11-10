@@ -237,6 +237,46 @@ int main()
         const auto r = applyRequest(kApertar, q, f);
         check(r.ok && lineOf(r.text, 44) == "dtoverlay=imx577,cam0" && lineOf(r.text, 42).rfind('#', 0) == 0, "imx577 with its overlay: added after the list");
     }
+
+    // ---- the IMX283 (OneInchEye) on cam1 of a CM5 beside the IMX585 on cam0, as on the dev Pi from 2026-11-10 ----
+    {
+        const Board cm5 = boardFromDeviceTree(std::string("raspberrypi,5-compute-module\0brcm,bcm2712\0", 42),
+                                              "Raspberry Pi Compute Module 5 Lite Rev 1.0");
+        std::string two = kApertar;
+        const std::string cam0Line = "\ndtoverlay=imx585,cam0,link-frequency=891000000\n";
+        two.replace(two.find(cam0Line), cam0Line.size(), cam0Line + "dtoverlay=imx283,always-on\n");
+        const State t = readState(parseDocument(two, cm5), cm5);
+        check(t.editable && t.cameras.at("cam0").sensor == "imx585" && t.cameras.at("cam0").line == 42 &&
+              t.cameras.at("cam1").sensor == "imx283" && t.cameras.at("cam1").line == 43 && !t.cameras.at("cam1").linkFrequency &&
+              t.warnings.empty(), "CM5: the IMX585 on cam0 (line 42) and the IMX283 on cam1 (line 43)");
+        const std::string json = stateJson(t, facts(cm5));
+        const size_t at = json.find("{\"key\":\"imx283\",\"label\":\"OneInchEye (IMX283)\"");
+        check(at != std::string::npos && json.find("\"default_hz\":720000000", at) != std::string::npos &&
+              json.find("{\"hz\":360000000,", at) != std::string::npos && json.find("{\"hz\":720000000,", at) != std::string::npos,
+              "the card offers the IMX283 at 360 and 720 MHz, 720 the default");
+        const auto same2 = applyRequest(two, same(t), facts(cm5));
+        check(same2.ok && same2.changes.empty() && same2.text == two, "CM5, two cameras: a no-op request keeps the bytes");
+
+        Request q = same(t);
+        q.linkFrequencies["cam1"] = 360000000ull;
+        const auto r = applyRequest(two, q, facts(cm5));
+        check(r.ok && r.changes.size() == 1 && lineOf(r.text, 43) == "dtoverlay=imx283,always-on,link-frequency=360000000" &&
+              r.after.cameras.at("cam1").linkFrequency == 360000000ull, "IMX283 at 360 MHz: the word is added, always-on kept");
+        Request back = same(r.after);
+        back.linkFrequencies["cam1"] = 720000000ull;
+        const auto b = applyRequest(r.text, back, facts(cm5));
+        check(b.ok && b.text == two, "IMX283 at 720 MHz (default): the word goes, the original bytes");
+        q.linkFrequencies["cam1"] = 891000000ull;
+        const auto bad = applyRequest(two, q, facts(cm5));
+        check(!bad.ok && bad.text.empty() && bad.error.find("891000000") != std::string::npos, "IMX283 at 891 MHz is refused");
+    }
+    {
+        Request q = same(s);
+        q.sensors["cam1"] = "imx283";
+        const auto r = applyRequest(kApertar, q, facts(board5));
+        check(r.ok && r.changes.size() == 1 && lineOf(r.text, 44) == "dtoverlay=imx283" &&
+              r.after.cameras.at("cam1").sensor == "imx283", "IMX283 on cam1 of a Pi 5: a new line after the list, no port word");
+    }
     {
         Request q = same(s4);
         q.sensors["cam0"] = "imx585";

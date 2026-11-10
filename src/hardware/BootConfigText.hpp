@@ -148,9 +148,11 @@ struct Sensor {
     std::vector<LinkOption> options;
 };
 
-// The sensors Core has handling for (CameraController detectSensorFamily: imx577, imx477, imx294, imx585).
+// The sensors Core has handling for (CameraController detectSensorFamily: imx577, imx477, imx294, imx283, imx585).
 // Link-frequency values are Cinemate's resources/sensors.json: the will127534 IMX585 driver table (1188 MHz left
-// out: frame drops on a Pi 5) and the IMX477 presets (above 750 MHz: experimental, over the RP1 spec).
+// out: frame drops on a Pi 5), the IMX477 presets (above 750 MHz: experimental, over the RP1 spec) and the IMX283's
+// two (the driver's only register sequences; 720 MHz is its ceiling, and 360 MHz needs the overlay's link-frequency
+// parameter, which Tiramisioux/imx283-v4l2-driver has from 257c9cf: an older overlay does not enumerate the camera).
 inline const std::vector<Sensor> &sensors()
 {
     static const std::vector<LinkOption> imx585Options = {
@@ -168,6 +170,8 @@ inline const std::vector<Sensor> &sensors()
         {"imx585", "imx585", "StarlightEye (IMX585, colour)", false, 720000000, 891000000, imx585Options},
         {"imx585_mono", "imx585", "StarlightEye (IMX585, mono)", true, 720000000, 891000000, imx585Options},
         {"imx294", "imx294", "IMX294", false, 0, 0, {}},
+        {"imx283", "imx283", "OneInchEye (IMX283)", false, 720000000, 0, {
+            {360000000, 720, 0, false, false}, {720000000, 1440, 0, false, false}}},
     };
     return list;
 }
