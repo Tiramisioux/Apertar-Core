@@ -4246,6 +4246,8 @@ public:
         recordingFormat_ = settings.recordingFormat;
         frameIndex_ = 0;
         firstFrameTimestampUs_ = 0;
+        lastFrameTimestampUs_ = 0;
+        indexJumps_.store(0, std::memory_order_relaxed);
         droppedFrames_ = 0;
         enqueuedFrames_ = 0;
         writtenFrames_ = 0;
@@ -4531,6 +4533,7 @@ public:
                       << " discarded_on_failure=" << summary.discardedOnFailure
                       << " skipped_after_failure=" << summary.skippedAfterFailure
                       << " dropped_copy_slot=" << droppedNoRequestSlot_.load(std::memory_order_relaxed)
+                      << " index_jumps=" << indexJumps_.load(std::memory_order_relaxed)
                       << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
                       << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth;
             if (summary.ramMode)
@@ -4688,7 +4691,22 @@ public:
         if (firstFrameTimestampUs_ == 0) firstFrameTimestampUs_ = timestampUs;
         const uint64_t timeIndex = (!countOnly && timestampUs > firstFrameTimestampUs_)
             ? uint64_t(std::llround((timestampUs - firstFrameTimestampUs_) * settings_.fps / 1000000)) : 0;
-        const auto index = std::max(frameIndex_.load(std::memory_order_relaxed), timeIndex);
+        const auto count = frameIndex_.load(std::memory_order_relaxed);
+        const auto index = std::max(count, timeIndex);
+        // The time index ran ahead of the count: this frame's number skips (index - count) numbers. After a lost frame
+        // that is right (the capture-gap line says so too); without one it is a late timestamp, and the clip has a
+        // numbering gap but no lost picture (SSD night 2, 2026-11-09: one such gap with every counter at 0). Logged so
+        // the next one can be told apart: dt is this frame's distance from the previous one.
+        if (index > count && count > 0) {
+            const uint64_t jumps = indexJumps_.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (jumps <= 5 || (jumps % 30) == 0)
+                std::cerr << "ApertarCore frame index jump: frame=" << index << " count=" << count
+                          << " skipped=" << (index - count)
+                          << " dt_us=" << (timestampUs - lastFrameTimestampUs_)
+                          << " since_first_us=" << (timestampUs - firstFrameTimestampUs_)
+                          << " total=" << jumps << "\n";
+        }
+        lastFrameTimestampUs_ = timestampUs;
         frameIndex_.store(index + 1, std::memory_order_relaxed);
         return index;
     }
@@ -5576,6 +5594,8 @@ private:
     std::string clipName_;
     std::atomic<uint64_t> frameIndex_{0};
     int64_t firstFrameTimestampUs_ = 0;
+    int64_t lastFrameTimestampUs_ = 0;   // previous frame's sensor time (nextFrameIndex, the completion thread only)
+    std::atomic<uint64_t> indexJumps_{0}; // frames whose time index ran ahead of the count (nextFrameIndex)
     uint64_t droppedFrames_ = 0;
     RecordingDropWarning *dropWarning_ = nullptr;
     uint64_t discardedOnStopFrames_ = 0;
