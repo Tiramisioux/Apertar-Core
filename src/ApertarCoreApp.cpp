@@ -10,6 +10,8 @@
 #include "camera/ExposureMetering.hpp"
 #include "ipc/Cam1State.hpp"
 #include "ipc/CommandClasses.hpp"
+#include "ipc/JsonKeys.hpp"
+#include "util/TakeSlots.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
 #include "hardware/GpioChipInfo.hpp"
@@ -2266,6 +2268,29 @@ std::string cam1StateMembers(const ControlClient &client, const SharedUiSettings
     cameras.cam1State = word;
     cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
     return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + cam1state::recordCamerasWord(cameras) + "\"";
+}
+
+// The running (or last) take's folder name and, for a take with start_us, the slots of its first and last frame
+// (design 6.2, 8.1), with a leading comma, for both state bodies. Lock-free: the controller's TakeInfo.
+std::string takeSlotMembers(const CameraController::TakeSnapshot &take)
+{
+    return std::string(",\"recording_first_slot\":") + (take.firstSlot ? std::to_string(*take.firstSlot) : std::string("null"))
+           + ",\"recording_last_slot\":" + (take.lastSlot ? std::to_string(*take.lastSlot) : std::string("null"))
+           + ",\"recording_clip_name\":\"" + escapeJson(take.clipName) + "\"";
+}
+
+// A whole-number record_start / record_stop field (start_us, stop_us, tc_offset_us): absent is fine (*present false),
+// present and not a whole number within 2^53 is false.
+bool wholeNumberField(const ControlCommand &command, const char *key, int64_t *value, bool *present)
+{
+    *present = command.fields.count(key) != 0;
+    if (!*present)
+        return true;
+    const auto number = command.number(key);
+    if (!number || !std::isfinite(*number) || *number != std::floor(*number) || std::fabs(*number) > 9.0e15)
+        return false;
+    *value = static_cast<int64_t>(*number);
+    return true;
 }
 
 std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
@@ -9761,6 +9786,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
         << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
         << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
+        << takeSlotMembers(camera_.takeSnapshot())
         << ",\"controls_errors\":" << controlsErrors_.load()
         << ",\"controls_warnings\":" << controlsWarnings_.load()
         << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
@@ -13489,6 +13515,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
              << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
+             << takeSlotMembers(camera_.takeSnapshot())
              << ",\"controls_errors\":" << controlsErrors_.load()
              << ",\"controls_warnings\":" << controlsWarnings_.load()
              << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
@@ -15393,12 +15420,44 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (soundRecordingActive())
             return errorReply(command.id, "Stop Sound Recorder before starting camera recording.");
 
+        // The optional fields of a take on a slot (design 6.2): start_us, stop_us, clip_name, tc_offset_us. None given =
+        // a take exactly as before. Refused before anything starts (and before the audio sleep).
+        CameraController::TakeOptions takeOptions;
+        {
+            bool present = false;
+            if (!wholeNumberField(command, "start_us", &takeOptions.startUs, &present) || (present && takeOptions.startUs <= 0))
+                return errorReply(command.id, "start_us must be a number.");
+            if (!wholeNumberField(command, "stop_us", &takeOptions.stopUs, &present) || (present && takeOptions.stopUs <= 0))
+                return errorReply(command.id, "stop_us must be a number.");
+            if (!wholeNumberField(command, "tc_offset_us", &takeOptions.tcOffsetUs, &takeOptions.hasTcOffset))
+                return errorReply(command.id, "tc_offset_us must be a number.");
+            if (const auto clipName = command.string("clip_name")) {
+                if (!clipname::validVerbatimName(*clipName))
+                    return errorReply(command.id, clipname::kInvalidClipName);
+                takeOptions.clipName = *clipName;
+            } else if (command.fields.count("clip_name")) {
+                return errorReply(command.id, clipname::kInvalidClipName);
+            }
+        }
+        // Cam1 configured: the {cam} rule applies to a template-made name (ClipName.hpp ensureCamToken), and two
+        // different frame rates in a take that both cameras record make it NOT SYNCED from its first frame (design
+        // 6.2, "Two fps in Independent"). T64 narrows this to the cameras that really roll.
+        if (!secondaryRole() && cam1Client_.configured()) {
+            takeOptions.twoCameras = true;
+            if (uiSettings.recordCameras == "Both") {
+                const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+                const auto cam1Fps = jsonkeys::numberOf(cam1.settings, "fps");
+                if (cam1.linked && cam1Fps && takeslots::fpsDiffer(*cam1Fps, camera_.settings().fps))
+                    takeOptions.unsyncedReason = "two frame rates";
+            }
+        }
+
         if (audioOptions.enabled) {
             controlServer_.broadcast("{\"event\":\"prepare_recording\"}");
             std::this_thread::sleep_for(std::chrono::milliseconds(220));
         }
 
-        if (!camera_.startRecording(audioOptions, gyroOptions))
+        if (!camera_.startRecording(audioOptions, gyroOptions, takeOptions))
             return errorReply(command.id, camera_.lastError());
         syncRecordingTracking(true);
         return okReply(command.id, std::string("\"recording\":true,\"recording_has_dropped_frames\":")
@@ -15483,7 +15542,16 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return okReply(command.id, "\"recording\":false,\"sound_recording\":false");
         }
 
-        if (!camera_.stopRecording())
+        // stop_us (design 6.2): the take ends on that slot. The buffer safety stop arrives here as a plain record_stop,
+        // so safetyStopState().active tells it apart: it stops at once, with no wait, whatever a stop_us says. (Cam1's
+        // next-slot stop_us for it is the relay's, T64: takeslots::stopUsFor(now, 0, rate).)
+        int64_t stopUs = 0;
+        bool stopPresent = false;
+        if (!wholeNumberField(command, "stop_us", &stopUs, &stopPresent) || (stopPresent && stopUs <= 0))
+            return errorReply(command.id, "stop_us must be a number.");
+        if (bufferbudget::safetyStopState().active.load(std::memory_order_acquire))
+            stopUs = 0;
+        if (!camera_.stopRecording(stopUs))
             return errorReply(command.id, camera_.lastError());
         syncRecordingTracking(false);
         return okReply(command.id, std::string("\"recording\":false,\"recording_has_dropped_frames\":")

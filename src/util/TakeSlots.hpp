@@ -9,6 +9,7 @@
 // stop_us = (k1 - 1/2) * T, so the first frame is slot k0 and the last is k1 - 1. A boundary itself is read with the
 // tie going up (tieUp), so a hand-made value on the exact half still means k0 and k1.
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -64,6 +65,61 @@ inline int64_t slotTimeUs(int64_t slot, const Rate &rate)
 // The slot a take with this start_us should open on, and the one a take with this stop_us should end on.
 inline int64_t expectedFirstSlot(int64_t startUs, const Rate &rate) { return slotOfUs(startUs, rate, true); }
 inline int64_t expectedLastSlot(int64_t stopUs, const Rate &rate) { return slotOfUs(stopUs, rate, true) - 1; }
+
+// The mid-slot boundary before slot k: (k - 1/2) * T, in microseconds, rounded to the nearest.
+inline int64_t boundaryUs(int64_t slot, const Rate &rate)
+{
+    if (!rate.valid())
+        return 0;
+    const __int128 numerator = (static_cast<__int128>(2) * slot - 1) * 1000000 * rate.den;
+    const __int128 denominator = static_cast<__int128>(2) * rate.num;
+    __int128 q = numerator / denominator;
+    __int128 r = numerator % denominator;
+    if (r < 0) {
+        r += denominator;
+        --q;
+    }
+    if (2 * r >= denominator)
+        ++q;
+    return static_cast<int64_t>(q);
+}
+
+// ceil(timeUs / T): the first slot at or after a time.
+inline int64_t ceilSlotUs(int64_t timeUs, const Rate &rate)
+{
+    if (!rate.valid())
+        return 0;
+    const __int128 scaled = static_cast<__int128>(timeUs) * rate.num;
+    const __int128 period = static_cast<__int128>(1000000) * rate.den;
+    __int128 q = scaled / period;
+    __int128 r = scaled % period;
+    if (r < 0) {   // C++ truncates toward zero: q is already the ceiling of a negative quotient
+        r = 0;
+    }
+    if (r > 0)
+        ++q;
+    return static_cast<int64_t>(q);
+}
+
+// Step 1 of a take (design 6.2): k0 = ceil((now + lead) / T), start_us = (k0 - 1/2) * T. The primary's pick; T64
+// sends it to cam1 as well.
+inline int64_t startUsFor(int64_t nowUs, int64_t leadUs, const Rate &rate)
+{
+    return boundaryUs(ceilSlotUs(nowUs + leadUs, rate), rate);
+}
+
+// A stop with a lead: k1 = ceil((now + lead) / T), stop_us = (k1 - 1/2) * T. A lead of 0 gives the first boundary
+// after now, the next slot's stop_us that a safety stop sends cam1 (design 6.2).
+inline int64_t stopUsFor(int64_t nowUs, int64_t leadUs, const Rate &rate)
+{
+    int64_t k = ceilSlotUs(nowUs + leadUs, rate);
+    while (boundaryUs(k, rate) <= nowUs)
+        ++k;
+    return boundaryUs(k, rate);
+}
+
+// Two frame rates at once make a two-camera take NOT SYNCED from its first frame (design 6.2, Q14).
+inline bool fpsDiffer(double a, double b) { return std::fabs(a - b) > 0.0005; }
 
 // Whole frames a slot lies after the expected one (0 when on time or early).
 inline int64_t framesLate(int64_t actualSlot, int64_t expectedSlot)
