@@ -193,7 +193,8 @@ std::string_view webControlPageHtml()
       z-index: 1;
     }
 
-    /* Clip merge: a faint grey fill in the READY pill while the camera is idle and the merge runs (as the touch UI). */
+    /* Clip merge: a faint grey fill in the READY pill while the camera is idle and the merge runs, full at the start
+       and emptying as the clips merge (as the touch UI). */
     .status-pill.merge-fill::after {
       content: "";
       position: absolute;
@@ -16651,15 +16652,16 @@ std::string_view webControlPageHtml()
         storageMergeTrack.hidden = !(hasMedia && storageMerge.active);
         document.getElementById("storageMergeBar").style.width = storageMerge.allPercent + "%";
       }
-      // The READY pill fills in grey with all clips, only while the camera is idle: not during a take (the frame
-      // buffer bar has the pill then), the pre-roll or anything else that pauses the merge.
+      // The READY pill shows in grey what is left to merge of all clips (full at the start, emptying as they merge),
+      // only while the camera is idle: not during a take (the frame buffer bar has the pill then), the pre-roll or
+      // anything else that pauses the merge.
       const mergePill = document.querySelector(".status-pill");
       if (mergePill) {
         const label = document.getElementById("recordingStatus");
         const mergeFillOn = hasMedia && storageMerge.active && !storageMerge.paused && !!label && label.textContent === "READY";
         mergePill.classList.toggle("merge-fill", mergeFillOn);
         if (mergeFillOn)
-          mergePill.style.setProperty("--merge-fill", storageMerge.allPercent + "%");
+          mergePill.style.setProperty("--merge-fill", (100 - storageMerge.allPercent) + "%");
         else
           mergePill.style.removeProperty("--merge-fill");
       }
