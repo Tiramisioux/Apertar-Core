@@ -110,6 +110,11 @@ public:
         uint32_t height = 2160;
         double fps = 30.0;
         std::string timecode;
+        /* A take that starts on a slot (design 6.3): "@capture" stamps the slot time plus tcOffsetUs. The period is
+         * tcPeriodDen / tcPeriodNum seconds; tcPeriodNum 0 = no slots. */
+        int64_t tcOffsetUs = 0;
+        int64_t tcPeriodNum = 0;
+        int64_t tcPeriodDen = 0;
         /* Frame threads. prores_aw implements ONLY frame threading -- slice
          * threading is accepted and silently does nothing (measured: 89.5
          * ms/frame at 1..4 slice threads, unchanged). Frame threading costs

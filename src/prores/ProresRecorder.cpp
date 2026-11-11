@@ -76,7 +76,8 @@ bool ProresRecorder::startAtFolder(const std::filesystem::path &folder, const Ca
         std::snprintf(tc, sizeof(tc), "@capture");
     }
     ApertarProresConfig cfg{path.c_str(), tc, width, height, settings.fps, profile, threads,
-                           static_cast<unsigned>(settings.proresColorProfile)};
+                           static_cast<unsigned>(settings.proresColorProfile),
+                           timecodeSlot_.offsetUs, timecodeSlot_.periodNum, timecodeSlot_.periodDen};
     std::array<char, 512> why{};
     encoder_ = create_(&cfg, why.data(), why.size());
     if (!encoder_) { setError(error, why.data()); return false; }

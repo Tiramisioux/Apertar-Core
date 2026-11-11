@@ -2,6 +2,7 @@
 #include "ProresPluginApi.hpp"
 #include "util/RecordingFailure.hpp"
 #include "util/RecordingDropWarning.hpp"
+#include "audio/RecordingClock.hpp"
 #include <apertar/core/Types.hpp>
 #include <atomic>
 #include <condition_variable>
@@ -20,6 +21,8 @@ public:
     bool startAtFolder(const std::filesystem::path &, const CaptureSettings &, uint32_t, uint32_t, std::string *, size_t cameraBuffers = 12);
     bool enqueueFrame(const uint8_t *, size_t, uint32_t, uint32_t, uint32_t, int64_t, std::function<void()>);
     void stop();
+    // The next take's slot timecode (design 6.3), set before startAtFolder; a default value = no slots.
+    void setTimecodeSlot(const TimecodeSlot &slot) { timecodeSlot_ = slot; }
     bool active() const { return accepting_.load(std::memory_order_acquire); }
     std::string error() const { return failure_.message(); }
 private:
@@ -46,5 +49,6 @@ private:
     uint64_t submitted_ = 0, written_ = 0, dropped_ = 0, failures_ = 0;
     size_t peak_ = 0;
     size_t queueCapacity_ = 2;
+    TimecodeSlot timecodeSlot_;
 };
 }

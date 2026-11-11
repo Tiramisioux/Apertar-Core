@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-constexpr uint32_t kApertarLibavH264PluginAbi = 2;
+constexpr uint32_t kApertarLibavH264PluginAbi = 3;
 
 struct ApertarLibavH264Config {
     uint32_t abiVersion = kApertarLibavH264PluginAbi;
@@ -22,6 +22,11 @@ struct ApertarLibavH264Config {
     uint32_t height = 0;
     double fps = 0.0;
     bool freeRunTimecode = false;
+    // ABI 3: a take that starts on a slot (design 6.3) stamps its first-frame timecode with the slot time plus
+    // tcOffsetUs; the period is tcPeriodDen / tcPeriodNum seconds. tcPeriodNum 0 = no slots, the timecode as before.
+    int64_t tcOffsetUs = 0;
+    int64_t tcPeriodNum = 0;
+    int64_t tcPeriodDen = 0;
 };
 
 using ApertarLibavH264Handle = void *;

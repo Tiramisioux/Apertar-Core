@@ -5839,6 +5839,8 @@ public:
         stop();
     }
 
+    void setTimecodeSlot(const TimecodeSlot &slot) { timecodeSlot_ = slot; }
+
     bool startAtFolder(const std::filesystem::path &folderPath,
                        const CaptureSettings &settings,
                        uint32_t width,
@@ -6433,6 +6435,9 @@ private:
         config.height = height_;
         config.fps = fps_;
         config.freeRunTimecode = freeRunTimecode_;
+        config.tcOffsetUs = timecodeSlot_.offsetUs;
+        config.tcPeriodNum = timecodeSlot_.periodNum;
+        config.tcPeriodDen = timecodeSlot_.periodDen;
         return libavEncoder_.open(config, error);
     }
 
@@ -6867,6 +6872,7 @@ private:
     RecordingFailure failure_;
     std::function<void(int64_t)> frameWritten_;
     bool freeRunTimecode_ = false;
+    TimecodeSlot timecodeSlot_;   // the take's slot timecode (design 6.3); set before startAtFolder
     bool copyingDone_ = false;
     std::atomic<bool> finalizing_{false};
     std::atomic<bool> active_{false};
