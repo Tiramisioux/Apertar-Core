@@ -14277,6 +14277,11 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const auto parsed = apertar::clipname::parse(*value);
         if (!parsed.ok)
             return errorReply(command.id, parsed.error);
+        if (!secondaryRole() && cam1Client_.configured()) {   // one length rule with cam1 configured (design 6.2)
+            const auto two = apertar::clipname::parseForTwoCameras(*value);
+            if (!two.ok && two.error == std::string(apertar::clipname::kTwoCameraNameTooLong))
+                return errorReply(command.id, two.error);
+        }
         std::string stored;
         if (!camera_.setClipNameTemplate(*value, &stored))
             return errorReply(command.id, camera_.lastError());
@@ -14291,7 +14296,19 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const std::string value = command.string("value").value_or("");
         std::string example;
         std::string error;
-        if (!camera_.previewClipName(value, &example, &error))
+        if (!secondaryRole() && cam1Client_.configured()) {
+            // Cam1 configured (design 6.2 The preview calls): the name the take will get, with {cam} and one number for
+            // both names; camera=cam1 gives the name the primary will send cam1, built from cam1.settings.
+            const auto plain = apertar::clipname::parse(value.empty() ? camera_.settings().clipNameTemplate : value);
+            if (!plain.ok)
+                return errorReply(command.id, plain.error);
+            const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+            const clipname::TwoNames names = camera_.twoCameraClipNames(cam1names::partnerFrom(cam1.settings, cam1.sensor),
+                                                                        takeClockUs(CLOCK_REALTIME), plain.normalized);
+            if (!names.ok)
+                return errorReply(command.id, names.error);
+            example = command.string("camera").value_or("") == "cam1" ? names.cam1 : names.cam0;
+        } else if (!camera_.previewClipName(value, &example, &error))
             return errorReply(command.id, error);
         const auto parsed = apertar::clipname::parse(value.empty() ? camera_.settings().clipNameTemplate : value);
         return okReply(command.id, "\"example\":\"" + escapeJson(example) + "\",\"template\":\"" +
@@ -15496,6 +15513,11 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             const auto parsed = apertar::clipname::parse(*value);
             if (!parsed.ok)
                 return errorReply(command.id, "Invalid preset clip name template: " + parsed.error);
+            if (!secondaryRole() && cam1Client_.configured()) {
+                const auto two = apertar::clipname::parseForTwoCameras(*value);
+                if (!two.ok && two.error == std::string(apertar::clipname::kTwoCameraNameTooLong))
+                    return errorReply(command.id, two.error);
+            }
             presetSettings.clipNameTemplate = parsed.normalized;
         }
         if (const auto value = command.string("cameraFpsPhaseLock"))
