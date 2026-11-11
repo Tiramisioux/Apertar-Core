@@ -874,7 +874,7 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
-    /* Mode Ladder, Speed Ramp and Activated sensor modes (Settings > Record), and the ladder in Camera settings */
+    /* Speed Ramp (Settings > Record), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
     .switch-field {
       display: flex;
       align-items: center;

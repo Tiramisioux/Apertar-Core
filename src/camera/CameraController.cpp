@@ -3083,12 +3083,12 @@ std::string compressionLabel(const CaptureSettings &settings)
 }
 
 constexpr const char *kLadderOwnsMode =
-    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Record > Mode Ladder) "
+    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Modes > Mode Ladder) "
     "to choose it by hand.";
 
 constexpr const char *kLadderOwnsCompression =
     "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
-    "(Settings > Record > Mode Ladder) to choose it by hand.";
+    "(Settings > Modes > Mode Ladder) to choose it by hand.";
 
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
