@@ -4,6 +4,8 @@
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/JsonKeys.hpp"
 #include "ipc/Resync.hpp"
+#include "audio/RecordingClock.hpp"
+#include "util/TakeSlots.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -34,6 +36,18 @@ int64_t nowMs()
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// CLOCK_MONOTONIC in microseconds (steady_clock is CLOCK_MONOTONIC on Linux): the domain of start_us and stop_us.
+int64_t monoUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// A stop already sent is given this long past its stop_us before the orphan rule applies (design 4.6 rule 2:
+// stop_us + max(3T, latency); 1 s covers both, and is the orphan stop's "within 1 s").
+constexpr int64_t kStopGraceUs = 1000000;
+constexpr int64_t kOrphanRepeatMs = 2000;
+constexpr size_t kStoppedKeep = 16;
+
 bool hasPrefix(const std::string &line, const char *prefix)
 {
     return line.compare(0, std::strlen(prefix), prefix) == 0;
@@ -49,6 +63,17 @@ std::string forwardLine(int id, const std::string &name, const std::map<std::str
 }
 
 } // namespace
+
+// One get_state answer, as far as the take rules read it.
+struct ControlClient::TakePoll {
+    bool recording = false;
+    std::string clip;                  // recording_clip_name
+    std::optional<double> firstSlot;
+    std::optional<double> lastSlot;
+    double fps = 0;
+    int64_t sentMs = 0;                // when the get_state was sent
+    bool relink = false;               // the first answer after a (re)link
+};
 
 ControlClient::~ControlClient()
 {
@@ -102,6 +127,10 @@ void ControlClient::stop()
     queue_.clear();
     inFlight_ = false;
     pending_ = 0;
+    takeIn_ = false;
+    takeClip_.clear();
+    observedRecording_ = false;
+    refreshRecordingLocked();
     idleCv_.notify_all();
 }
 
@@ -250,6 +279,8 @@ void ControlClient::run()
         }
         ioStep(kIoStepMs);
         watchTake();
+        if (takeChangeOwed_.exchange(false, std::memory_order_acq_rel) && options_.onTakeChange)
+            options_.onTakeChange();
     }
 }
 
@@ -311,6 +342,7 @@ void ControlClient::tick()
             rx_.clear();
             pollId_ = 0;
             settled_ = false;
+            relinkPoll_ = true;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 state_.lost = false;
@@ -510,6 +542,11 @@ void ControlClient::handleLine(const std::string &line)
         handleEvent(line);
 }
 
+void ControlClient::signalTakeChange()
+{
+    takeChangeOwed_.store(true, std::memory_order_release);
+}
+
 void ControlClient::handleReply(const std::string &line)
 {
     const auto idValue = jsonkeys::numberOf(line, "id");
@@ -538,7 +575,41 @@ void ControlClient::handleReply(const std::string &line)
     const bool ok = jsonkeys::boolOf(line, "ok").value_or(false);
     const Forward done = flight_;
     lastForwardReplyMs_ = nowMs();
-    if (ok) {
+    if (done.kind == Kind::Start) {
+        // The take's record_start (design 6.2). cam1 sets takePending_ before it answers, so the time since the slot pick is
+        // L_cam1, which the lead of the next take is judged against (T64 logs it, T69 measures it on the real cam1).
+        const bool ours = takeIn_ && takeClip_ == done.clip;
+        if (ok) {
+            if (ours) {
+                takeConfirmed_ = true;
+                takeConfirmedMs_ = nowMs();
+                observedRecording_ = true;
+                std::cerr << "ApertarCore cam1 L_cam1 " << (nowMs() - takePickedMs_) << " ms (slot pick to cam1's reply, clip "
+                          << done.clip << ")\n";
+            }
+        } else {
+            const std::string why = jsonkeys::stringOf(line, "error").value_or("refused");
+            state_.message = "CAM1: " + why;
+            std::cerr << "ApertarCore cam1 refused the take: " << why << "\n";
+            if (ours) {   // cam0 keeps rolling; cam1 never joins mid-take. The hold ends at the stop (takeFinished).
+                takeRefused_ = true;
+                takeIn_ = false;
+                takeConfirmed_ = false;
+                takeClip_.clear();
+                stopSent_ = false;
+            }
+            updateRefusedLocked();
+        }
+        refreshRecordingLocked();
+    } else if (done.kind == Kind::Stop) {
+        if (!ok)
+            state_.message = "CAM1: " + jsonkeys::stringOf(line, "error").value_or("refused");
+        // cam1's stop returned: whatever it answered, the take is over for the primary (an orphan stop has no clip).
+        observedRecording_ = false;
+        if (!done.clip.empty() && takeIn_ && takeClip_ == done.clip)
+            endTakeLocked(false, "");
+        refreshRecordingLocked();
+    } else if (ok) {
         // cam1 clamps an fps above its mode's ceiling and answers ok: say so, and schedule nothing (design 4.4). The compare
         // finds the difference and the 3-resync cap ends the loop.
         std::optional<std::string> clamp;
@@ -572,7 +643,7 @@ void ControlClient::handleReply(const std::string &line)
         step1Failed_ = false;
         enqueueLocked("set_mode_ladder", step1Fields_, Origin::Relay, 11);
     }
-    if (--pending_ <= 0) {
+    if (done.kind == Kind::Setter && --pending_ <= 0) {
         pending_ = 0;
         busySinceMs_ = 0;
     }
@@ -593,8 +664,19 @@ void ControlClient::handleEvent(const std::string &line)
         const auto active = jsonkeys::boolOf(line, "active");
         std::lock_guard<std::mutex> lock(mutex_);
         state_.lastRecordingEventMs = nowMs();
-        if (active)
-            state_.recording = *active;
+        if (active && *active) {
+            observedRecording_ = true;
+            // A take nobody asked for is judged by the relink rules a moment later, not at the next second's poll (the
+            // orphan stop is due within 1 s). The short delay lets cam1 settle its state first.
+            if (!(takeIn_ && takeConfirmed_))
+                nextTickMs_ = std::min(nextTickMs_, nowMs() + 250);
+        } else if (active) {
+            observedRecording_ = false;
+            // cam1 left a take the primary did not stop (its own buffer safety stop or failure stop): `lost`, design 4.5.
+            if (takeIn_ && takeConfirmed_ && !stopSent_)
+                endTakeLocked(true, "CAM1 left the take.");
+        }
+        refreshRecordingLocked();
     } else if (hasPrefix(line, "{\"event\":\"buffer\"")) {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.lastBufferEventMs = nowMs();
@@ -625,7 +707,8 @@ void ControlClient::handleGetState(const std::string &line)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.standby = standby || camera == "standby";
-        state_.recording = recording;
+        observedRecording_ = recording;
+        state_.clipName = jsonkeys::stringOf(line, "recording_clip_name").value_or("");
         state_.writing = writes;
         state_.idle = idle;
         state_.answered = true;
@@ -636,6 +719,17 @@ void ControlClient::handleGetState(const std::string &line)
         if (!run.empty())
             state_.settings = "{" + run + "}";
         doSettle = !settled_;
+        TakePoll poll;
+        poll.recording = recording;
+        poll.clip = state_.clipName;
+        poll.firstSlot = jsonkeys::numberOf(line, "recording_first_slot");
+        poll.lastSlot = jsonkeys::numberOf(line, "recording_last_slot");
+        poll.fps = jsonkeys::numberOf(line, "fps").value_or(0);
+        poll.sentMs = sentMs;
+        poll.relink = relinkPoll_;
+        relinkPoll_ = false;
+        applyTakeRulesLocked(poll);
+        refreshRecordingLocked();
     }
     if (options_.primaryView) {
         const resync::PrimaryView view = options_.primaryView();
@@ -773,8 +867,22 @@ void ControlClient::sendNextForward()
         inFlight_ = true;
         line = forwardLine(flight_.id, flight_.name, flight_.fields);
     }
-    if (!sendLine(line))
+    if (!sendLine(line)) {
         dropLink("send failed");
+        return;
+    }
+    std::shared_ptr<Reply> written;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        written = flight_.written;
+    }
+    if (written) {
+        {
+            std::lock_guard<std::mutex> markLock(written->mutex);
+            written->done = true;
+        }
+        written->cv.notify_all();
+    }
 }
 
 // Everyone waiting for a reply gives up: the link is gone. Called under mutex_.
@@ -790,10 +898,14 @@ void ControlClient::failReplies()
         }
         reply->cv.notify_all();
     };
-    for (const Forward &forward : queue_)
+    for (const Forward &forward : queue_) {
         fail(forward.reply);
-    if (inFlight_)
+        fail(forward.written);
+    }
+    if (inFlight_) {
         fail(flight_.reply);
+        fail(flight_.written);
+    }
     for (const Forward &read : reads_)
         fail(read.reply);
     reads_.clear();
@@ -816,6 +928,20 @@ void ControlClient::dropLink(const char *why)
     linked_.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // A record_stop queued or unanswered becomes a pending stop (design 4.1, 4.6): it is sent first at the relink.
+        bool takeStopLost = false;
+        const auto keepAsPending = [&](const Forward &forward) {
+            if (forward.kind != Kind::Stop || forward.clip.empty())
+                return;
+            if (Stopped *entry = findStoppedLocked(forward.clip))
+                entry->sentMonoUs = 0;
+            if (takeIn_ && forward.clip == takeClip_)
+                takeStopLost = true;
+        };
+        for (const Forward &forward : queue_)
+            keepAsPending(forward);
+        if (inFlight_)
+            keepAsPending(flight_);
         failReplies();
         queue_.clear();
         inFlight_ = false;
@@ -828,16 +954,344 @@ void ControlClient::dropLink(const char *why)
         state_.idle = false;
         state_.standby = false;
         state_.writing = false;
-        if (why && state_.recording) {
-            state_.lost = true;
+        if (why && takeStopLost) {
+            endTakeLocked(true, "link down");   // the stop is kept; the take state ends at once (design 4.3)
+        } else if (why && takeIn_) {
+            state_.lost = true;                 // the take state stays `recording`, so the tally stays on (design 4.3)
             state_.message = "link down";
         }
-        if (!why)
-            state_.recording = false;
+        if (!why) {
+            observedRecording_ = false;
+            takeIn_ = false;
+            takeClip_.clear();
+        }
+        refreshRecordingLocked();
         idleCv_.notify_all();
     }
     if (why)
         std::cerr << "ApertarCore cam1 link down (" << why << ")\n";
+}
+
+// ---- the take with cam1 (design 4.3, 4.6, 6.2) -------------------------------------------------------------------------
+
+// state_.recording is the primary's take state for cam1 or what cam1 itself reports, whichever says recording: while
+// either does, the card is in use. Called under mutex_ after any change to either.
+void ControlClient::refreshRecordingLocked()
+{
+    state_.recording = takeIn_ || observedRecording_;
+    state_.inTake = takeIn_;
+    state_.takeCam1Only = takeIn_ && takeCam1Only_;
+    state_.stopping = takeIn_ && stopSent_;
+    recordingNow_.store(state_.recording, std::memory_order_release);
+}
+
+ControlClient::Stopped *ControlClient::findStoppedLocked(const std::string &clip)
+{
+    for (auto it = stopped_.rbegin(); it != stopped_.rend(); ++it)
+        if (it->clip == clip)
+            return &*it;
+    return nullptr;
+}
+
+// The take ended for the primary: cam1 answered the stop, left on its own, or the link took the stop away. `lost` marks
+// an end nobody asked for. A cam1-only take also owes the App its tally and `recording` event (takeEvents()).
+void ControlClient::endTakeLocked(bool lost, const std::string &reason)
+{
+    const bool cam1Only = takeCam1Only_;
+    takeIn_ = false;
+    takeConfirmed_ = false;
+    stopSent_ = false;
+    takeClip_.clear();
+    takeCam1Only_ = false;
+    if (lost) {
+        state_.lost = true;
+        if (!reason.empty())
+            state_.message = reason;
+    }
+    if (cam1Only) {
+        events_.ended = true;
+        events_.endReason = reason;
+        signalTakeChange();
+    }
+    refreshRecordingLocked();
+}
+
+bool ControlClient::enqueueTakeLineLocked(Kind kind, const std::string &name, const std::map<std::string, std::string> &fields,
+                                          bool front, const std::string &clip, std::shared_ptr<Reply> reply,
+                                          std::shared_ptr<Reply> written)
+{
+    if (!linked_.load(std::memory_order_acquire))
+        return false;
+    static int nextTakeId = 1 << 23;
+    Forward forward;
+    forward.id = nextTakeId++;
+    forward.kind = kind;
+    forward.clip = clip;
+    forward.name = name;
+    forward.fields = fields;
+    forward.origin = Origin::Relay;
+    forward.reply = std::move(reply);
+    forward.written = std::move(written);
+    if (forward.reply)
+        forward.reply->id = forward.id;
+    if (front)
+        queue_.push_front(std::move(forward));
+    else
+        queue_.push_back(std::move(forward));
+    wake();
+    return true;   // not counted: a take's own line never makes cam1 busy (design 4.3)
+}
+
+void ControlClient::publishTake(const std::string &clipName, bool cam1Only, int64_t startUs, int64_t pickedMs)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    takeClip_ = clipName;
+    takeIn_ = true;
+    takeCam1Only_ = cam1Only;
+    takeConfirmed_ = false;
+    takeConfirmedMs_ = 0;
+    takeStartUs_ = startUs;
+    takePickedMs_ = pickedMs;
+    startJudged_ = false;
+    stopSent_ = false;
+    hadTake_ = true;
+    state_.lost = false;
+    refreshRecordingLocked();
+}
+
+void ControlClient::noteTake()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    hadTake_ = true;
+}
+
+std::shared_ptr<ControlClient::Reply> ControlClient::sendStart(const std::map<std::string, std::string> &fields)
+{
+    auto reply = std::make_shared<Reply>();
+    const auto clip = fields.find("clip_name");
+    std::lock_guard<std::mutex> lock(mutex_);
+    return enqueueTakeLineLocked(Kind::Start, "record_start", fields, false, clip == fields.end() ? std::string() : clip->second,
+                                 reply, nullptr)
+        ? reply
+        : nullptr;
+}
+
+ControlClient::StopOutcome ControlClient::stopTake(int64_t stopUs, int waitMs)
+{
+    StopOutcome out;
+    std::shared_ptr<Reply> written;
+    std::string clip;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        takeRefused_ = false;
+        updateRefusedLocked();
+        if (!takeIn_) {
+            // cam1 is not in the take (it left, or never joined): nothing to send, and a settled `lost` ends with the take.
+            if (linked_.load(std::memory_order_acquire))
+                state_.lost = false;
+            return out;
+        }
+        out.inTake = true;
+        clip = takeClip_;
+        Stopped entry;
+        entry.clip = clip;
+        entry.startUs = takeStartUs_;
+        entry.stopUs = stopUs;
+        if (!linked_.load(std::memory_order_acquire)) {
+            // A pending stop (design 4.6): sent first at the relink. The take state ends now; the word stays `lost`.
+            stopped_.push_back(entry);
+            while (stopped_.size() > kStoppedKeep)
+                stopped_.pop_front();
+            out.pending = true;
+            const bool cam1Only = takeCam1Only_;
+            takeIn_ = false;
+            takeConfirmed_ = false;
+            stopSent_ = false;
+            takeClip_.clear();
+            takeCam1Only_ = false;
+            (void)cam1Only;
+            refreshRecordingLocked();
+            return out;
+        }
+        out.reply = std::make_shared<Reply>();
+        written = std::make_shared<Reply>();
+        // Ahead of anything queued, unless the take's own start is still queued: the stop must not pass it.
+        const bool ahead = takeConfirmed_;
+        enqueueTakeLineLocked(Kind::Stop, "record_stop", {{"stop_us", std::to_string(stopUs)}}, ahead, clip, out.reply, written);
+        entry.sentMonoUs = monoUs();
+        stopped_.push_back(entry);
+        while (stopped_.size() > kStoppedKeep)
+            stopped_.pop_front();
+        stopSent_ = true;
+        out.sent = true;
+        refreshRecordingLocked();
+    }
+    // Bounded by the caller: the stop lead minus 2T (design 6.2). The relay thread signals the mark when the line is written.
+    out.written = waitMs > 0 ? written->wait(waitMs, nullptr) : false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!out.written)
+        if (const Stopped *entry = findStoppedLocked(clip); entry && entry->sentMonoUs == 0) {
+            out.pending = true;   // the link dropped while we waited: dropLink kept the stop
+            out.sent = false;
+        }
+    return out;
+}
+
+void ControlClient::abandonTake(int64_t stopUs)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (takeClip_.empty())
+        return;
+    Stopped entry;
+    entry.clip = takeClip_;
+    entry.startUs = takeStartUs_;
+    entry.stopUs = stopUs;
+    // Behind the take's own start, which may still be queued or in flight: cam1 then stops what it started.
+    if (enqueueTakeLineLocked(Kind::Stop, "record_stop", {{"stop_us", std::to_string(stopUs)}}, false, entry.clip, nullptr, nullptr))
+        entry.sentMonoUs = monoUs();
+    stopped_.push_back(entry);
+    while (stopped_.size() > kStoppedKeep)
+        stopped_.pop_front();
+    takeIn_ = false;
+    takeConfirmed_ = false;
+    stopSent_ = false;
+    takeClip_.clear();
+    takeCam1Only_ = false;
+    refreshRecordingLocked();
+}
+
+void ControlClient::withdrawTake()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    takeIn_ = false;
+    takeConfirmed_ = false;
+    stopSent_ = false;
+    takeClip_.clear();
+    takeCam1Only_ = false;
+    takeRefused_ = false;
+    updateRefusedLocked();
+    refreshRecordingLocked();
+}
+
+void ControlClient::takeFinished()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    takeRefused_ = false;
+    updateRefusedLocked();
+    if (linked_.load(std::memory_order_acquire) && !takeIn_)
+        state_.lost = false;
+}
+
+ControlClient::TakeEvents ControlClient::takeEvents()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    TakeEvents out = std::move(events_);
+    events_ = TakeEvents{};
+    return out;
+}
+
+std::string ControlClient::takeClip() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return takeIn_ ? takeClip_ : std::string();
+}
+
+// The relink rules (design 4.6), at the first answer after a link and at every poll. `poll` is cam1's get_state.
+void ControlClient::applyTakeRulesLocked(const TakePoll &poll)
+{
+    const int64_t nowMsValue = nowMs();
+    const int64_t nowMono = monoUs();
+    const std::pair<int, int> rate = recordingFrameRate(poll.fps > 0 ? poll.fps : 25.0);
+    const takeslots::Rate slotRate{rate.first, rate.second};
+    const auto lateWord = [](int64_t frames) { return std::to_string(frames) + (frames == 1 ? " frame late" : " frames late"); };
+
+    // Stops the primary kept for a take cam1 is not recording any more are moot.
+    if (!poll.recording) {
+        for (Stopped &entry : stopped_) {
+            if (entry.sentMonoUs == 0)
+                entry.sentMonoUs = nowMono;
+            // "CAM1 stopped N frames late": cam1's last slot against the one the stop_us named (design 6.2).
+            if (!entry.reported && poll.lastSlot && entry.clip == poll.clip && slotRate.valid()) {
+                entry.reported = true;
+                const int64_t late = *poll.lastSlot > takeslots::expectedLastSlot(entry.stopUs, slotRate)
+                                         ? static_cast<int64_t>(*poll.lastSlot) - takeslots::expectedLastSlot(entry.stopUs, slotRate)
+                                         : 0;
+                if (late > 0) {
+                    state_.message = "CAM1 stopped " + lateWord(late);
+                    std::cerr << "ApertarCore cam1 " << state_.message << " (clip " << entry.clip << ")\n";
+                }
+            }
+        }
+        // The take is in the primary's book but cam1 does not record it: it left unasked, or it restarted and its start wait
+        // let it come up during a cam1-only take (design 3.4, 4.6 "cam1 back without its take"). Only a poll sent after the
+        // start was answered can say so; a stop in flight ends the take by its reply.
+        if (takeIn_ && takeConfirmed_ && !stopSent_ && poll.sentMs >= takeConfirmedMs_) {
+            std::cerr << "ApertarCore cam1 " << (poll.relink ? "is back without its take" : "left the take") << " (clip " << takeClip_
+                      << ")\n";
+            endTakeLocked(true, poll.relink ? "CAM1 restarted and lost the take." : "CAM1 left the take.");
+        }
+        return;
+    }
+
+    // cam1 records. Whose take is it?
+    if (takeIn_ && poll.clip == takeClip_) {
+        // Rule 1: the running take. A rejoin after a link drop sends no event and no pulse; the gap is in the journal.
+        if (poll.relink) {
+            std::cerr << "ApertarCore cam1 rejoined the take (clip " << takeClip_ << ")\n";
+        }
+        state_.lost = false;
+        if (state_.message == "link down")
+            state_.message.clear();
+        if (!startJudged_ && poll.firstSlot && slotRate.valid()) {
+            startJudged_ = true;
+            const int64_t late = takeslots::framesLate(static_cast<int64_t>(*poll.firstSlot),
+                                                       takeslots::expectedFirstSlot(takeStartUs_, slotRate));
+            if (late > 0) {
+                state_.message = "CAM1 started " + lateWord(late);
+                std::cerr << "ApertarCore cam1 " << state_.message << " (clip " << takeClip_ << ")\n";
+            }
+        }
+        return;
+    }
+    if (Stopped *entry = findStoppedLocked(poll.clip)) {
+        // Rule 2: a take the primary has stopped. A pending stop goes out now (a stop_us already past stops at once); a stop
+        // already sent is given until its stop_us plus the grace before the orphan rule applies.
+        if (entry->sentMonoUs == 0) {
+            if (enqueueTakeLineLocked(Kind::Stop, "record_stop", {{"stop_us", std::to_string(entry->stopUs)}}, true, entry->clip, nullptr,
+                                      nullptr)) {
+                entry->sentMonoUs = nowMono;
+                std::cerr << "ApertarCore cam1 sent the pending stop (clip " << entry->clip << ")\n";
+            }
+            return;
+        }
+        if (nowMono < entry->stopUs + kStopGraceUs || nowMsValue - orphanSentMs_ < kOrphanRepeatMs)
+            return;
+        // past the grace: the orphan rule below
+    } else if (!takeIn_ && takeClip_.empty() && !hadTake_) {
+        // Rule 3: no take running and this process has had none since it started: it restarted or crashed during a cam1-only
+        // take. Adopt it (tally, record_cameras=cam1, a `recording` event with adopted:true and no pulse); STOP then ends it.
+        takeIn_ = true;
+        takeCam1Only_ = true;
+        takeConfirmed_ = true;
+        takeConfirmedMs_ = nowMsValue;
+        takeClip_ = poll.clip;
+        takeStartUs_ = 0;
+        startJudged_ = true;
+        stopSent_ = false;
+        hadTake_ = true;
+        state_.lost = false;
+        events_.adopted = true;
+        events_.adoptedClip = poll.clip;
+        signalTakeChange();
+        std::cerr << "ApertarCore cam1 adopted the take in progress (clip " << poll.clip << ")\n";
+        return;
+    }
+    // Rule 4: the orphan stop, at once. Not repeated for 2 s while cam1 answers it.
+    if (nowMsValue - orphanSentMs_ < kOrphanRepeatMs)
+        return;
+    orphanSentMs_ = nowMsValue;
+    if (enqueueTakeLineLocked(Kind::Stop, "record_stop", {}, true, std::string(), nullptr, nullptr))
+        std::cerr << "ApertarCore cam1 orphan stop (clip " << poll.clip << ")\n";
 }
 
 } // namespace apertar

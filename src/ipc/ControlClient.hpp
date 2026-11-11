@@ -50,6 +50,9 @@ public:
         std::function<std::vector<skew::Stamp>()> primaryFrames;
         std::function<std::pair<int64_t, int64_t>()> frameRate;   // recordingFrameRate(fps)
         std::function<bool()> primaryLocked;
+        // The relay's take state moved without a command (cam1 left the take, a take was adopted, a stop was answered). The
+        // App drains takeEvents() on its own thread; this only wakes it. Called on the relay thread, with no lock held.
+        std::function<void()> onTakeChange;
     };
 
     // Where a queued command came from: a "both" command forwarded after the primary's ok, a camera=cam1 setter, or one of
@@ -78,6 +81,10 @@ public:
         bool writing = false;
         bool refused = false;
         bool standby = false;
+        bool stopping = false;              // a record_stop to cam1 is sent and unanswered (reads `writing`, §4.5)
+        bool inTake = false;                // cam1 is in the primary's running take (the take state of §4.5)
+        bool takeCam1Only = false;          // ... and the take is cam1's alone
+        std::string clipName;               // cam1's recording_clip_name from its last get_state
         bool idle = false;                  // cam1's last get_state met the §4.3 idle test
         bool answered = false;              // cam1 has answered a get_state since the link
         int pending = 0;
@@ -103,6 +110,24 @@ public:
 
     void start(Options options);
     void stop();
+
+    // What the relay owes the App about the take, drained by takeEvents(): a take adopted after a primary restart (§4.6
+    // rule 3), or a cam1-only take that ended without the command thread asking (a loss, cam1 back without its take, a
+    // stop answered after the press returned).
+    struct TakeEvents {
+        bool adopted = false;
+        std::string adoptedClip;
+        bool ended = false;
+        std::string endReason;
+    };
+    // The answer to a stop (design 6.2).
+    struct StopOutcome {
+        bool inTake = false;      // cam1 was in the take
+        bool sent = false;        // the line is queued for cam1 (the link is up)
+        bool pending = false;     // the link is down: kept as a pending stop for the relink
+        bool written = false;     // the relay wrote the line to the socket within the wait
+        std::shared_ptr<Reply> reply;   // cam1's answer to the stop
+    };
 
     // Lock-free reads for the command thread's fast path.
     bool configured() const { return configured_.load(std::memory_order_acquire); }
@@ -131,15 +156,59 @@ public:
     void setMessage(const std::string &message);
     void setRefused(bool refused, const std::string &message);
 
+    // ---- the take with cam1 (design 4.3, 4.6, 6.2) --------------------------------------------------------------------
+    // All of these run on the command thread. The relay thread reads the same state under mutex_ and applies the relink
+    // rules at every poll. None of them waits on the relay except stopTake(), bounded by its argument.
+    //
+    // True while cam1 is in the primary's running take, or reports a take of its own that no rule has dealt with yet:
+    // `cam1RecordingActive()` (P7). Lock-free.
+    bool recordingNow() const { return recordingNow_.load(std::memory_order_acquire); }
+    // Publishes the take with cam1 in it (the clip_name sent cam1, verbatim), before the press reads the pending count
+    // and before the relay sends the record_start (design 4.1 Locks). startUs/stopUs are the boundaries sent to cam1 (its
+    // own grid); pickedMs is the steady-clock ms of the slot pick, for L_cam1.
+    void publishTake(const std::string &clipName, bool cam1Only, int64_t startUs, int64_t pickedMs);
+    // A take that has no cam1 in it has started: this process has had a take (design 4.6 rule 3).
+    void noteTake();
+    // Queues the take's record_start behind any setter. Not counted as pending. Null when there is no link.
+    std::shared_ptr<Reply> sendStart(const std::map<std::string, std::string> &fields);
+    // Stops cam1's side of the take on `stopUs` (design 6.2): the line goes ahead of the FIFO, and the call waits up to
+    // `waitMs` until the relay has written it. With the link down the stop is kept as a pending stop and the take state
+    // ends at once. Also ends a `refused`/`lost` hold of the take.
+    StopOutcome stopTake(int64_t stopUs, int waitMs);
+    // A start that got no answer, or cam0 failing to start after cam1 was told: cam1 is sent record_stop with `stopUs`
+    // (the take's start_us, so a late start stops at once) and the take is remembered as stopped.
+    void abandonTake(int64_t stopUs);
+    // Nothing went to cam1: the published take is withdrawn (a refusal after the publish).
+    void withdrawTake();
+    // A take without cam1 in it, or any take, ended: the `refused` hold and a settled `lost` end with it.
+    void takeFinished();
+    TakeEvents takeEvents();
+    // The clip_name of the running take cam1 is in, "" when none.
+    std::string takeClip() const;
+
 private:
+    enum class Kind { Setter, Start, Stop };
+
     struct Forward {
         int id = 0;
+        Kind kind = Kind::Setter;           // Start and Stop are the take's own lines: not counted as pending
+        std::string clip;                   // Stop: the take it ends
         std::string name;
         std::map<std::string, std::string> fields;
         Origin origin = Origin::Forward;
         int step = 0;                       // a resync step: 1 ladder, 2 preset, 3 Clear HDR, 11 the ladder again
         double fpsSent = 0;                 // for the clamp rule
         std::shared_ptr<Reply> reply;       // someone waits for it
+        std::shared_ptr<Reply> written;     // Stop: the caller waits until the line is on the socket
+    };
+
+    // A take the primary has stopped, with the stop cam1 owes (design 4.6, "What the primary remembers").
+    struct Stopped {
+        std::string clip;
+        int64_t startUs = 0;
+        int64_t stopUs = 0;
+        int64_t sentMonoUs = 0;             // when the stop was sent; 0 = not sent yet (a pending stop)
+        bool reported = false;              // "CAM1 stopped N frames late" has been judged
     };
 
     void run();
@@ -164,6 +233,14 @@ private:
     void serviceResync();
     void compareWith(const resync::PrimaryView &view, int64_t sentMs);
     void updateRefusedLocked();
+    void refreshRecordingLocked();
+    bool enqueueTakeLineLocked(Kind kind, const std::string &name, const std::map<std::string, std::string> &fields, bool front,
+                               const std::string &clip, std::shared_ptr<Reply> reply, std::shared_ptr<Reply> written);
+    struct TakePoll;
+    void applyTakeRulesLocked(const TakePoll &poll);
+    void endTakeLocked(bool lost, const std::string &reason);
+    Stopped *findStoppedLocked(const std::string &clip);
+    void signalTakeChange();
     void failReplies();
     void measureSkew();
 
@@ -194,6 +271,8 @@ private:
     std::atomic<bool> configured_{false};
     std::atomic<bool> unknown_{false};
     std::atomic<bool> linked_{false};
+    std::atomic<bool> recordingNow_{false};
+    std::atomic<bool> takeChangeOwed_{false};
 
     mutable std::mutex mutex_;
     std::condition_variable idleCv_;
@@ -210,6 +289,24 @@ private:
     std::map<std::string, std::string> step1Fields_;
     std::deque<Forward> reads_;     // relayed reads waiting to be sent
     std::map<int, std::shared_ptr<Reply>> readsInFlight_;
+
+    // The take with cam1, under mutex_ (design 4.6). The primary's take state for cam1 is `takeIn_`; `observedRecording_`
+    // is what cam1 itself reports. `state_.recording` is their OR.
+    std::string takeClip_;
+    bool takeIn_ = false;
+    bool takeCam1Only_ = false;
+    bool takeConfirmed_ = false;            // cam1 answered the record_start ok
+    int64_t takeConfirmedMs_ = 0;
+    int64_t takeStartUs_ = 0;
+    int64_t takePickedMs_ = 0;
+    bool startJudged_ = false;              // "CAM1 started N frames late" has been judged for this take
+    bool stopSent_ = false;
+    bool hadTake_ = false;                  // this process has had a take since it started
+    bool observedRecording_ = false;
+    bool relinkPoll_ = false;               // the next get_state is the first after a (re)link (relay thread)
+    int64_t orphanSentMs_ = 0;
+    std::deque<Stopped> stopped_;
+    TakeEvents events_;
 };
 
 } // namespace apertar
