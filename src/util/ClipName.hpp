@@ -284,6 +284,43 @@ inline Parsed parse(const std::string &tmpl)
     return r;
 }
 
+// ---- Two sensors (dual-sensor design §6.2) ----------------------------------------------------------------------
+// With cam1 configured every clip name holds {cam}. A template without it gets "_{cam}" appended when the names are
+// built; the stored template is never rewritten.
+inline constexpr const char *kTwoCameraNameTooLong = "Clip name too long for two cameras. Shorten the clip name.";
+inline constexpr const char *kInvalidClipName = "clip_name is not a valid clip name.";
+
+inline std::string ensureCamToken(const std::string &tmpl)
+{
+    if (tmpl.find("{cam}") != std::string::npos)
+        return tmpl;
+    return tmpl + "_{cam}";
+}
+
+// parse() of the template as the two-camera names use it. When only the length fails the error is the fixed
+// two-camera text, so every path (take, set_clip_name_template, apply_preset, preview_clip_name) refuses alike.
+// Other errors (a bad character, an unknown token) keep parse()'s text. Parsed::normalized is the template with
+// the token, so callers that need the STORED template keep their own string.
+inline Parsed parseForTwoCameras(const std::string &tmpl)
+{
+    Parsed parsed = parse(ensureCamToken(tmpl));
+    if (!parsed.ok && parsed.error.rfind("The template can make names of", 0) == 0)
+        parsed.error = kTwoCameraNameTooLong;
+    return parsed;
+}
+
+// A verbatim clip_name (sent by the primary to cam1, or hand-made): every character passes isNameChar, 1 to
+// kMaxNameChars characters, no leading or trailing separator. cam1 never runs it through parse().
+inline bool validVerbatimName(const std::string &name)
+{
+    if (name.empty() || name.size() > kMaxNameChars)
+        return false;
+    for (char c : name)
+        if (!isNameChar(c))
+            return false;
+    return !isSeparator(name.front()) && !isSeparator(name.back());
+}
+
 // Tokens whose value changes from one take to the next on the same day.
 inline bool isTimeToken(const std::string &name)
 {
