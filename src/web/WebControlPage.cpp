@@ -6219,7 +6219,6 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head wrap-head">
                 <div>
                   <h3 class="settings-card-title">Dual Sensor</h3>
-                  <p class="settings-card-copy">CAM0 is the main camera: CAM1 follows its controls where they are tied, and records with it as set below.</p>
                   <p class="settings-card-copy" id="dualSensorNote"></p>
                 </div>
                 <div class="switch-field">
