@@ -62,10 +62,6 @@ inline int64_t slotTimeUs(int64_t slot, const Rate &rate)
     return static_cast<int64_t>(q);
 }
 
-// The slot a take with this start_us should open on, and the one a take with this stop_us should end on.
-inline int64_t expectedFirstSlot(int64_t startUs, const Rate &rate) { return slotOfUs(startUs, rate, true); }
-inline int64_t expectedLastSlot(int64_t stopUs, const Rate &rate) { return slotOfUs(stopUs, rate, true) - 1; }
-
 // The mid-slot boundary before slot k: (k - 1/2) * T, in microseconds, rounded to the nearest.
 inline int64_t boundaryUs(int64_t slot, const Rate &rate)
 {
@@ -100,6 +96,12 @@ inline int64_t ceilSlotUs(int64_t timeUs, const Rate &rate)
         ++q;
     return static_cast<int64_t>(q);
 }
+
+// The slot a take with this start_us should open on, ceil(start_us / T), and the one a take with this stop_us should end
+// on, ceil(stop_us / T) - 1 (design 6.2). Not the nearest slot: a boundary at a fractional period (26 fps: T = 38461.5 us)
+// is rounded to a whole us and can sit a hair below the half, which "nearest" reads as the slot before.
+inline int64_t expectedFirstSlot(int64_t startUs, const Rate &rate) { return ceilSlotUs(startUs, rate); }
+inline int64_t expectedLastSlot(int64_t stopUs, const Rate &rate) { return ceilSlotUs(stopUs, rate) - 1; }
 
 // Step 1 of a take (design 6.2): k0 = ceil((now + lead) / T), start_us = (k0 - 1/2) * T. The primary's pick; T64
 // sends it to cam1 as well.
