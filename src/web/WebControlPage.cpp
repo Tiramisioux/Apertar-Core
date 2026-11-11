@@ -603,6 +603,14 @@ std::string_view webControlPageHtml()
       display: none;
     }
 
+    .dual-tied .select-topline > .dual-shared-note {
+      display: inline;
+      margin: 0 0 0 auto;
+      font-size: 12px;
+      font-style: italic;
+      color: #e4e4e7;
+    }
+
     .dual-tied > .dual-shared-note {
       display: block;
       font-size: 12px;
@@ -722,6 +730,84 @@ std::string_view webControlPageHtml()
     .preview-stage.dual.view-pip0 .pane-tc.p1,
     .preview-stage.dual.view-pip1 .pane-tc.p0 { font-size: 11px; padding: 1px 6px; }
     .preview-stage.dual.photo .pane-tc { display: none; }
+
+    /* Both views: a REC button on each pane. While the take (or the next one) is both cameras, the two are linked: one
+       press starts or stops both, and a LINKED tag joins them; otherwise each records its own camera. The card's
+       shared REC button steps aside in these views. */
+    .pane-rec-button,
+    .pane-link {
+      display: none;
+    }
+
+    .preview-stage.dual.view-both .pane-rec-button,
+    .preview-stage.dual.view-bothleft .pane-rec-button {
+      display: flex;
+      position: absolute;
+      z-index: 6;
+      width: 46px;
+      height: 46px;
+      transform: translate(-100%, -100%);
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 3px solid #ef4444;
+      background: rgba(0, 0, 0, 0.55);
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .preview-stage.dual .pane-rec-button.p0 { left: calc(var(--p0-l) + var(--p0-w) - 10px); top: calc(var(--p0-t) + var(--p0-h) - 10px); }
+    .preview-stage.dual .pane-rec-button.p1 { left: calc(var(--p1-l) + var(--p1-w) - 10px); top: calc(var(--p1-t) + var(--p1-h) - 10px); }
+
+    .pane-rec-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: #ef4444;
+    }
+
+    .pane-rec-button.recording { background: #ef4444; border-color: #fca5a5; }
+    .pane-rec-button.recording .pane-rec-icon { border-radius: 4px; background: #ffffff; width: 16px; height: 16px; }
+    .pane-rec-button:disabled { filter: grayscale(1); opacity: 0.4; cursor: not-allowed; }
+    .pane-rec-button:active:not(:disabled) { transform: translate(-100%, -100%) scale(0.94); }
+
+    .preview-stage.dual.view-both.linked .pane-link,
+    .preview-stage.dual.view-bothleft.linked .pane-link {
+      display: block;
+      position: absolute;
+      z-index: 6;
+      left: 50%;
+      top: calc(var(--p0-t) + var(--p0-h) - 80px);
+      transform: translate(-50%, -50%);
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(239, 68, 68, 0.7);
+      background: rgba(0, 0, 0, 0.75);
+      color: #fca5a5;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      pointer-events: none;
+    }
+
+    .preview-stage.dual.view-both.linked .pane-rec-button,
+    .preview-stage.dual.view-bothleft.linked .pane-rec-button {
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+    }
+
+    .preview-card:has(.preview-stage.dual.view-both) #recordButton,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #recordButton,
+    .preview-card:has(.preview-stage.dual.view-both) #recordLabel,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #recordLabel {
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both.linked .pane-link,
+      .preview-stage.dual.view-bothleft.linked .pane-link {
+        top: 50%;
+      }
+    }
 
     .preview-stage.dual.view-cam0 .pane-frame.p1, .preview-stage.dual.view-cam0 .pane-rec.p1,
     .preview-stage.dual.view-cam0 .pane-tc.p1,
@@ -5053,6 +5139,9 @@ std::string_view webControlPageHtml()
             <span class="pane-rec p1" id="paneRec1">REC</span>
             <span class="pane-tc p0" id="paneTc0">00:00:00:00</span>
             <span class="pane-tc p1" id="paneTc1">00:00:00:00</span>
+            <button class="pane-rec-button p0" id="paneRecButton0" type="button" data-cam="cam0" aria-label="Record CAM0"><span class="pane-rec-icon"></span></button>
+            <button class="pane-rec-button p1" id="paneRecButton1" type="button" data-cam="cam1" aria-label="Record CAM1"><span class="pane-rec-icon"></span></button>
+            <span class="pane-link" id="paneLink">LINKED</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -14908,6 +14997,45 @@ std::string_view webControlPageHtml()
       const rec1 = recording && (cameras === "cam1" || cameras === "both");
       stage.classList.toggle("rec0", rec0);
       stage.classList.toggle("rec1", rec1);
+      renderPaneRecButtons(base, rec0, rec1);
+    }
+
+    // The two pane REC buttons (Both views). Linked while the running take is both cameras, or, idle, while the next
+    // take would be (NEXT TAKE, else Core's record_cameras): then each press is the card's REC. Unlinked, a press records
+    // that pane's camera alone; during a take the other camera's button is greyed (a take's cameras are fixed).
+    const paneRec = { cameras: "" };
+    function paneRecLinked(base) {
+      if (base.recording)
+        return base.record_cameras === "both";
+      if (nextTake.value !== "Auto")
+        return nextTake.value === "both";
+      return base.record_cameras === "both";
+    }
+
+    function renderPaneRecButtons(base, rec0, rec1) {
+      const stage = document.getElementById("previewStage");
+      const recordButton = document.getElementById("recordButton");
+      const linked = paneRecLinked(base);
+      stage.classList.toggle("linked", linked);
+      const shared = recordButton ? recordButton.disabled : false;
+      [["paneRecButton0", rec0], ["paneRecButton1", rec1]].forEach(([id, inTake]) => {
+        const button = document.getElementById(id);
+        if (!button)
+          return;
+        const recordingNow = !!base.recording;
+        button.classList.toggle("recording", linked ? recordingNow : inTake);
+        button.disabled = shared || (recordingNow && !linked && !inTake);
+        button.setAttribute("aria-label", (inTake || (linked && recordingNow) ? "Stop " : "Record ")
+          + (linked ? "both cameras" : (button.dataset.cam === "cam1" ? "CAM1" : "CAM0")));
+      });
+    }
+
+    function paneRecPress(cam) {
+      const base = dualBaseSnapshot(state.snapshot);
+      if (!base || !dualActive(base))
+        return;
+      paneRec.cameras = !base.recording && !paneRecLinked(base) ? cam : "";
+      toggleRecord().finally(() => { paneRec.cameras = ""; });
     }
 
     function renderDualViewRow(active) {
@@ -16609,6 +16737,7 @@ std::string_view webControlPageHtml()
         dualLayoutClasses(base, columns);
         if (columns)
           renderCam1Column(base);   // CAM1's column first; this pass then draws the page's own values over everything else
+        scheduleDualColumnAlign(columns);
       }
       // /api/state carries the write-buffer, storage pre-roll, split and merge fields under "system"; the page reads them at the top level.
       const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
@@ -20864,6 +20993,9 @@ std::string_view webControlPageHtml()
           // NEXT TAKE: this press names its cameras (never in Sound Recorder mode, which Core refuses it in).
           if (!soundRecorderEnabled && nextTake.value !== "Auto" && dualActive(dualBaseSnapshot(state.snapshot)))
             payload.cameras = nextTake.value;
+          // An unlinked pane REC button records its own camera.
+          if (!soundRecorderEnabled && paneRec.cameras)
+            payload.cameras = paneRec.cameras;
 
           await sendCommand(payload);
           showToast(soundRecorderEnabled ? "Sound recording started." : "Recording started.", false);
@@ -21912,6 +22044,32 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // Two settings columns: each CAM0 section and its CAM1 twin get the taller one's height, so Frame rate, ISO,
+    // Shutter, Resolution, Crop mode and White balance start on one line across the columns. Stacked (narrow), none.
+    let dualAlignFrame = 0;
+    function scheduleDualColumnAlign(columns) {
+      if (dualAlignFrame)
+        return;
+      dualAlignFrame = window.requestAnimationFrame(() => {
+        dualAlignFrame = 0;
+        const stack = document.getElementById("cameraStack");
+        const clone = cam1Column.el;
+        const left = stack ? Array.from(stack.querySelectorAll(":scope > section")) : [];
+        const right = clone ? Array.from(clone.querySelectorAll(":scope > section")) : [];
+        left.concat(right).forEach((section) => { section.style.minHeight = ""; });
+        if (!columns || !clone || left.length !== right.length)
+          return;
+        const sideBySide = stack.getBoundingClientRect().top === clone.getBoundingClientRect().top;
+        if (!sideBySide)
+          return;
+        const heights = left.map((section, i) => Math.max(section.offsetHeight, right[i].offsetHeight));
+        left.forEach((section, i) => {
+          section.style.minHeight = heights[i] + "px";
+          right[i].style.minHeight = heights[i] + "px";
+        });
+      });
+    }
+
     function renderCam1Column(base) {
       ensureCam1Column();
       swapCam1Ids(true);
@@ -22106,10 +22264,16 @@ std::string_view webControlPageHtml()
         }
         element.classList.toggle("dual-tied", note !== "");
         element.inert = note !== "";
-        let noteElement = element.querySelector(":scope > .dual-shared-note");
+        // In the section's heading line where there is one, so a shared section keeps its height and the columns line up.
+        const topline = element.querySelector(":scope > .select-topline");
+        let noteElement = topline ? topline.querySelector(":scope > .dual-shared-note")
+                                  : element.querySelector(":scope > .dual-shared-note");
         if (note !== "" && !noteElement) {
           noteElement = createDomElement("span", "dual-shared-note");
-          element.insertBefore(noteElement, element.firstChild);
+          if (topline)
+            topline.appendChild(noteElement);
+          else
+            element.insertBefore(noteElement, element.firstChild);
         }
         if (noteElement)
           noteElement.textContent = note;
@@ -22724,6 +22888,11 @@ std::string_view webControlPageHtml()
       arrangeSettingsPanels();
 
       document.getElementById("recordButton").addEventListener("click", toggleRecord);
+      ["paneRecButton0", "paneRecButton1"].forEach((id) => {
+        const button = document.getElementById(id);
+        if (button)
+          button.addEventListener("click", () => paneRecPress(button.dataset.cam));
+      });
       document.getElementById("settingsButton").addEventListener("click", () => setSettingsOpen(true));
       document.getElementById("mediaBrowserButton").addEventListener("click", () => setMediaBrowserOpen(true));
       document.getElementById("pbBackButton").addEventListener("click", pbBack);
