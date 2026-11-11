@@ -494,10 +494,67 @@ std::string_view webControlPageHtml()
       object-fit: contain;
     }
 
-    .preview-stage.dual.view-cam1 .preview-stream:not(.preview-stream-cam1),
-    .preview-stage.dual.view-cam1 .preview-processed-canvas,
-    .preview-stage.dual.view-cam0 .preview-stream-cam1 {
+    .preview-stage.dual.view-cam1:not(.under) .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam1:not(.under) .preview-processed-canvas,
+    .preview-stage.dual.view-cam0:not(.under) .preview-stream-cam1 {
       display: none !important;
+    }
+
+    /* Wipe and stack (design v2.5 A5): in a single-camera view the other camera lies underneath, both full frame. The
+       top one is cut away over the first --wipe of the frame, or, stacked, shown at --opacity. */
+    .preview-stage.dual.view-cam0.under { --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%; }
+    .preview-stage.dual.view-cam1.under { --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%; }
+    .preview-stage.dual.view-cam0.under .preview-stream-cam1,
+    .preview-stage.dual.view-cam1.under .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam1.under .preview-processed-canvas { z-index: 0; }
+    .preview-stage.dual.view-cam0.under .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under .preview-stream-cam1 { z-index: 1; clip-path: inset(0 0 0 var(--wipe, 0%)); }
+    .preview-stage.dual.view-cam0.under.wipe-v .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.wipe-v .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.wipe-v .preview-stream-cam1 { clip-path: inset(var(--wipe, 0%) 0 0 0); }
+    .preview-stage.dual.view-cam0.under.stacked .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.stacked .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.stacked .preview-stream-cam1 { clip-path: none; }
+    .preview-stage.dual.view-cam0.under.stacked .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.stacked .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.stacked .preview-stream-cam1 { opacity: var(--opacity, 0.5); }
+
+    .wipe-line, .wipe-under { display: none; }
+    .preview-stage.dual.under.wipe-edge .wipe-line {
+      display: block;
+      position: absolute;
+      z-index: 2;
+      background: #ffffff;
+      pointer-events: none;
+      left: var(--wipe); top: 0; bottom: 0; width: 2px; margin-left: -1px;
+    }
+    .preview-stage.dual.under.wipe-edge.wipe-v .wipe-line {
+      left: 0; right: 0; width: auto; top: var(--wipe); bottom: auto; height: 2px; margin-left: 0; margin-top: -1px;
+    }
+    .preview-stage.dual.under .wipe-under {
+      display: block;
+      position: absolute;
+      z-index: 3;
+      left: 8px;
+      top: 46px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #f4f4f5;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+
+    .wipe-row .wipe-ctl { display: flex; align-items: center; gap: 8px; }
+    .wipe-row .wipe-ctl .slider { width: 140px; }
+    .wipe-row .wipe-ctl .wipe-value { min-width: 38px; font-size: 13px; color: #e4e4e7; }
+    .wipe-row .wipe-ctl[hidden] { display: none; }
+    @media (max-width: 700px) {
+      .wipe-row .wipe-ctl .slider { width: 110px; }
+      .preview-stage.dual .wipe-under { top: 74px; }
     }
 
     .preview-stage.dual.view-pip0 .preview-stream-cam1,
@@ -5142,6 +5199,8 @@ std::string_view webControlPageHtml()
             <button class="pane-rec-button p0" id="paneRecButton0" type="button" data-cam="cam0" aria-label="Record CAM0"><span class="pane-rec-icon"></span></button>
             <button class="pane-rec-button p1" id="paneRecButton1" type="button" data-cam="cam1" aria-label="Record CAM1"><span class="pane-rec-icon"></span></button>
             <span class="pane-link" id="paneLink">LINKED</span>
+            <span class="wipe-line" id="wipeLine"></span>
+            <span class="wipe-under" id="wipeUnder">UNDER: CAM1</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -5219,6 +5278,15 @@ std::string_view webControlPageHtml()
           <div class="dual-view-row" id="dualViewRow" hidden>
             <div class="dual-view-pills" id="dualViewOptions" style="display:contents"></div>
             <button class="pill-button dual-view-swap" id="dualViewSwap" type="button" title="Swap the two pictures in this page only">Swap</button>
+          </div>
+          <!-- Cam 0 / Cam 1 view: wipe or stack the other camera underneath (design v2.5 A5); sent as set_preview_source, so the HDMI follows. -->
+          <div class="dual-view-row wipe-row" id="wipeRow" hidden>
+            <div class="wipe-ctl"><span class="dual-settings-for-label">Wipe</span>
+              <input class="slider" id="wipeRange" type="range" min="0" max="100" step="1" value="0" aria-label="Wipe"><span class="wipe-value" id="wipeValue">0%</span></div>
+            <div class="wipe-ctl" id="wipeDirGroup"><span class="dual-settings-for-label">Direction</span><div id="wipeDirOptions" style="display:contents"></div></div>
+            <div class="wipe-ctl"><span class="dual-settings-for-label">Stack</span><div id="wipeStackOptions" style="display:contents"></div></div>
+            <div class="wipe-ctl" id="wipeOpacityGroup" hidden><span class="dual-settings-for-label">Opacity</span>
+              <input class="slider" id="opacityRange" type="range" min="0" max="100" step="1" value="50" aria-label="Opacity"><span class="wipe-value" id="opacityValue">50%</span></div>
           </div>
           <!-- NEXT TAKE: what this page's REC press records; reset after the stop. Hidden in Sound Recorder mode. -->
           <div class="dual-view-row" id="nextTakeRow" hidden>
@@ -15091,6 +15159,109 @@ std::string_view webControlPageHtml()
       cam1Preview.on = true;
     }
 
+    // Wipe and stack: this page shows the rig's previewWipe / previewStack / previewOpacity / previewWipeDirection in its own
+    // Cam 0 / Cam 1 view. Local changes apply at once; the snapshot is followed again once the sends have settled.
+    const wipeUi = { wipe: 0, stack: false, opacity: 50, dir: "horizontal", dual: false, dragging: false, timer: 0, holdUntil: 0, pending: {} };
+
+    function wipeSingleView() {
+      return wipeUi.dual && (dualView.label === "Cam 0" || dualView.label === "Cam 1");
+    }
+
+    function wipeUnderActive() {
+      return wipeSingleView() && (wipeUi.wipe > 0 || wipeUi.stack);
+    }
+
+    function wipeFollow(snapshot) {
+      if (wipeUi.dragging || wipeUi.timer || performance.now() < wipeUi.holdUntil)
+        return;
+      const ui = snapshot && snapshot.ui && typeof snapshot.ui === "object" ? snapshot.ui : {};
+      if (typeof ui.preview_wipe === "number")
+        wipeUi.wipe = Math.max(0, Math.min(100, ui.preview_wipe));
+      if (typeof ui.preview_stack === "boolean")
+        wipeUi.stack = ui.preview_stack;
+      if (typeof ui.preview_opacity === "number")
+        wipeUi.opacity = Math.max(0, Math.min(100, ui.preview_opacity));
+      if (ui.preview_wipe_direction === "horizontal" || ui.preview_wipe_direction === "vertical")
+        wipeUi.dir = ui.preview_wipe_direction;
+    }
+
+    function wipeSend(fields) {
+      Object.assign(wipeUi.pending, fields);
+      clearTimeout(wipeUi.timer);
+      wipeUi.timer = window.setTimeout(async () => {
+        const body = Object.assign({ cmd: "set_preview_source" }, wipeUi.pending);
+        wipeUi.pending = {};
+        wipeUi.timer = 0;
+        wipeUi.holdUntil = performance.now() + 1500;
+        try {
+          await sendCommand(body);
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 120);
+    }
+
+    function wipeSet(fields) {
+      const sent = {};
+      if ("wipe" in fields) { wipeUi.wipe = fields.wipe; sent.wipe = fields.wipe; }
+      if ("opacity" in fields) { wipeUi.opacity = fields.opacity; sent.opacity = fields.opacity; }
+      if ("dir" in fields) { wipeUi.dir = fields.dir; sent.wipe_direction = fields.dir; }
+      if ("stack" in fields) { wipeUi.stack = fields.stack; sent.stack = fields.stack ? "true" : "false"; }
+      wipeSend(sent);
+      wipeRender();
+      if (state.snapshot)
+        updateDualPreview(dualBaseSnapshot(state.snapshot));
+    }
+
+    function wipeRender() {
+      const stage = document.getElementById("previewStage");
+      const row = document.getElementById("wipeRow");
+      if (!stage || !row)
+        return;
+      const single = wipeSingleView();
+      const under = wipeUnderActive();
+      stage.classList.toggle("under", under);
+      stage.classList.toggle("stacked", under && wipeUi.stack);
+      stage.classList.toggle("wipe-v", wipeUi.dir === "vertical");
+      stage.classList.toggle("wipe-edge", under && !wipeUi.stack && wipeUi.wipe > 0 && wipeUi.wipe < 100);
+      stage.style.setProperty("--wipe", wipeUi.wipe + "%");
+      stage.style.setProperty("--opacity", String(wipeUi.opacity / 100));
+      const topIsCam1 = dualEffectiveView() === "Cam 1";
+      document.getElementById("wipeUnder").textContent = "UNDER: " + (topIsCam1 ? "CAM0" : "CAM1");
+      row.hidden = !single;
+      if (!single)
+        return;
+      const setRange = (id, valueId, value) => {
+        const range = document.getElementById(id);
+        if (!wipeUi.dragging || document.activeElement !== range)
+          range.value = String(value);
+        document.getElementById(valueId).textContent = value + "%";
+      };
+      setRange("wipeRange", "wipeValue", wipeUi.wipe);
+      setRange("opacityRange", "opacityValue", wipeUi.opacity);
+      document.getElementById("wipeDirGroup").hidden = wipeUi.stack;
+      document.getElementById("wipeOpacityGroup").hidden = !wipeUi.stack;
+      const key = wipeUi.dir + "|" + wipeUi.stack;
+      if (row.dataset.built !== key) {
+        row.dataset.built = key;
+        buildOptionButtonsInto(document.getElementById("wipeDirOptions"),
+          [{ value: "horizontal", label: "Horizontal", enabled: true }, { value: "vertical", label: "Vertical", enabled: true }],
+          wipeUi.dir, (value) => wipeSet({ dir: value }));
+        buildOptionButtonsInto(document.getElementById("wipeStackOptions"),
+          [{ value: "false", label: "Off", enabled: true }, { value: "true", label: "On", enabled: true }],
+          String(wipeUi.stack), (value) => wipeSet({ stack: value === "true" }));
+      }
+    }
+
+    (function wireWipeRanges() {
+      [["wipeRange", "wipe"], ["opacityRange", "opacity"]].forEach(([id, field]) => {
+        const range = document.getElementById(id);
+        range.addEventListener("pointerdown", () => { wipeUi.dragging = true; });
+        ["pointerup", "pointercancel", "blur", "change"].forEach((type) => range.addEventListener(type, () => { wipeUi.dragging = false; }));
+        range.addEventListener("input", () => wipeSet({ [field]: Number(range.value) }));
+      });
+    })();
+
     function updateDualPreview(snapshot) {
       const stage = document.getElementById("previewStage");
       const img = document.getElementById("previewStream1");
@@ -15123,7 +15294,10 @@ std::string_view webControlPageHtml()
       stage.classList.toggle("dual", dual);
       Object.keys(dualViewClass).forEach((label) => stage.classList.toggle("view-" + dualViewClass[label], dual && label === view));
       renderDualViewRow(dual);
-      const wanted = dual && !state.previewPausedForPlayback && dualViewShowsCam1(dualView.label);
+      wipeUi.dual = dual;
+      wipeFollow(snapshot);
+      wipeRender();
+      const wanted = dual && !state.previewPausedForPlayback && (dualViewShowsCam1(dualView.label) || wipeUnderActive());
       if (wanted && !cam1Preview.on)
         startCam1Preview();
       else if (!wanted && cam1Preview.on)
