@@ -278,6 +278,67 @@ std::string_view webControlPageHtml()
       display: none;
     }
 
+    .cam1-badge {
+      display: inline-flex;
+      align-items: center;
+      align-self: stretch;
+      box-sizing: border-box;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      background: rgba(24, 24, 27, 0.9);
+      color: #f4f4f5;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .cam1-badge[hidden] {
+      display: none;
+    }
+
+    .cam1-badge.warn {
+      border-color: rgba(170, 121, 55, 0.75);
+      color: #ffd27a;
+    }
+
+    .cam1-badge.rec {
+      border-color: rgba(255, 77, 77, 0.8);
+      color: #ff8a8a;
+    }
+
+    .record-label {
+      margin-left: auto;
+      align-self: flex-end;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 6px 12px;
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #f4f4f5;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+    }
+
+    .record-label[hidden] {
+      display: none;
+    }
+
+    .record-label-second {
+      font-size: 11px;
+      font-weight: 600;
+      color: #d4d4d8;
+    }
+
+    .record-label.system-value,
+    .record-label.system-value .record-label-second,
+    .dual-found-note.system-value {
+      font-style: italic;
+    }
+
     .icon-button {
       width: 44px;
       height: 44px;
@@ -2017,6 +2078,11 @@ std::string_view webControlPageHtml()
       width: 74px;
       font-size: 12px;
       color: var(--muted);
+    }
+
+    .clip-pill.required {
+      opacity: 0.7;
+      border-style: dashed;
     }
 
     .settings-card.locked .clip-pill {
@@ -4918,6 +4984,7 @@ std::string_view webControlPageHtml()
             <span id="recordingStatus">READY</span>
           </div>
           <span class="drop-badge" id="droppedFrameBadge" role="status" hidden></span>
+          <span class="cam1-badge" id="cam1Badge" role="status" hidden></span>
         </div>
         <button class="icon-button" id="mediaBrowserButton" aria-label="Open clip browser">
           <img class="icon-image" src="/icons/folder.png" alt="">
@@ -5013,6 +5080,7 @@ std::string_view webControlPageHtml()
                 </div>
               </div>
 
+              <div class="record-label" id="recordLabel" hidden><span id="recordLabelMain"></span><span class="record-label-second" id="recordLabelSecond"></span></div>
               <button class="record-button" id="recordButton" aria-label="Toggle record">
                 <div class="record-icon-dot" id="recordIcon"></div>
               </button>
@@ -5022,6 +5090,11 @@ std::string_view webControlPageHtml()
           <div class="dual-view-row" id="dualViewRow" hidden>
             <div class="dual-view-pills" id="dualViewOptions" style="display:contents"></div>
             <button class="pill-button dual-view-swap" id="dualViewSwap" type="button" title="Swap the two pictures in this page only">Swap</button>
+          </div>
+          <!-- NEXT TAKE: what this page's REC press records; reset after the stop. Hidden in Sound Recorder mode. -->
+          <div class="dual-view-row" id="nextTakeRow" hidden>
+            <span class="dual-settings-for-label">Next take</span>
+            <div id="nextTakeOptions" style="display:contents"></div>
           </div>
         </div>
 
@@ -5503,6 +5576,7 @@ std::string_view webControlPageHtml()
               <div class="field-stack">
                 <span class="input-label">Name</span>
                 <div class="clip-row" id="clipNameRow"></div>
+                <span class="subtle-note hidden" id="clipNameCamNote">Two sensors: the camera name keeps their takes apart.</span>
               </div>
               <div class="field-stack">
                 <span class="input-label">Pills</span>
@@ -5799,6 +5873,10 @@ std::string_view webControlPageHtml()
                   <span class="capture-key">Preview source</span>
                   <span class="capture-value" id="settingsPreviewSourceValue">--</span>
                 </div>
+                <div class="capture-row" id="settingsHdmi0Row" hidden>
+                  <span class="capture-key">HDMI 0</span>
+                  <span class="capture-value" id="settingsHdmi0Value">--</span>
+                </div>
               </div>
               <div class="field-stack">
                 <span class="input-label">Recording frame</span>
@@ -5844,6 +5922,11 @@ std::string_view webControlPageHtml()
                 <div class="field-stack">
                   <span class="input-label">Outputs</span>
                   <span class="subtle-note" id="settingsHdmiOutputsNote">The preview goes out on both HDMI ports. With Dual sensor on, each port's view is set in System &gt; Dual Sensor.</span>
+                </div>
+                <div class="field-stack" id="hdmiCam1Row" hidden>
+                  <span class="input-label">CAM1</span>
+                  <span class="subtle-note" id="hdmiCam1Text"></span>
+                  <button class="secondary-button" id="hdmiSwapButton" type="button" title="Swap the cameras on the HDMI ports (HDMI 1 too, unless Off)">Swap CAM0 and CAM1</button>
                 </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
@@ -6529,6 +6612,7 @@ std::string_view webControlPageHtml()
                 </div>
                 <span class="subtle-note">On: CAM1 follows CAM0 in every control. Off: tie each control below; an untied one is set on CAM1.</span>
                 <div class="dual-ties" id="dualSensorTies"></div>
+                <span class="subtle-note system-value dual-found-note" id="dualSensorFoundNote" hidden></span>
               </section>
               <section class="select-block">
                 <div class="select-topline">
@@ -15734,7 +15818,9 @@ std::string_view webControlPageHtml()
       preview.appendChild(document.createTextNode("Next clip: "));
       const code = document.createElement("span");
       code.className = "clip-example";
-      code.textContent = clipUi.error ? "--" : (example || "--");
+      // With two sensors both names: ..._cam0 and ..._cam1.
+      const twoNames = clipDualActive() && example.indexOf("cam0") !== -1 ? example + " and " + example.replace(/cam0/g, "cam1") : example;
+      code.textContent = clipUi.error ? "--" : (twoNames || "--");
       preview.appendChild(code);
       saved.classList.toggle("hidden", !(clipUi.dirty && savedExample));
       saved.textContent = "Saved name: " + savedExample;
@@ -15869,6 +15955,8 @@ std::string_view webControlPageHtml()
         return;
       if (src.from === "palette") {
         const item = { t: src.item.t, v: src.item.v };
+        if (item.t === "tok" && item.v === "cam" && clipDualActive() && clipUi.items.some((other) => other.t === "tok" && other.v === "cam"))
+          return;
         clipUi.items.splice(at, 0, item);
         if (item.t === "txt") {
           clipUi.editing = at;
@@ -15882,8 +15970,25 @@ std::string_view webControlPageHtml()
       clipChanged();
     }
 
+    // With two sensors the Camera pill is required: it stays in the name (a drag out of the row puts it back), is
+    // appended at the end when the template lacks it, and can be moved anywhere.
+    function clipDualActive() {
+      return dualActive(dualBaseSnapshot(state.snapshot));
+    }
+
+    function clipEnsureCam(items) {
+      if (!clipDualActive() || items.some((item) => item.t === "tok" && item.v === "cam"))
+        return items;
+      if (items.length && items[items.length - 1].t !== "sep")
+        items.push({ t: "sep", v: "_" });
+      items.push({ t: "tok", v: "cam" });
+      return items;
+    }
+
     function clipRemove(index) {
       if (clipUi.recording || index < 0 || index >= clipUi.items.length)
+        return;
+      if (clipDualActive() && clipUi.items[index].t === "tok" && clipUi.items[index].v === "cam")
         return;
       clipUi.items.splice(index, 1);
       clipChanged();
@@ -15998,6 +16103,9 @@ std::string_view webControlPageHtml()
     function clipMakePill(item, index, inRow) {
       const element = document.createElement("span");
       element.className = "clip-pill " + (item.t === "tok" ? "token" : (item.t === "txt" ? "text" : "sep"));
+      const required = inRow && item.t === "tok" && item.v === "cam" && clipDualActive();
+      if (required)
+        element.classList.add("required");
       element.draggable = !clipUi.recording && !(inRow && clipUi.editing === index);
       if (item.t === "tok" && CLIP_TOKEN_INFO[item.v])
         element.title = "{" + item.v + "}  e.g. " + CLIP_TOKEN_INFO[item.v].sample;
@@ -16046,7 +16154,7 @@ std::string_view webControlPageHtml()
       label.textContent = clipPillLabel(item);
       element.appendChild(label);
       if (inRow) {
-        if (!clipUi.recording) {
+        if (!clipUi.recording && !required) {
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "clip-x";
@@ -16133,12 +16241,17 @@ std::string_view webControlPageHtml()
       clipBindRow();
       card.classList.toggle("locked", clipUi.recording);
       const current = clipSerialize(clipUi.items);
-      let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === current);
+      const dualNames = clipDualActive();
+      const camNote = document.getElementById("clipNameCamNote");
+      if (camNote)
+        camNote.classList.toggle("hidden", !dualNames);
+      // The presets match with a trailing _{cam} taken off while two sensors are in use.
+      let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === (dualNames ? current.replace(/_\{cam\}$/, "") : current));
       setText("settingsClipNamesValue", activeIndex >= 0 ? CLIP_PRESETS[activeIndex].label : "Custom");
       const options = CLIP_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, enabled: !clipUi.recording }));
       options.push({ value: "", label: "Custom", enabled: false });
       buildOptionButtons("clipNamePresets", options, activeIndex >= 0 ? CLIP_PRESETS[activeIndex].value : "", (value) => {
-        clipUi.items = clipParse(value);
+        clipUi.items = clipEnsureCam(clipParse(value));
         clipUi.editing = -1;
         clipChanged();
       }, 4);
@@ -16186,9 +16299,16 @@ std::string_view webControlPageHtml()
         return;
       }
       let rebuild = recordingChanged || clipUi.sig === "";
+      const dualNow = clipDualActive();
+      if (clipUi.dualSeen !== dualNow) {
+        clipUi.dualSeen = dualNow;
+        rebuild = true;
+        if (!clipUi.dirty)
+          clipUi.items = clipEnsureCam(clipParse(template));   // shown with the Camera pill; saved only when the user edits
+      }
       if (!clipUi.dirty && clipUi.savedTemplate !== template) {
         clipUi.savedTemplate = template;
-        clipUi.items = clipParse(template);
+        clipUi.items = clipEnsureCam(clipParse(template));
         rebuild = true;
       }
       if (rebuild) {
@@ -16603,6 +16723,8 @@ std::string_view webControlPageHtml()
       renderDualSettingsFor(snapshot);
       renderModesSwitch();
       renderPanes(dualBaseSnapshot(snapshot), snapshot);
+      renderCam1Badge(dualBaseSnapshot(snapshot));
+      renderRecordControls(dualBaseSnapshot(snapshot));
       applyDualTies(snapshot, columnPass);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
@@ -20682,6 +20804,9 @@ std::string_view webControlPageHtml()
             payload.audio_input_device = inputDevice;
           if (monitoringEnabled)
             payload.audio_output_device = outputDevice;
+          // NEXT TAKE: this press names its cameras (never in Sound Recorder mode, which Core refuses it in).
+          if (!soundRecorderEnabled && nextTake.value !== "Auto" && dualActive(dualBaseSnapshot(state.snapshot)))
+            payload.cameras = nextTake.value;
 
           await sendCommand(payload);
           showToast(soundRecorderEnabled ? "Sound recording started." : "Recording started.", false);
@@ -21748,6 +21873,121 @@ std::string_view webControlPageHtml()
       grid.classList.toggle("dual-cols", columns);
     }
 
+    // ---- CAM1 badge, the External monitor card's CAM1 row, NEXT TAKE and the REC label ------------------------
+    function cam1StatusText(cam1) {
+      const words = { ready: "READY", busy: "BUSY", writing: "WRITING", recording: "REC", lost: "LOST", refused: "REFUSED",
+        standby: "STANDBY", offline: "OFFLINE", not_found: "NOT FOUND" };
+      let text = "CAM1 · " + (words[cam1.state] || String(cam1.state || "").toUpperCase());
+      const drops = Number(cam1.recording_dropped_frames) || 0;
+      if (drops > 0)
+        text += " · " + drops + " DROPPED";
+      if (["ready", "busy", "writing", "recording"].includes(cam1.state)) {
+        text += cam1.locked === true ? " · SYNCED" : " · NOT SYNCED";
+        if (cam1.locked === true && typeof cam1.skew_us === "number")
+          text += " · " + Math.round(cam1.skew_us) + " µs";
+      }
+      return text;
+    }
+
+    function renderCam1Badge(base) {
+      const cam1 = dualActive(base) ? dualCam1(base) : null;
+      const badge = document.getElementById("cam1Badge");
+      if (badge) {
+        badge.hidden = !cam1;
+        if (cam1) {
+          badge.textContent = cam1StatusText(cam1);
+          badge.title = String(cam1.message || "");
+          badge.classList.toggle("warn", ["lost", "refused", "offline", "not_found", "standby"].includes(cam1.state) || !!cam1.message);
+          badge.classList.toggle("rec", cam1.state === "recording");
+        }
+      }
+      const row = document.getElementById("hdmiCam1Row");
+      if (row) {
+        row.hidden = !cam1;
+        if (cam1)
+          setText("hdmiCam1Text", cam1StatusText(cam1) + (cam1.message ? ". " + cam1.message : ""));
+      }
+      const hdmi0 = document.getElementById("settingsHdmi0Row");
+      if (hdmi0) {
+        hdmi0.hidden = !cam1;
+        if (cam1)
+          setText("settingsHdmi0Value", (base.ui && base.ui.preview_source) || "Both");
+      }
+    }
+
+    const nextTake = { value: "Auto", wasRecording: false };
+    const nextTakeOptions = [["Auto", "Auto"], ["cam0", "CAM0"], ["cam1", "CAM1"], ["both", "Both"]];
+
+    // What this page's REC press records, and what the camera's own button records (record_cameras, §6.1).
+    function recordLabelFor(base) {
+      const ui = base.ui || {};
+      const cam1 = dualCam1(base);
+      const down = !!cam1 && ["not_found", "offline", "refused", "lost", "standby"].includes(cam1.state);
+      const name = (value) => (value === "both" ? "BOTH" : (value === "cam1" ? "CAM1" : "CAM0"));
+      const next = typeof base.record_cameras === "string" && base.record_cameras !== "none" ? base.record_cameras : "both";
+      let main = next;
+      let system = false;
+      if (nextTake.value !== "Auto") {
+        main = nextTake.value;
+        if (down && main === "both") {
+          main = "cam0";
+          system = true;
+        }
+      } else {
+        const asked = { "Both": "both", "Cam 1": "cam1" }[ui.record_cameras];
+        system = !!asked && asked !== next;
+      }
+      return { main: "REC " + name(main), second: nextTake.value !== "Auto" ? "CAMERA BUTTON: REC " + name(next) : "", system };
+    }
+
+    function renderRecordControls(base) {
+      const active = dualActive(base);
+      const ui = base.ui || {};
+      const sound = !!ui.sound_recorder_enabled;
+      const recording = !!base.recording;
+      if (nextTake.wasRecording && !recording)
+        nextTake.value = "Auto";
+      nextTake.wasRecording = recording;
+      const row = document.getElementById("nextTakeRow");
+      if (row) {
+        row.hidden = !active || sound;
+        const key = nextTake.value;
+        if (!row.hidden && row.dataset.built !== key) {
+          row.dataset.built = key;
+          buildOptionButtonsInto(document.getElementById("nextTakeOptions"),
+            nextTakeOptions.map(([value, label]) => ({ value, label, enabled: !recording })), nextTake.value, (value) => {
+              nextTake.value = value;
+              if (state.snapshot)
+                renderRecordControls(dualBaseSnapshot(state.snapshot));
+            });
+        }
+        if (!row.hidden)
+          Array.from(document.getElementById("nextTakeOptions").children).forEach((button) => { button.disabled = recording; });
+      }
+      const label = document.getElementById("recordLabel");
+      if (!label)
+        return;
+      label.hidden = !active;
+      if (!active)
+        return;
+      if (recording) {
+        label.classList.remove("system-value");
+        setText("recordLabelMain", ui.sound_recorder_enabled ? "STOP" : "STOP");
+        setText("recordLabelSecond", "");
+        return;
+      }
+      if (sound) {
+        label.classList.remove("system-value");
+        setText("recordLabelMain", "REC SOUND");
+        setText("recordLabelSecond", "");
+        return;
+      }
+      const info = recordLabelFor(base);
+      label.classList.toggle("system-value", info.system);
+      setText("recordLabelMain", info.main);
+      setText("recordLabelSecond", info.second);
+    }
+
     function dualRoutePayload(payload) {
       const snapshot = state.snapshot;
       const routed = !!snapshot && (snapshot.dual_projected === true || performance.now() < cam1Column.routeUntil);
@@ -21843,14 +22083,29 @@ std::string_view webControlPageHtml()
       const cam1 = dualCam1(snapshot);
       // Found = the Core reports cam1 and a sensor answered; before that config.txt decides, as it does while cam1 is absent.
       const configured = cam1 ? cam1.state !== "not_found" : (!!ports && ports.cam1 !== "none" && ports.cam0 !== "none");
-      const differ = configured && !!ports && ports.cam0 !== ports.cam1;
+      const sensor1 = cam1 && cam1.sensor ? String(cam1.sensor).toLowerCase() : (ports ? ports.cam1 : "");
+      const differ = configured && !!ports && ports.cam0 !== sensor1;
       // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
       const switchedOn = uiState.dual_sensor_enabled === true;
-      setText("dualSensorNote", !ports ? "Reading config.txt..."
-        : !configured ? (ports.cam1 === "none" ? "One sensor configured. Set Camera 1 in Boot Config, then reboot."
+      setText("dualSensorNote", cam1 && cam1.state === "not_found" ? "Camera 1 is set in Boot Config, but no sensor answered."
+        : !ports && !cam1 ? "Reading config.txt..."
+        : !configured ? (ports.cam1 === "none" ? "One sensor found. Set Camera 1 in Boot Config, then reboot."
           : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
-        : "CAM0 (main): " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase()
+        : "CAM0 (main): " + (ports ? ports.cam0 : String(snapshot.capture && snapshot.capture.sensor || "").toLowerCase()).toUpperCase()
+          + " · CAM1: " + sensor1.toUpperCase()
           + (switchedOn ? "" : ". Dual sensor is off: CAM0 only."));
+      // The found note: cam1's sensor and mode, in italics (the system reports it), not a status copy.
+      const found = document.getElementById("dualSensorFoundNote");
+      if (found) {
+        const settings = cam1 && cam1.settings;
+        const showFound = !!cam1 && cam1.state !== "not_found" && !!cam1.sensor;
+        found.hidden = !showFound;
+        if (showFound) {
+          const bits = settings ? rawBitDepthNumber(settings.raw_bit_depth) : 0;
+          found.textContent = "CAM1: " + String(cam1.sensor).toUpperCase()
+            + (settings && Number(settings.width) > 0 ? " · " + settings.width + "×" + settings.height + (bits > 0 ? " " + bits + "-bit" : "") : "");
+        }
+      }
       card.classList.toggle("locked", !configured);
       card.classList.toggle("dual-off", configured && !switchedOn);
       buildOptionButtons("dualSensorEnabledOptions", dualOnOff(configured), switchedOn ? "On" : "Off", async (value) => {
@@ -21893,7 +22148,7 @@ std::string_view webControlPageHtml()
         }, 2);
         if (token === "resolution" && differ && tied.includes("resolution"))
           ties.appendChild(createDomElement("span", "subtle-note dual-tie-note", "The sensors differ ("
-            + ports.cam0.toUpperCase() + " · " + ports.cam1.toUpperCase() + "): CAM1 takes the closest matching resolution."));
+            + ports.cam0.toUpperCase() + " · " + sensor1.toUpperCase() + "): CAM1 takes the closest matching resolution."));
       });
 
       buildOptionButtons("dualSensorRecordOptions", dualRecordOptions.map((value) => ({
@@ -22546,6 +22801,13 @@ std::string_view webControlPageHtml()
       });
       document.getElementById("settingsHdmi1SourceSelect").addEventListener("change", () => {
         void applySelectCommand("settingsHdmi1SourceSelect", "set_hdmi1_source");
+      });
+      document.getElementById("hdmiSwapButton").addEventListener("click", async () => {
+        try {
+          await sendCommand({ cmd: "set_preview_source", swap: "true" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
       });
       document.getElementById("settingsPreviewSourceSelect").addEventListener("change", () => {
         void applySelectCommand("settingsPreviewSourceSelect", "set_preview_source");
