@@ -973,7 +973,8 @@ std::string_view webControlPageHtml()
       display: block;
     }
 
-    .preview-stage.processed-active .preview-stream {
+    /* The canvas draws cam0's processed picture over cam0's stream; CAM1's stream is not processed and stays shown. */
+    .preview-stage.processed-active .preview-stream:not(.preview-stream-cam1) {
       opacity: 0;
     }
 
