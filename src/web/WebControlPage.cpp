@@ -365,38 +365,82 @@ std::string_view webControlPageHtml()
       background: #000000;
     }
 
-    /* Dual sensor on: two panes of the stage's own shape in its middle half, CAM0 left, CAM1 right; the badges keep the
-       band above, the timecode and REC the band below. Aids stay on CAM0 (design §5.3). */
+    /* Dual sensor on: this browser's own view (design §5.3). Each view sets the two panes' boxes as custom properties
+       on the stage (--p0-* CAM0, --p1-* CAM1, % of the stage); the panes, tags and NO SIGNAL read them. Both is two panes
+       of the stage's shape in its middle half, the badges keep the band above, the timecode and REC the band below.
+       Aids stay on CAM0. Below 700 px Both stacks the panes. */
     .preview-stream-cam1,
     .preview-cam-tag,
     .preview-no-signal {
       display: none;
     }
 
-    .preview-stage.dual .preview-stream,
-    .preview-stage.dual .preview-processed-canvas {
-      top: 25%;
-      bottom: auto;
-      height: 50%;
-      width: 50%;
+    .preview-stage.dual {
+      --p0-l: 0%; --p0-t: 25%; --p0-w: 50%; --p0-h: 50%;
+      --p1-l: 50%; --p1-t: 25%; --p1-w: 50%; --p1-h: 50%;
+    }
+
+    .preview-stage.dual.view-bothleft {
+      --p0-l: 50%; --p1-l: 0%;
+    }
+
+    .preview-stage.dual.view-cam0 {
+      --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
+    }
+
+    .preview-stage.dual.view-cam1 {
+      --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%;
+    }
+
+    /* PiP: the inset is 28 % of the stage, 3 % from the right and below the badges, top right. */
+    .preview-stage.dual.view-pip0 {
+      --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
+      --p1-l: 69%; --p1-t: 13%; --p1-w: 28%; --p1-h: 28%;
+    }
+
+    .preview-stage.dual.view-pip1 {
+      --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%;
+      --p0-l: 69%; --p0-t: 13%; --p0-w: 28%; --p0-h: 28%;
     }
 
     .preview-stage.dual .preview-stream:not(.preview-stream-cam1),
     .preview-stage.dual .preview-processed-canvas {
-      left: 0;
+      left: var(--p0-l);
+      top: var(--p0-t);
+      width: var(--p0-w);
+      height: var(--p0-h);
       right: auto;
+      bottom: auto;
+      object-fit: contain;
     }
 
     .preview-stage.dual .preview-stream-cam1 {
       display: block;
-      left: 50%;
+      left: var(--p1-l);
+      top: var(--p1-t);
+      width: var(--p1-w);
+      height: var(--p1-h);
       right: auto;
+      bottom: auto;
+      object-fit: contain;
+    }
+
+    .preview-stage.dual.view-cam1 .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam1 .preview-processed-canvas,
+    .preview-stage.dual.view-cam0 .preview-stream-cam1 {
+      display: none !important;
+    }
+
+    .preview-stage.dual.view-pip0 .preview-stream-cam1,
+    .preview-stage.dual.view-pip1 .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-pip1 .preview-processed-canvas {
+      z-index: 1;
+      outline: 1px solid rgba(255, 255, 255, 0.35);
     }
 
     .preview-stage.dual .preview-cam-tag {
       display: block;
       position: absolute;
-      top: calc(25% + 8px);
       z-index: 2;
       padding: 3px 8px;
       border-radius: 999px;
@@ -408,20 +452,28 @@ std::string_view webControlPageHtml()
     }
 
     .preview-stage.dual .preview-cam-tag.cam0 {
-      left: 8px;
+      left: calc(var(--p0-l) + 8px);
+      top: calc(var(--p0-t) + 8px);
     }
 
     .preview-stage.dual .preview-cam-tag.cam1 {
-      left: calc(50% + 8px);
+      left: calc(var(--p1-l) + 8px);
+      top: calc(var(--p1-t) + 8px);
+    }
+
+    /* One camera on the whole stage: the badges already fill its corners, so no tag. */
+    .preview-stage.dual.view-cam0 .preview-cam-tag,
+    .preview-stage.dual.view-cam1 .preview-cam-tag {
+      display: none;
     }
 
     .preview-stage.dual .preview-no-signal.shown {
       display: flex;
       position: absolute;
-      top: 25%;
-      left: 50%;
-      width: 50%;
-      height: 50%;
+      left: var(--p1-l);
+      top: var(--p1-t);
+      width: var(--p1-w);
+      height: var(--p1-h);
       align-items: center;
       justify-content: center;
       z-index: 1;
@@ -431,6 +483,45 @@ std::string_view webControlPageHtml()
       letter-spacing: 0.08em;
       background: #000000;
       pointer-events: none;
+    }
+
+    .preview-stage.dual.view-cam0 .preview-no-signal.shown {
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both,
+      .preview-stage.dual.view-bothleft {
+        aspect-ratio: 7 / 10;
+        --p0-l: 0%; --p0-t: 10.5%; --p0-w: 100%; --p0-h: 39.5%;
+        --p1-l: 0%; --p1-t: 50%; --p1-w: 100%; --p1-h: 39.5%;
+      }
+
+      .preview-stage.dual.view-bothleft {
+        --p0-t: 50%; --p1-t: 10.5%;
+      }
+    }
+
+    .dual-view-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #000000;
+    }
+
+    .dual-view-row[hidden] {
+      display: none;
+    }
+
+    .dual-view-row .pill-button {
+      padding: 7px 12px;
+      font-size: 13px;
+    }
+
+    .dual-view-row .dual-view-swap {
+      margin-left: auto;
     }
 
     .preview-processed-canvas {
@@ -4733,6 +4824,11 @@ std::string_view webControlPageHtml()
                 <div class="record-icon-dot" id="recordIcon"></div>
               </button>
             </div>
+          </div>
+          <!-- Dual sensor on: this browser's own view of the two pictures (design §5.3). Kept in localStorage, never sent to Core. -->
+          <div class="dual-view-row" id="dualViewRow" hidden>
+            <div class="dual-view-pills" id="dualViewOptions" style="display:contents"></div>
+            <button class="pill-button dual-view-swap" id="dualViewSwap" type="button" title="Swap the two pictures in this page only">Swap</button>
           </div>
         </div>
 
@@ -14186,9 +14282,106 @@ std::string_view webControlPageHtml()
       state.previewProcessingLastFrameMs = now;
     }
 
+    // ---- Dual sensor: "active", and this browser's own view -------------------------------------------------
+    // "Active" = snapshot.cam1 exists (Core sends it only when cam1 is configured and the Dual sensor switch is on).
+    // While cam1 is absent from the state the old test stands in: the switch on and config.txt naming both sensors
+    // (config.txt not read yet: the switch alone).
+    function dualCam1(snapshot) {
+      const cam1 = snapshot && snapshot.cam1;
+      return cam1 && typeof cam1 === "object" ? cam1 : null;
+    }
+
+    function dualActive(snapshot) {
+      if (!snapshot)
+        return false;
+      if (dualCam1(snapshot))
+        return true;
+      if (!(snapshot.ui && snapshot.ui.dual_sensor_enabled === true))
+        return false;
+      const ports = dualSensorPorts();
+      return !ports || (ports.cam0 !== "none" && ports.cam1 !== "none");
+    }
+
+    // The WebUI's own view: the six labels of previewSource, per browser (a viewer's choice that changes nothing on
+    // the camera: two phones may watch different cameras). localStorage can be missing or throw: Both then.
+    const dualViewLabels = ["Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"];
+    const dualViewClass = { "Both": "both", "Cam 0": "cam0", "Cam 1": "cam1", "PiP Cam 0": "pip0", "PiP Cam 1": "pip1",
+      "Both (Cam 1 left)": "bothleft" };
+    // The same mapping as Core's Swap: Cam 0 <-> Cam 1, PiP Cam 0 <-> PiP Cam 1, Both <-> Both (Cam 1 left).
+    const dualViewSwapped = { "Both": "Both (Cam 1 left)", "Both (Cam 1 left)": "Both", "Cam 0": "Cam 1", "Cam 1": "Cam 0",
+      "PiP Cam 0": "PiP Cam 1", "PiP Cam 1": "PiP Cam 0" };
+    const dualViewStorageKey = "apertar.webui.dualView";
+    const dualView = { label: "Both", cam1Frame: false };
+
+    try {
+      const stored = window.localStorage.getItem(dualViewStorageKey);
+      if (stored && dualViewLabels.includes(stored))
+        dualView.label = stored;
+    } catch (error) {
+      // no storage: the default stands
+    }
+
+    function setDualViewLabel(label) {
+      if (!dualViewLabels.includes(label))
+        return;
+      dualView.label = label;
+      try {
+        window.localStorage.setItem(dualViewStorageKey, label);
+      } catch (error) {
+        // not kept; it still applies to this page
+      }
+      if (state.snapshot)
+        updateDualPreview(state.snapshot);
+    }
+
+    // A view of cam1 without a frame falls back to cam0 (Cam 1 -> Cam 0, PiP Cam 1 -> PiP Cam 0).
+    function dualEffectiveView() {
+      if (dualView.cam1Frame)
+        return dualView.label;
+      if (dualView.label === "Cam 1")
+        return "Cam 0";
+      if (dualView.label === "PiP Cam 1")
+        return "PiP Cam 0";
+      return dualView.label;
+    }
+
+    function dualViewShowsCam1(label) {
+      return label !== "Cam 0";
+    }
+
+    function renderDualViewRow(active) {
+      const row = document.getElementById("dualViewRow");
+      if (!row)
+        return;
+      row.hidden = !active;
+      if (!active)
+        return;
+      const key = dualView.label + "|" + dualView.cam1Frame;
+      if (row.dataset.built === key)
+        return;
+      row.dataset.built = key;
+      buildOptionButtonsInto(document.getElementById("dualViewOptions"),
+        dualViewLabels.map((value) => ({ value, label: value, enabled: true })), dualView.label,
+        (value) => setDualViewLabel(value));
+      const swap = document.getElementById("dualViewSwap");
+      if (!swap.dataset.wired) {
+        swap.dataset.wired = "1";
+        swap.addEventListener("click", () => setDualViewLabel(dualViewSwapped[dualView.label] || "Both"));
+      }
+    }
+
     // CAM1's picture: an <img> on cam1's own Core (:8001). An image request sends no Origin, so it passes Core's
-    // check; its src is dropped while not shown (MJPEG encodes only while viewed) and while playback is open.
+    // check; its src is dropped while not shown (view Cam 0, MJPEG encodes only while viewed) and while playback is open.
+    // Test hook: ?cam1port=8000 points it at cam0's own stream (JavaScript only; digits only).
     const cam1Preview = { on: false, nonce: 0, retryTimer: 0 };
+    const cam1PreviewPort = (() => {
+      try {
+        const value = new URLSearchParams(window.location.search).get("cam1port");
+        return value && /^[0-9]{2,5}$/.test(value) ? value : "8001";
+      } catch (error) {
+        return "8001";
+      }
+    })();
 
     function stopCam1Preview() {
       clearTimeout(cam1Preview.retryTimer);
@@ -14196,6 +14389,7 @@ std::string_view webControlPageHtml()
       if (img)
         img.removeAttribute("src");
       cam1Preview.on = false;
+      dualView.cam1Frame = false;
     }
 
     function startCam1Preview() {
@@ -14204,7 +14398,7 @@ std::string_view webControlPageHtml()
         return;
       clearTimeout(cam1Preview.retryTimer);
       cam1Preview.nonce += 1;
-      img.src = window.location.protocol + "//" + window.location.hostname + ":8001/preview.mjpeg?stream=" + cam1Preview.nonce;
+      img.src = window.location.protocol + "//" + window.location.hostname + ":" + cam1PreviewPort + "/preview.mjpeg?stream=" + cam1Preview.nonce;
       cam1Preview.on = true;
     }
 
@@ -14213,19 +14407,34 @@ std::string_view webControlPageHtml()
       const img = document.getElementById("previewStream1");
       if (!stage || !img)
         return;
-      const dual = !!(snapshot && snapshot.ui && snapshot.ui.dual_sensor_enabled === true);
-      stage.classList.toggle("dual", dual);
+      const dual = dualActive(snapshot);
       if (!img.dataset.wired) {
         img.dataset.wired = "1";
-        img.addEventListener("load", () => document.getElementById("previewNoSignal1").classList.remove("shown"));
+        img.addEventListener("load", () => {
+          document.getElementById("previewNoSignal1").classList.remove("shown");
+          if (!dualView.cam1Frame) {
+            dualView.cam1Frame = true;
+            if (state.snapshot)
+              updateDualPreview(state.snapshot);
+          }
+        });
         img.addEventListener("error", () => {
           document.getElementById("previewNoSignal1").classList.add("shown");
           clearTimeout(cam1Preview.retryTimer);
           if (cam1Preview.on)
             cam1Preview.retryTimer = window.setTimeout(startCam1Preview, 3000);
+          if (dualView.cam1Frame) {
+            dualView.cam1Frame = false;
+            if (state.snapshot)
+              updateDualPreview(state.snapshot);
+          }
         });
       }
-      const wanted = dual && !state.previewPausedForPlayback;
+      const view = dualEffectiveView();
+      stage.classList.toggle("dual", dual);
+      Object.keys(dualViewClass).forEach((label) => stage.classList.toggle("view-" + dualViewClass[label], dual && label === view));
+      renderDualViewRow(dual);
+      const wanted = dual && !state.previewPausedForPlayback && dualViewShowsCam1(dualView.label);
       if (wanted && !cam1Preview.on)
         startCam1Preview();
       else if (!wanted && cam1Preview.on)
@@ -20898,8 +21107,10 @@ std::string_view webControlPageHtml()
         return;
       const uiState = snapshot.ui || {};
       const ports = dualSensorPorts();
-      const configured = !!ports && ports.cam1 !== "none" && ports.cam0 !== "none";
-      const differ = configured && ports.cam0 !== ports.cam1;
+      const cam1 = dualCam1(snapshot);
+      // Found = the Core reports cam1 and a sensor answered; before that config.txt decides, as it does while cam1 is absent.
+      const configured = cam1 ? cam1.state !== "not_found" : (!!ports && ports.cam1 !== "none" && ports.cam0 !== "none");
+      const differ = configured && !!ports && ports.cam0 !== ports.cam1;
       // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
       const switchedOn = uiState.dual_sensor_enabled === true;
       setText("dualSensorNote", !ports ? "Reading config.txt..."
@@ -20916,7 +21127,7 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       }, 2);
-      const active = configured && switchedOn;
+      const active = configured && dualActive(snapshot);
       // Output: each HDMI port's view (previewSource, hdmi1Source). With one sensor or dual off both ports show CAM0.
       ensureSelectOptions("settingsPreviewSourceSelect", previewSourceOptions);
       setFormValue("settingsPreviewSourceSelect", uiState.preview_source || "Both");
