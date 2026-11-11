@@ -6,6 +6,7 @@
 #include "util/RecordingDropWarning.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -17,6 +18,40 @@
 #include <vector>
 
 namespace apertar {
+
+// What the running (or last) take tells get_state: its folder name, and for a take with start_us the slots of its
+// first and last frame (design 6.2). The session writes it; reads need no controller lock.
+struct TakeInfo {
+    static constexpr int64_t kNone = INT64_MIN;
+    std::atomic<int64_t> firstSlot{kNone};
+    std::atomic<int64_t> lastSlot{kNone};
+    mutable std::mutex nameMutex;
+    std::string clipName;
+    void begin(const std::string &name)
+    {
+        firstSlot.store(kNone);
+        lastSlot.store(kNone);
+        std::lock_guard<std::mutex> lock(nameMutex);
+        clipName = name;
+    }
+};
+struct TakeSnapshot {
+    std::optional<int64_t> firstSlot;
+    std::optional<int64_t> lastSlot;
+    std::string clipName;
+};
+// The optional fields of record_start (design 6.2). All unset = a take as before: frame 0 is the first frame after
+// the gate arms, the folder is named from the template, the timecode is today's.
+struct TakeOptions {
+    int64_t startUs = 0;          // the first frame is the first with SensorTimestamp >= startUs (CLOCK_MONOTONIC, us)
+    int64_t stopUs = 0;           // armed at the start: no frame at or after it is recorded
+    std::string clipName;         // the folder name verbatim, made with an exclusive create_directory
+    bool hasTcOffset = false;     // tcOffsetUs given: timecode = slot time + tcOffsetUs
+    int64_t tcOffsetUs = 0;
+    bool twoCameras = false;      // cam1 is configured: the {cam} rule applies to a template-made name
+    std::string unsyncedReason;   // not empty: the take is NOT SYNCED from its first frame (slots.txt, journal)
+    TakeInfo *info = nullptr;     // set by the controller
+};
 
 class CameraController {
 public:
@@ -50,6 +85,10 @@ public:
         std::string source = "unknown";
         std::string crop;           // ScalerCropMaximum, empty if the pipeline has none
     };
+
+    using TakeInfo = apertar::TakeInfo;
+    using TakeSnapshot = apertar::TakeSnapshot;
+    using TakeOptions = apertar::TakeOptions;
 
     CameraController(EventCallback eventCallback, PreviewCallback previewCallback);
     ~CameraController();
@@ -150,8 +189,13 @@ public:
     double timelapseIntervalSeconds() const;
     uint64_t timelapseShotCount() const;
     bool startRecording(const AudioRecordingOptions &audioOptions = {},
-                        const GyroRecordingOptions &gyroOptions = {});
-    bool stopRecording();
+                        const GyroRecordingOptions &gyroOptions = {},
+                        const TakeOptions &take = {});
+    // stopUs > 0 (design 6.2): waits, without the controller lock, until the frame gate has seen a frame at or after
+    // stopUs (or stopUs + max(3 T, 100 ms) has passed), so the clip holds the slots up to stopUs; a stopUs already past
+    // stops at once. 0 = stop now, as before.
+    bool stopRecording(int64_t stopUs = 0);
+    TakeSnapshot takeSnapshot() const;
     // Storage pre-roll: a short raw take at the mode's maximum fps through the real write path, then deleted. Not a take
     // (no REC, no recording event, no audio, no gyro, no safety stop). Core's pre-roll thread calls these two only.
     struct StoragePrerollResult {
@@ -262,6 +306,7 @@ private:
     bool rampTakeChanged_ = false;
     ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
     bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
+    TakeInfo takeInfo_;
     std::unique_ptr<CameraSession> session_;
 };
 

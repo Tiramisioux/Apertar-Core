@@ -36,6 +36,7 @@
 #include "util/BufferBudget.hpp"
 #include "util/StoragePreroll.hpp"
 #include "util/ClipName.hpp"
+#include "util/TakeSlots.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
@@ -7887,12 +7888,28 @@ public:
     }
 
     bool startRecording(const std::string &mediaRoot,
-                        const CaptureSettings &settings,
+                        const CaptureSettings &requestedSettings,
                         const AudioRecordingOptions &audioOptions,
                         const GyroRecordingOptions &gyroOptions,
-                        std::string *error)
+                        std::string *error,
+                        const TakeOptions &take = TakeOptions{})
     {
 #if APERTARCORE_HAS_LIBCAMERA
+        // The {cam} rule (design 6.2): with cam1 configured a template-made name always holds {cam}. The stored
+        // template is not touched; only this take's copy is. A verbatim clip_name is used as it is.
+        CaptureSettings settings = requestedSettings;
+        if (take.clipName.empty() && take.twoCameras) {
+            const auto parsed = apertar::clipname::parseForTwoCameras(settings.clipNameTemplate);
+            if (!parsed.ok) {
+                setError(error, parsed.error);
+                return false;
+            }
+            settings.clipNameTemplate = apertar::clipname::ensureCamToken(settings.clipNameTemplate);
+        }
+        if (!take.clipName.empty() && !apertar::clipname::validVerbatimName(take.clipName)) {
+            setError(error, apertar::clipname::kInvalidClipName);
+            return false;
+        }
         if (photoStreamOverride_ && !reconfigure(settings, error))
             return false;
         if (monochromeSensor_ && settings.recordingFormat == RecordingFormat::Mlv) {
@@ -7912,7 +7929,32 @@ public:
                 }
             }
         } withdrawOnFailure{this};
-        recordingClock_ = RecordingClock();
+        // Timecode from the slot (design 6.3): with tc_offset_us every frame is stamped slot time + offset.
+        const auto frameRate = recordingFrameRate(settings.fps);
+        TimecodeSlot timecodeSlot;
+        if (take.hasTcOffset)
+            timecodeSlot = TimecodeSlot{take.tcOffsetUs, frameRate.first, frameRate.second};
+        recordingClock_ = RecordingClock(timecodeSlot);
+        h264Recorder_.setTimecodeSlot(timecodeSlot);
+        proresRecorder_.setTimecodeSlot(timecodeSlot);
+        takeSlotted_ = take.startUs > 0;
+        takeRate_ = takeslots::Rate{frameRate.first, frameRate.second};
+        takeStartUs_ = take.startUs;
+        takeInfo_ = take.info;
+        takeUnsyncedReason_ = take.unsyncedReason;
+        firstRecordedTsUs_.store(0, std::memory_order_relaxed);
+        lastRecordedTsUs_.store(0, std::memory_order_relaxed);
+        unsyncedFromTsUs_.store(0, std::memory_order_relaxed);
+        rampCountNumbering_ = false;
+        rampSwitchFrame_ = -1;
+        takeGateFrames_ = 0;
+        testDropFrame_ = 0;
+        if (const char *drop = std::getenv("APERTAR_TEST_DROP_FRAME"); drop && *drop) {   // test only (design 8, 2.3)
+            char *end = nullptr;
+            const long long n = std::strtoll(drop, &end, 10);
+            if (end != drop && n > 0)
+                testDropFrame_ = static_cast<uint64_t>(n);
+        }
         recordingGapEstimate_ = 0;
         {
             std::lock_guard<std::mutex> lock(rampMutex_);
@@ -7935,12 +7977,31 @@ public:
 
         std::filesystem::path clipFolder;
         try {
-            clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings, sensorFamilyName(sensorFamily_));
-            std::filesystem::create_directories(clipFolder);
+            if (!take.clipName.empty()) {
+                // A given name is the folder name, made exclusively: a folder that exists refuses the take.
+                const std::filesystem::path root = mediaRootPath(mediaRoot);
+                std::error_code ec;
+                std::filesystem::create_directories(root, ec);
+                clipFolder = root / take.clipName;
+                ec.clear();
+                if (!std::filesystem::create_directory(clipFolder, ec)) {
+                    setError(error, ec ? "Could not create the clip folder: " + ec.message()
+                                       : "A clip folder named " + take.clipName + " already exists.");
+                    return false;
+                }
+            } else {
+                clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings, sensorFamilyName(sensorFamily_));
+                std::filesystem::create_directories(clipFolder);
+            }
         } catch (const std::exception &e) {
             setError(error, e.what());
             return false;
         }
+        takeFolder_ = clipFolder;
+        if (takeInfo_)
+            takeInfo_->begin(clipFolder.filename().string());
+        if (!takeUnsyncedReason_.empty())
+            std::cerr << "ApertarCore take NOT SYNCED: " << takeUnsyncedReason_ << "\n";
 
         if (gyroOptions.enabled) {
             const std::string clipFolderString = clipFolder.string();
@@ -8023,7 +8084,7 @@ public:
             }
             lastRecordingFormat_ = settings.recordingFormat;
             dropWarning_.reset();
-            { std::lock_guard lock(recordingFrameMutex_); recordingStartBootUs_ = clockMicroseconds(CLOCK_BOOTTIME); waitingForRecordingCadence_ = true; recordingFramesEnabled_ = true; }
+            armRecordingGate(take);
             return true;
         }
 
@@ -8041,17 +8102,136 @@ public:
         }
         lastRecordingFormat_ = settings.recordingFormat;
         dropWarning_.reset();
-        { std::lock_guard lock(recordingFrameMutex_); recordingStartBootUs_ = clockMicroseconds(CLOCK_BOOTTIME); waitingForRecordingCadence_ = true; recordingFramesEnabled_ = true; }
+        armRecordingGate(take);
         return true;
 #else
         (void)mediaRoot;
-        (void)settings;
+        (void)requestedSettings;
         (void)audioOptions;
         (void)gyroOptions;
         (void)error;
+        (void)take;
         return true;
 #endif
     }
+
+#if APERTARCORE_HAS_LIBCAMERA
+    // Opens the frame gate. Without start_us the first frame is the first after now (as before); with it, the first
+    // frame whose SensorTimestamp is at or after start_us, so the gate waits for the slot (design 6.2 step 5). A
+    // stop_us given at the start is armed with the gate.
+    void armRecordingGate(const TakeOptions &take)
+    {
+        std::lock_guard lock(recordingFrameMutex_);
+        recordingStartBootUs_ = take.startUs > 0 ? take.startUs : clockMicroseconds(CLOCK_BOOTTIME);
+        recordingStopBootUs_ = take.stopUs > 0 ? take.stopUs : 0;
+        stopGateSeen_ = false;
+        waitingForRecordingCadence_ = true;
+        recordingFramesEnabled_ = true;
+    }
+
+    // record_stop with a stop_us (design 6.2): returns when the gate has seen a frame at or after stopUs, or when
+    // CLOCK_MONOTONIC has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
+    // once T62's journal has it). A stopUs already past arms the stop and returns at once. The caller holds no lock
+    // of the controller; the gate's own mutex is released while waiting. The frames after stopUs are requeued by the
+    // gate, so the clip ends on slot k1 - 1.
+    void waitForStopSlot(int64_t stopUs)
+    {
+        if (stopUs <= 0)
+            return;
+        std::unique_lock<std::mutex> lock(recordingFrameMutex_);
+        if (!recordingFramesEnabled_)
+            return;
+        recordingStopBootUs_ = stopUs;
+        stopGateSeen_ = false;
+        const int64_t nowUs = clockMicroseconds(CLOCK_BOOTTIME);
+        const double periodUs = takeRate_.valid() ? 1000000.0 * double(takeRate_.den) / double(takeRate_.num) : 40000.0;
+        const int64_t graceUs = std::max<int64_t>(100000, static_cast<int64_t>(3.0 * periodUs));
+        const int64_t waitUs = stopUs + graceUs - nowUs;
+        if (nowUs >= stopUs) {
+            std::cerr << "ApertarCore stop_us already past by " << (nowUs - stopUs) << " us: stopping at once\n";
+            return;
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const bool seen = stopGateCv_.wait_for(lock, std::chrono::microseconds(std::max<int64_t>(0, waitUs)),
+                                               [this] { return stopGateSeen_ || !recordingFramesEnabled_; });
+        std::cerr << "ApertarCore stop gate: " << (seen ? "frame at stop_us seen" : "timed out without a frame at stop_us")
+                  << " after "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+                  << " ms\n";
+    }
+
+    // The frame is recorded (or, for raw, numbered): the first one fixes the take's first slot.
+    void noteFirstFrame(int64_t timestampUs)
+    {
+        if (timestampUs <= 0)
+            return;
+        int64_t expected = 0;
+        if (!firstRecordedTsUs_.compare_exchange_strong(expected, timestampUs, std::memory_order_acq_rel))
+            return;
+        if (takeSlotted_ && takeInfo_)
+            takeInfo_->firstSlot.store(takeslots::slotOfUs(timestampUs, takeRate_), std::memory_order_release);
+    }
+
+    // A Speed Ramp step was requested in this take (the events are cleared at its start).
+    bool rampStepSeen()
+    {
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        return !rampEvents_.empty();
+    }
+
+    // slots.txt in the clip folder (a take with start_us), and the take's last slot for get_state.
+    void finishTakeSlots(int64_t stopUs, bool mediumGone)
+    {
+        takeSlotted_ = false;   // once per take: a later stopRecording must not write it again
+        const int64_t lastTs = lastRecordedTsUs_.load(std::memory_order_acquire);
+        const int64_t firstTs = firstRecordedTsUs_.load(std::memory_order_acquire);
+        takeslots::SlotLog log;
+        log.rate = takeRate_;
+        log.startUs = takeStartUs_;
+        log.stopUs = stopUs;
+        if (firstTs > 0)
+            log.firstSlot = takeslots::slotOfUs(firstTs, takeRate_);
+        if (lastTs > 0)
+            log.lastSlot = takeslots::slotOfUs(lastTs, takeRate_);
+        if (log.lastSlot && stopUs > 0) {
+            const int64_t late = takeslots::framesLate(*log.lastSlot, takeslots::expectedLastSlot(stopUs, takeRate_));
+            if (late > 0) {
+                log.stoppedLateFrames = late;
+                std::cerr << "ApertarCore take " << takeslots::stoppedLateLine(late) << " (stop_us=" << stopUs << ")\n";
+            }
+        }
+        if (log.firstSlot && takeStartUs_ > 0) {
+            const int64_t late = takeslots::framesLate(*log.firstSlot, takeslots::expectedFirstSlot(takeStartUs_, takeRate_));
+            if (late > 0)
+                std::cerr << "ApertarCore take started " << late << (late == 1 ? " frame" : " frames")
+                          << " late (start_us=" << takeStartUs_ << ")\n";
+        }
+        if (!takeUnsyncedReason_.empty()) {
+            log.unsynced = true;
+            log.unsyncedReason = takeUnsyncedReason_;
+        } else if (const int64_t from = unsyncedFromTsUs_.load(std::memory_order_acquire); from > 0) {
+            log.unsynced = true;
+            log.unsyncedReason = "Speed Ramp step";
+            log.unsyncedFromSlot = takeslots::slotOfUs(from, takeRate_);
+        }
+        if (takeInfo_ && log.lastSlot)
+            takeInfo_->lastSlot.store(*log.lastSlot, std::memory_order_release);
+        std::cerr << "ApertarCore take slots: first=" << (log.firstSlot ? std::to_string(*log.firstSlot) : std::string("-"))
+                  << " last=" << (log.lastSlot ? std::to_string(*log.lastSlot) : std::string("-"))
+                  << (log.unsynced ? " NOT SYNCED" : "") << "\n";
+        if (mediumGone || takeFolder_.empty())
+            return;
+        const std::string path = (takeFolder_ / "slots.txt").string();
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) {
+            std::cerr << "ApertarCore slots: could not write " << path << "\n";
+            return;
+        }
+        out << takeslots::formatSlotsTxt(log);
+    }
+#else
+    void waitForStopSlot(int64_t) {}
+#endif
 
     // mediumGone: the recording medium is no longer there. Every recorder then
     // skips the finalisation that would reopen it (MLV header patch, H.264
@@ -8064,11 +8244,15 @@ public:
         // Close the frame gate before finalizing audio, and wait for an in-flight
         // enqueue/observe pair. Video must not grow after the WAV endpoint is fixed.
         // takePending_ goes with the gate: the phase lock may stretch again, and a Speed Ramp's release ends.
+        int64_t takeStopUs = 0;
         {
             std::lock_guard lock(recordingFrameMutex_);
             recordingFramesEnabled_ = false;
             takePending_ = false;
             phaseLockReleasedForRamp_ = false;
+            takeStopUs = recordingStopBootUs_;
+            recordingStopBootUs_ = 0;
+            stopGateCv_.notify_all();
         }
         if (recordingGapEstimate_ > 0 || requeueFailures_ > 0) {
             std::cerr << "ApertarCore capture stats: "
@@ -8101,6 +8285,8 @@ public:
         h264Recorder_.setMediumDead(false);
         timed("raw_ms", [&] { recorder_.stop(mediumGone); });
         writeFpsRampLog(mediumGone);
+        if (takeSlotted_)
+            finishTakeSlots(takeStopUs, mediumGone);
         timed("prores_ms", [&] { proresRecorder_.stop(); });
         timed("audio_ms", [&] { audioRecorder_.stop(/*finalize=*/!mediumGone); });
         if (!mediumGone)
@@ -9778,7 +9964,16 @@ private:
             std::lock_guard lock(recordingFrameMutex_);
             if (recordingFramesEnabled_) {
                 bool ready = true;
-                if (waitingForRecordingCadence_) {
+                const auto gateTimestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
+                const int64_t gateTsUs = gateTimestamp ? static_cast<int64_t>(*gateTimestamp / 1000) : 0;
+                // The stop gate (design 6.2): a frame at or after stop_us is requeued, not recorded, and wakes the
+                // stopper that waits for it.
+                if (recordingStopBootUs_ > 0 && gateTsUs > 0 && gateTsUs >= recordingStopBootUs_) {
+                    ready = false;
+                    stopGateSeen_ = true;
+                    stopGateCv_.notify_all();
+                }
+                if (ready && waitingForRecordingCadence_) {
                     const auto timestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
                     const auto duration = request->metadata().get(libcamera::controls::FrameDuration);
                     const int64_t expected = int64_t(std::llround(1000000 / settings_.fps));
@@ -9790,9 +9985,18 @@ private:
                     ready = ready && !phaseLockHolding;
                     if (ready) waitingForRecordingCadence_ = false;
                 }
+                // Test only (APERTAR_TEST_DROP_FRAME=n): the take's n-th frame is discarded before the record path.
+                if (ready && testDropFrame_ > 0 && ++takeGateFrames_ == testDropFrame_) {
+                    std::cerr << "ApertarCore test: dropped frame " << takeGateFrames_ << " of the take (ts_us=" << gateTsUs << ")\n";
+                    ready = false;
+                }
                 if (ready) {
-                    if (recordProcessedPreviewFrame(request)) return;
-                    if (recordRawFrame(request, whiteBalance)) return;
+                    if (recordProcessedPreviewFrame(request) || recordRawFrame(request, whiteBalance)) {
+                        noteFirstFrame(gateTsUs);   // the processed formats; raw has set it at its index anchor
+                        if (gateTsUs > 0)
+                            lastRecordedTsUs_.store(gateTsUs, std::memory_order_release);
+                        return;
+                    }
                 }
             }
         }
@@ -10048,7 +10252,26 @@ private:
         // at the start rate would run ahead (ramp down) or fall behind (ramp up), so
         // frames are numbered by count and the clip keeps its start rate as the
         // timeline rate; fps-ramp.txt in the clip folder carries the capture rates.
-        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs, /*countOnly=*/settings_.fpsSpeedRamp);
+        // A take with start_us keeps the time index (a hole where a frame was lost, the same index in both clips) until
+        // its first Speed Ramp step, and counts after it; that frame is where the take turns unsynced (design 6.2).
+        bool countOnly = settings_.fpsSpeedRamp;
+        bool numberingSwitched = false;
+        if (countOnly && takeSlotted_ && !rampCountNumbering_) {
+            if (rampStepSeen()) {
+                rampCountNumbering_ = true;
+                numberingSwitched = true;
+            } else {
+                countOnly = false;
+            }
+        }
+        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs, countOnly);
+        noteFirstFrame(timestampUs);   // nextFrameIndex has anchored the take on this frame if it is the first
+        if (numberingSwitched) {
+            rampSwitchFrame_ = static_cast<int64_t>(frameIndex);
+            unsyncedFromTsUs_.store(timestampUs, std::memory_order_release);
+            std::cerr << "ApertarCore take NOT SYNCED from frame " << frameIndex
+                      << ": Speed Ramp step, numbering by count from here\n";
+        }
         const uint64_t wallClockTimestampUs = wallClockForSensorTimestamp(timestampUs);
         CdngEncoder::Metadata metadata = metadataFromRequest(
             settings_,
@@ -10494,8 +10717,11 @@ private:
             return std::string(text);
         };
         out << "# Apertar speed ramp log. Frames are numbered by count; the clip's timeline rate is base_fps.\n"
-            << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n"
-            << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
+            << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n";
+        if (rampSwitchFrame_ >= 0)
+            out << "# numbering: by time (slot) up to frame " << rampSwitchFrame_ - 1 << ", by count from frame "
+                << rampSwitchFrame_ << " (a take with start_us)\n";
+        out << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
             << "# requested_frame applied_frame frame_us seen tc_at_base boot_us from_fps to_fps shutter_us applied_us\n";
         for (const FpsRampEvent &event : events) {
             out << event.frameIndex << ' ';
@@ -11008,6 +11234,25 @@ private:
     bool phaseLockReleasedForRamp_ = false;
     bool waitingForRecordingCadence_ = false;
     int64_t recordingStartBootUs_ = 0;
+    // A take on the grid (design 6.2). The stop gate: no frame at or after recordingStopBootUs_ is recorded
+    // (recordingFrameMutex_, with stopGateCv_ and stopGateSeen_). The rest is written by the completion thread and
+    // read by the stop, which runs after the gate is closed.
+    int64_t recordingStopBootUs_ = 0;
+    bool stopGateSeen_ = false;
+    std::condition_variable stopGateCv_;
+    bool takeSlotted_ = false;          // the take has a start_us: slots.txt, first and last slot, Speed Ramp numbering
+    takeslots::Rate takeRate_;
+    int64_t takeStartUs_ = 0;
+    std::filesystem::path takeFolder_;
+    TakeInfo *takeInfo_ = nullptr;
+    std::string takeUnsyncedReason_;    // NOT SYNCED from the first frame (two frame rates)
+    std::atomic<int64_t> firstRecordedTsUs_{0};   // sensor timestamps (us) of the first and last frame of the take
+    std::atomic<int64_t> lastRecordedTsUs_{0};
+    std::atomic<int64_t> unsyncedFromTsUs_{0};    // the frame where Speed Ramp numbering switched to count
+    bool rampCountNumbering_ = false;             // a slotted Speed Ramp take is numbered by count from now on
+    int64_t rampSwitchFrame_ = -1;
+    uint64_t takeGateFrames_ = 0;       // APERTAR_TEST_DROP_FRAME: frames the gate has passed in this take
+    uint64_t testDropFrame_ = 0;
     Mpu6050RecordingSession gyroRecorder_;
     PhotoCaptureWriter photoWriter_;
     mutable std::shared_mutex sessionSettingsMutex_;
@@ -12688,7 +12933,8 @@ bool CameraController::setAutofocusWindow(double x, double y, double width, doub
 }
 
 bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
-                                      const GyroRecordingOptions &gyroOptions)
+                                      const GyroRecordingOptions &gyroOptions,
+                                      const TakeOptions &takeRequest)
 {
     if (timelapseActive()) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -12719,7 +12965,12 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
         setErrorLocked("Wait for the still capture to finish before recording.");
         return false;
     }
-    if (!simulateCamera_ && session_ && !session_->startRecording(mediaRoot_, settings_, audioOptions, gyroOptions, &lastError_)) {
+    TakeOptions take = takeRequest;
+    take.info = &takeInfo_;
+    if (simulateCamera_) {   // no session to name the folder: the take still tells get_state its name and slots
+        takeInfo_.begin(take.clipName);
+    }
+    if (!simulateCamera_ && session_ && !session_->startRecording(mediaRoot_, settings_, audioOptions, gyroOptions, &lastError_, take)) {
         // Recording startup failures are usually media/audio setup problems, not
         // fatal camera-session failures. Keep the controller ready so the user
         // can retry without restarting the whole app.
@@ -13136,8 +13387,33 @@ void CameraController::timelapseLoop()
     }
 }
 
-bool CameraController::stopRecording()
+CameraController::TakeSnapshot CameraController::takeSnapshot() const
 {
+    TakeSnapshot out;
+    if (const int64_t first = takeInfo_.firstSlot.load(std::memory_order_acquire); first != TakeInfo::kNone)
+        out.firstSlot = first;
+    if (const int64_t last = takeInfo_.lastSlot.load(std::memory_order_acquire); last != TakeInfo::kNone)
+        out.lastSlot = last;
+    std::lock_guard<std::mutex> lock(takeInfo_.nameMutex);
+    out.clipName = takeInfo_.clipName;
+    return out;
+}
+
+bool CameraController::stopRecording(int64_t stopUs)
+{
+    // A stop_us (design 6.2) waits for the gate to see the stop slot. It must not hold the controller lock: the
+    // drain below holds it for seconds, and a poll should still answer while the last frames arrive. The session
+    // is not replaced while a command runs (the App serialises commands), so the pointer stays good.
+    if (stopUs > 0) {
+        CameraSession *waiting = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (recording_ && !simulateCamera_ && !prerollTake_)
+                waiting = session_.get();
+        }
+        if (waiting)
+            waiting->waitForStopSlot(stopUs);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (!recording_)
         return true;
