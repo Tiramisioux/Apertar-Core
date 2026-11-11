@@ -10626,6 +10626,16 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
         return;
     }
 
+    if (target == "preview_wipe" || target == "preview_opacity") {
+        // Wipe and stack opacity of the single-camera views (design v2.5 A5), 0..100.
+        const int percent = static_cast<int>(std::llround(analogMappedValue(event, 0.0, 100.0, 1.0)));
+        const bool wipe = target == "preview_wipe";
+        if ((wipe ? uiSettings.previewWipe : uiSettings.previewOpacity) == percent)
+            return;
+        dispatch("set_preview_source", { { wipe ? "wipe" : "opacity", std::to_string(percent) } });
+        return;
+    }
+
     if (target == "camera_controls_opacity") {
         const double opacity = analogMappedValue(event, 0.15, 1.0, 0.01);
         if (std::abs(uiSettings.cameraControlsOpacity - opacity) < 0.005)
@@ -10715,6 +10725,41 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
 
     const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
     const CaptureSettings cameraSettings = camera_.settings();
+
+    // Dual view (design v2.5 A5): everything goes through set_preview_source, so the HDMI and the WebUI follow.
+    if (action == "preview_wipe_up" || action == "preview_wipe_down") {
+        const int wipe = std::clamp(uiSettings.previewWipe + (action == "preview_wipe_up" ? 5 : -5), 0, 100);
+        if (wipe != uiSettings.previewWipe)
+            dispatch("set_preview_source", { { "wipe", std::to_string(wipe) } });
+        return;
+    }
+    if (action == "preview_opacity_up" || action == "preview_opacity_down") {
+        const int opacity = std::clamp(uiSettings.previewOpacity + (action == "preview_opacity_up" ? 5 : -5), 0, 100);
+        if (opacity != uiSettings.previewOpacity)
+            dispatch("set_preview_source", { { "opacity", std::to_string(opacity) } });
+        return;
+    }
+    if (action == "preview_stack") {
+        dispatch("set_preview_source", { { "stack", uiSettings.previewStack ? "false" : "true" } });
+        return;
+    }
+    if (action == "preview_wipe_direction") {
+        dispatch("set_preview_source", { { "wipe_direction", uiSettings.previewWipeDirection == "Vertical" ? "horizontal" : "vertical" } });
+        return;
+    }
+    if (action == "preview_view") {
+        const auto &labels = apertar::dualsettings::kPreviewSources;
+        size_t next = 0;
+        for (size_t i = 0; i < labels.size(); ++i)
+            if (uiSettings.previewSource == labels[i])
+                next = (i + 1) % labels.size();
+        dispatch("set_preview_source", { { "value", labels[next] } });
+        return;
+    }
+    if (action == "preview_swap") {
+        dispatch("set_preview_source", { { "swap", "true" } });
+        return;
+    }
 
     if (action == "ev_up" || action == "ev_down") {
         const double ev = std::clamp(cameraSettings.exposureCompensation +

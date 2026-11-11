@@ -72,6 +72,15 @@ inline constexpr Spec kSpecs[] = {
     {"external_monitor", "Monitoring", "External monitor on / off", "external_monitor,external_monitoring,hdmi"},
     {"date_time_overlay", "Monitoring", "Date and time overlay on / off", "date_time,date_time_overlay"},
     {"audio_meter", "Monitoring", "Audio meter on / off", "audio_meter,vu_meter,vumeter"},
+    {"preview_wipe_up", "Dual view", "Wipe up (+5, other camera shows over more of the picture)", "preview_wipe_up,wipe_up,wipe_next,wipe_plus,wipe+"},
+    // Typed "wipe-" or "opacity-", normalizeToken reads it as "wipe_" / "opacity_".
+    {"preview_wipe_down", "Dual view", "Wipe down (-5)", "preview_wipe_down,wipe_down,wipe_prev,wipe_previous,wipe_minus,wipe_"},
+    {"preview_opacity_up", "Dual view", "Stack opacity up (+5)", "preview_opacity_up,opacity_up,opacity_plus,opacity+,stack_opacity_up"},
+    {"preview_opacity_down", "Dual view", "Stack opacity down (-5)", "preview_opacity_down,opacity_down,opacity_minus,opacity_,stack_opacity_down"},
+    {"preview_stack", "Dual view", "Stack the two cameras on / off", "preview_stack,stack,stack_toggle,stack_cameras"},
+    {"preview_wipe_direction", "Dual view", "Wipe direction: horizontal / vertical", "preview_wipe_direction,wipe_direction,wipe_dir,wipe_vertical,wipe_horizontal"},
+    {"preview_view", "Dual view", "HDMI 0 view: next, wraps", "preview_view,view_cycle,hdmi_view,preview_source"},
+    {"preview_swap", "Dual view", "Swap the two cameras on HDMI 0", "preview_swap,swap,swap_cameras,swap_view"},
     {"zoom_toggle", "Screens", "Preview zoom", "zoom,zoom_toggle,preview_zoom", Both, true},
     {"settings", "Screens", "Open settings", "settings,settings_page", Both, true},
     {"clip_browser", "Screens", "Open clip browser", "clip_browser,browser,playback", Both, true},
@@ -280,7 +289,7 @@ inline std::string suggestion(std::string_view token)
 // the "turn" ones start or stop something on every detent, which is almost never meant.
 inline bool isStepping(std::string_view id)
 {
-    for (const std::string_view family : {"iso", "shutter", "fps", "wb", "ev", "resolution"})
+    for (const std::string_view family : {"iso", "shutter", "fps", "wb", "ev", "resolution", "preview_wipe", "preview_opacity"})
         for (const std::string_view dir : {"_up", "_down"})
             if (id.size() == family.size() + dir.size() && id.substr(0, family.size()) == family &&
                 id.substr(family.size()) == dir)
@@ -296,7 +305,8 @@ inline bool warnOnTurn(std::string_view id)
 
 // The analog targets (Grove's normalizer also maps none/off/disabled to "no target"; App only sees its result).
 inline constexpr std::string_view kAnalogTargets[] = {"iso", "fps", "resolution", "wb", "shutter",
-    "focus_peaking_threshold", "zebra_threshold", "input_volume", "headphone_volume", "camera_controls_opacity"};
+    "focus_peaking_threshold", "zebra_threshold", "input_volume", "headphone_volume", "camera_controls_opacity",
+    "preview_wipe", "preview_opacity"};
 
 inline std::string canonicalAnalogTarget(std::string_view text)
 {
@@ -308,6 +318,8 @@ inline std::string canonicalAnalogTarget(std::string_view text)
     if (target == "volume" || target == "input_gain") return "input_volume";
     if (target == "headphone" || target == "headphones") return "headphone_volume";
     if (target == "opacity" || target == "controls_opacity") return "camera_controls_opacity";
+    if (target == "wipe" || target == "wipe_preview" || target == "preview_wipe_percent") return "preview_wipe";
+    if (target == "opacity_preview" || target == "stack_opacity" || target == "preview_opacity_percent") return "preview_opacity";
     if (target == "res") return "resolution";
     return target;
 }
