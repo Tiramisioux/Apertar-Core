@@ -2268,6 +2268,26 @@ std::string cam1WordOf(const ControlClient::Snapshot &cam1)
     return cam1state::word(rank);
 }
 
+// The record_cameras word (design 6.1): a running take with cam1 in it names its own cameras, otherwise the policy's
+// answer for the next press. "" when cam1 is not configured.
+std::string recordCamerasNow(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+{
+    if (!client.configured())
+        return {};
+    const ControlClient::Snapshot cam1 = client.snapshot();
+    if (cam1.inTake)
+        return cam1.takeCam1Only ? "cam1" : "both";
+    cam1state::RecordCamerasInputs cameras;
+    cameras.recordCameras = ui.recordCameras;
+    cameras.previewSource = ui.previewSource;
+    cameras.hdmi1Source = ui.hdmi1Source;
+    cameras.soundRecorder = ui.soundRecorderEnabled;
+    cameras.cam0Recording = cam0Recording;
+    cameras.cam1State = cam1WordOf(cam1);
+    cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
+    return cam1state::recordCamerasWord(cameras);
+}
+
 std::string cam1StateMembers(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
 {
     if (!client.configured())
@@ -2286,18 +2306,7 @@ std::string cam1StateMembers(const ControlClient &client, const SharedUiSettings
     view.skewKnown = cam1.skewKnown;
     view.skewUs = cam1.skewUs;
 
-    cam1state::RecordCamerasInputs cameras;
-    cameras.recordCameras = ui.recordCameras;
-    cameras.previewSource = ui.previewSource;
-    cameras.hdmi1Source = ui.hdmi1Source;
-    cameras.soundRecorder = ui.soundRecorderEnabled;
-    cameras.cam0Recording = cam0Recording;
-    cameras.cam1State = word;
-    cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
-    // A running take with cam1 in it names its own cameras (design 6.1); otherwise the policy's answer for the next press.
-    const std::string recordWord =
-        cam1.inTake ? (cam1.takeCam1Only ? "cam1" : "both") : std::string(cam1state::recordCamerasWord(cameras));
-    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + recordWord + "\"";
+    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + recordCamerasNow(client, ui, cam0Recording) + "\"";
 }
 
 // The running (or last) take's folder name and, for a take with start_us, the slots of its first and last frame
@@ -5808,6 +5817,41 @@ uint64_t estimatedRawBytesPerSecond(const CaptureSettings &settings)
     else
         frameMiB = std::max(1.0, rawMiB * 1.06 + 0.03);
     return static_cast<uint64_t>(frameMiB * MiB * fps);
+}
+
+// cam1's data rate (design 6.4), by the same model as cam0's, from cam1.settings: its size, fps, format, depth,
+// compression and ProRes profile; what cam1.settings does not say stays cam0's. 0 while cam1 has reported nothing.
+uint64_t cam1EstimatedBytesPerSecond(const std::string &json, CaptureSettings s)
+{
+    const auto width = jsonkeys::numberOf(json, "width");     // the first width/height is `resolution`'s
+    const auto height = jsonkeys::numberOf(json, "height");
+    if (!width || !height || *width <= 0 || *height <= 0)
+        return 0;
+    const auto text = [&](const char *key) { return jsonkeys::stringOf(json, key).value_or(""); };
+    s.resolution.width = static_cast<unsigned>(*width);
+    s.resolution.height = static_cast<unsigned>(*height);
+    if (const auto fps = jsonkeys::numberOf(json, "fps"); fps && *fps > 0)
+        s.fps = *fps;
+    if (const std::string format = text("recording_format"); !format.empty())
+        s.recordingFormat = recordingFormatFromNormalizedValue(format);
+    if (const auto bits = jsonkeys::numberOf(json, "raw_bit_depth"); bits && *bits > 0)
+        s.rawBitDepth = static_cast<unsigned>(*bits);
+    s.cdngCompression = text("cdng_compression") == "lossless_jpeg" ? CdngCompression::LosslessJpeg : CdngCompression::Uncompressed;
+    if (const std::string ratio = text("lossy_dng_ratio"); !ratio.empty())
+        s.lossyDngRatio = lossyDngRatioFromString(ratio);
+    if (const std::string profile = text("prores_profile"); !profile.empty())
+        s.proresProfile = profile == "hq" ? ProresProfile::HQ : profile == "lt" ? ProresProfile::LT
+                        : profile == "proxy" ? ProresProfile::Proxy : ProresProfile::Standard;
+    if (const auto w = jsonkeys::numberOf(json, "h264_width"), h = jsonkeys::numberOf(json, "h264_height"); w && h) {
+        s.h264Resolution.width = static_cast<unsigned>(*w);
+        s.h264Resolution.height = static_cast<unsigned>(*h);
+    }
+    // Log stores fewer bits where cam1 says it is applied.
+    s.cdngLogApplied = false;
+    if (jsonkeys::boolOf(json, "cdng_log_applied").value_or(false))
+        if (const auto logBits = jsonkeys::numberOf(json, "cdng_log_bits"); logBits && *logBits > 0)
+            s.rawBitDepth = static_cast<unsigned>(*logBits);
+    return estimatedRawBytesPerSecond(s);
 }
 
 // What the time-left figure assumes, for the WebUI's sub-label.
@@ -9899,7 +9943,17 @@ std::string ApertarCoreApp::buildWebStateJson() const
             100.0);
     }
 
-    const uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    // Time left is one value for the rig (design 6.4): both Cores fill one card, so free space over the rates of the
+    // cameras in record_cameras. With no cam1 configured this is today's one-camera figure.
+    if (!secondaryRole() && cam1Client_.configured()) {
+        const std::string cameras = recordCamerasNow(cam1Client_, uiSettings, camera_.isRecording());
+        const uint64_t cam1Rate = cam1EstimatedBytesPerSecond(cam1Client_.snapshot().settings, settings);
+        if (cameras == "both")
+            estimatedBytesPerSecond += cam1Rate;
+        else if (cameras == "cam1" && cam1Rate > 0)
+            estimatedBytesPerSecond = cam1Rate;
+    }
     std::optional<double> recordTimeLeftMinutes;
     if (estimatedBytesPerSecond > 0 && mediaFreeBytes > 0) {
         // Truncated to the tenth, so the JSON's one decimal never rounds up: the
