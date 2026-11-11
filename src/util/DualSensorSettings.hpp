@@ -93,6 +93,71 @@ inline std::string swapPreviewSource(const std::string &label)
     return label;
 }
 
+// Wipe and stack in a single-camera view (design v2.5 A5): previewWipe 0..100, previewStack, previewOpacity 0..100,
+// previewWipeDirection Horizontal|Vertical. The command's fields are strict, the UI.conf reader clamps.
+inline constexpr int kPreviewWipeDefault = 0;
+inline constexpr int kPreviewOpacityDefault = 50;
+
+// Strict 0..100 (a number, no trailing text); a fraction rounds. nullopt for anything else.
+inline std::optional<int> parsePercent(std::string_view value)
+{
+    const std::string text = detail::trim(value);
+    if (text.empty())
+        return std::nullopt;
+    try {
+        size_t used = 0;
+        const double number = std::stod(text, &used);
+        if (used != text.size() || !(number >= 0.0) || number > 100.0)
+            return std::nullopt;
+        return static_cast<int>(number + 0.5);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// UI.conf reader: unreadable gives the default, out of range clamps.
+inline int normalizePercent(std::string_view value, int fallback)
+{
+    const std::string text = detail::trim(value);
+    try {
+        size_t used = 0;
+        const double number = std::stod(text, &used);
+        if (used != text.size() || number != number)
+            return fallback;
+        return number < 0.0 ? 0 : (number > 100.0 ? 100 : static_cast<int>(number + 0.5));
+    } catch (...) {
+        return fallback;
+    }
+}
+
+// Strict boolean of the command: true|false|1|0, case-insensitive.
+inline std::optional<bool> parseStackFlag(std::string_view value)
+{
+    const std::string key = detail::lower(detail::trim(value));
+    if (key == "true" || key == "1")
+        return true;
+    if (key == "false" || key == "0")
+        return false;
+    return std::nullopt;
+}
+
+// "Horizontal" (default) or "Vertical", case-insensitive; anything else gives the default.
+inline std::string normalizeWipeDirection(std::string_view value)
+{
+    return detail::lower(detail::trim(value)) == "vertical" ? "Vertical" : "Horizontal";
+}
+
+// The command's strict form: horizontal|vertical, case-insensitive, to the UI.conf label; nullopt otherwise.
+inline std::optional<std::string> parseWipeDirection(std::string_view value)
+{
+    const std::string key = detail::lower(detail::trim(value));
+    if (key == "horizontal")
+        return std::string("Horizontal");
+    if (key == "vertical")
+        return std::string("Vertical");
+    return std::nullopt;
+}
+
 // cam1Settings: "unison" alone, or the shared controls as a comma list. Tokens are exact lower case, in any order, no
 // repeats; spaces around a token are trimmed. Returns "unison", the list in the fixed order, "" for none, or nullopt
 // for anything else (an unknown token, a repeat, "unison" in a list, an empty token such as "iso,,fps" or a trailing

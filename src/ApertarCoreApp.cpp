@@ -1896,6 +1896,10 @@ struct SharedUiSettingsSnapshot
     bool dualSensorEnabled = false;   // the Dual Sensor card's switch: off = CAM0 only, two cameras configured or not
     std::string previewSource = "Both";
     std::string hdmi1Source = apertar::dualsettings::kHdmi1SourceDefault;   // HDMI 1's view while dual sensor is on
+    int previewWipe = apertar::dualsettings::kPreviewWipeDefault;           // 0..100: the camera underneath shows over the first w %
+    bool previewStack = false;                                              // both cameras full frame, the top one at previewOpacity
+    int previewOpacity = apertar::dualsettings::kPreviewOpacityDefault;     // 0..100, while stacked
+    std::string previewWipeDirection = "Horizontal";                        // Horizontal (edge moves left to right) or Vertical
     std::string recordCameras = "Both";
     std::string cam1Settings = apertar::dualsettings::kCam1SettingsDefault;
     std::string cam1Mode = "Closest to Cam 0";
@@ -2077,6 +2081,14 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.previewSource = apertar::dualsettings::normalizePreviewSource(value);
         else if (key == "hdmi1Source")
             snapshot.hdmi1Source = apertar::dualsettings::normalizeHdmi1Source(value);
+        else if (key == "previewWipe")
+            snapshot.previewWipe = apertar::dualsettings::normalizePercent(value, apertar::dualsettings::kPreviewWipeDefault);
+        else if (key == "previewStack")
+            snapshot.previewStack = parseUiSettingsBool(value, snapshot.previewStack);
+        else if (key == "previewOpacity")
+            snapshot.previewOpacity = apertar::dualsettings::normalizePercent(value, apertar::dualsettings::kPreviewOpacityDefault);
+        else if (key == "previewWipeDirection")
+            snapshot.previewWipeDirection = apertar::dualsettings::normalizeWipeDirection(value);
         else if (key == "recordCameras")
             snapshot.recordCameras = apertar::dualsettings::normalizeRecordCameras(value);
         else if (key == "cam1Settings")
@@ -2227,6 +2239,10 @@ std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
     return std::string("\"dual_sensor_enabled\":") + (ui.dualSensorEnabled ? "true" : "false")
            + ",\"preview_source\":\"" + escapeJson(ui.previewSource) + "\""
            + ",\"hdmi1_source\":\"" + escapeJson(ui.hdmi1Source) + "\""
+           + ",\"preview_wipe\":" + std::to_string(ui.previewWipe)
+           + ",\"preview_stack\":" + (ui.previewStack ? "true" : "false")
+           + ",\"preview_opacity\":" + std::to_string(ui.previewOpacity)
+           + ",\"preview_wipe_direction\":\"" + (ui.previewWipeDirection == "Vertical" ? "vertical" : "horizontal") + "\""
            + ",\"record_cameras\":\"" + escapeJson(ui.recordCameras) + "\""
            + ",\"cam1_settings\":\"" + escapeJson(ui.cam1Settings) + "\""
            + ",\"cam1_mode\":\"" + escapeJson(ui.cam1Mode) + "\"";
@@ -14323,16 +14339,55 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
                 return errorReply(command.id, "Could not update shared UI settings.");
             return okReply(command.id, "\"preview_source\":\"" + escapeJson(swapped) + "\"");
         }
+        // value, wipe, wipe_direction, stack and opacity: any subset; all are checked before any is written.
         const auto value = command.string("value");
-        if (!value)
+        const auto wipeText = command.string("wipe");
+        const auto directionText = command.string("wipe_direction");
+        const auto stackText = command.string("stack");
+        const auto opacityText = command.string("opacity");
+        if (!value && !wipeText && !directionText && !stackText && !opacityText)
             return errorReply(command.id, "set_preview_source requires value.");
 
-        const std::string normalized = apertar::dualsettings::normalizePreviewSource(*value);
-        if (trimAscii(*value) != normalized)
-            return errorReply(command.id, "Unsupported preview source.");
-        if (!updateSharedUiGeneralSettings({ { "previewSource", normalized } }))
+        std::vector<std::pair<std::string, std::string>> updates;
+        if (value) {
+            const std::string normalized = apertar::dualsettings::normalizePreviewSource(*value);
+            if (trimAscii(*value) != normalized)
+                return errorReply(command.id, "Unsupported preview source.");
+            updates.push_back({ "previewSource", normalized });
+        }
+        if (wipeText) {
+            const auto wipe = apertar::dualsettings::parsePercent(*wipeText);
+            if (!wipe)
+                return errorReply(command.id, "Wipe must be 0 to 100.");
+            updates.push_back({ "previewWipe", std::to_string(*wipe) });
+        }
+        if (directionText) {
+            const auto direction = apertar::dualsettings::parseWipeDirection(*directionText);
+            if (!direction)
+                return errorReply(command.id, "Wipe direction must be horizontal or vertical.");
+            updates.push_back({ "previewWipeDirection", *direction });
+        }
+        if (stackText) {
+            const auto stack = apertar::dualsettings::parseStackFlag(*stackText);
+            if (!stack)
+                return errorReply(command.id, "Stack must be true or false.");
+            updates.push_back({ "previewStack", *stack ? "true" : "false" });
+        }
+        if (opacityText) {
+            const auto opacity = apertar::dualsettings::parsePercent(*opacityText);
+            if (!opacity)
+                return errorReply(command.id, "Opacity must be 0 to 100.");
+            updates.push_back({ "previewOpacity", std::to_string(*opacity) });
+        }
+        if (!updateSharedUiGeneralSettings(updates))
             return errorReply(command.id, "Could not update shared UI settings.");
-        return okReply(command.id, "\"preview_source\":\"" + escapeJson(normalized) + "\"");
+
+        const SharedUiSettingsSnapshot ui = readSharedUiSettings();
+        return okReply(command.id, "\"preview_source\":\"" + escapeJson(ui.previewSource) + "\""
+                                       + ",\"preview_wipe\":" + std::to_string(ui.previewWipe)
+                                       + ",\"preview_wipe_direction\":\"" + (ui.previewWipeDirection == "Vertical" ? "vertical" : "horizontal") + "\""
+                                       + ",\"preview_stack\":" + (ui.previewStack ? "true" : "false")
+                                       + ",\"preview_opacity\":" + std::to_string(ui.previewOpacity));
     }
 
     if (command.name == "set_hdmi1_source") {
