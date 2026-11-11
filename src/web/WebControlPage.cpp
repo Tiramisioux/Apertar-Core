@@ -1680,7 +1680,8 @@ std::string_view webControlPageHtml()
     }
 
     /* The Dual Sensor card with one sensor: its own options greyed (phase lock stays usable). */
-    #settingsDualSensorCard.locked .select-block {
+    #settingsDualSensorCard.locked .select-block,
+    #settingsDualSensorCard.dual-off .select-block {
       opacity: 0.6;
     }
 
@@ -5479,7 +5480,7 @@ std::string_view webControlPageHtml()
                 <div class="field-stack" id="settingsPreviewSourceField" style="display: none">
                   <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
                   <select class="settings-select" id="settingsPreviewSourceSelect"></select>
-                  <span class="subtle-note">Which camera the HDMI monitor shows: one, both side by side, or one inside the other (PiP).</span>
+                  <span class="subtle-note" id="settingsPreviewSourceNote">Which camera the HDMI monitor shows: one, both side by side, or one inside the other (PiP).</span>
                 </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
@@ -6143,12 +6144,16 @@ std::string_view webControlPageHtml()
 
             <!-- Dual Sensor (design §5.3, T67's card brought forward): what CAM1 shares with CAM0, which cameras record,
                  and the phase lock. Greyed while config.txt names no Camera 1 sensor; the stored values stay. -->
-            <div class="settings-card" id="settingsDualSensorCard" data-search="dual sensor two cameras cam1 camera 1 second sensor share shared follow iso shutter fps wb white balance resolution record both phase lock sync">
-              <div class="settings-card-head">
+            <div class="settings-card dual-sensor-card" id="settingsDualSensorCard" data-search="dual sensor enable on off unison tie two cameras cam1 camera 1 second sensor share shared follow iso shutter fps wb white balance resolution record both phase lock sync">
+              <div class="settings-card-head wrap-head">
                 <div>
                   <h3 class="settings-card-title">Dual Sensor</h3>
                   <p class="settings-card-copy">CAM0 is the main camera: CAM1 follows its controls where they are tied, and records with it as set below.</p>
                   <p class="settings-card-copy" id="dualSensorNote"></p>
+                </div>
+                <div class="switch-field">
+                  <span>Dual sensor</span>
+                  <div class="pill-grid ladder-pair" id="dualSensorEnabledOptions"></div>
                 </div>
               </div>
               <section class="select-block">
@@ -14598,6 +14603,9 @@ std::string_view webControlPageHtml()
         case "set_record_cameras":
           uiState.record_cameras = String(payload.value || "Both");
           break;
+        case "set_dual_sensor_enabled":
+          uiState.dual_sensor_enabled = boolValue;
+          break;
         case "set_cam1_settings":
           uiState.cam1_settings = String(payload.value || "");
           break;
@@ -20756,20 +20764,39 @@ std::string_view webControlPageHtml()
       const ports = dualSensorPorts();
       const configured = !!ports && ports.cam1 !== "none" && ports.cam0 !== "none";
       const differ = configured && ports.cam0 !== ports.cam1;
+      // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
+      const switchedOn = uiState.dual_sensor_enabled === true;
       setText("dualSensorNote", !ports ? "Reading config.txt..."
         : !configured ? (ports.cam1 === "none" ? "One sensor configured. Set Camera 1 in Boot Config, then reboot."
           : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
-        : "CAM0 (main): " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase());
+        : "CAM0 (main): " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase()
+          + (switchedOn ? "" : ". Dual sensor is off: CAM0 only."));
       card.classList.toggle("locked", !configured);
-      const viewField = document.getElementById("settingsPreviewSourceField");   // Monitoring > External monitor
+      card.classList.toggle("dual-off", configured && !switchedOn);
+      buildOptionButtons("dualSensorEnabledOptions", dualOnOff(configured), switchedOn ? "On" : "Off", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_dual_sensor_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+      // Monitoring > External monitor: the HDMI view, while dual sensor is on. Saved now; the HDMI shows it once the
+      // dual HDMI view is built (T64-T65, design §5.2), so the select is greyed with a note until then.
+      const viewField = document.getElementById("settingsPreviewSourceField");
       if (viewField)
-        viewField.style.display = configured ? "" : "none";
+        viewField.style.display = configured && switchedOn ? "" : "none";
+      const viewSelect = document.getElementById("settingsPreviewSourceSelect");
+      if (viewSelect)
+        viewSelect.disabled = true;
+      setText("settingsPreviewSourceNote", "Which camera the HDMI monitor shows. Not yet: the HDMI shows CAM0 until "
+        + "its dual view is built; your choice is kept for then.");
+      const active = configured && switchedOn;
 
       const raw = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings.trim() : "unison";
       const unison = raw === "unison";
       const tied = unison ? dualTies.map(([token]) => token)
         : raw.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
-      buildOptionButtons("dualSensorUnisonOptions", dualOnOff(configured), unison ? "On" : "Off",
+      buildOptionButtons("dualSensorUnisonOptions", dualOnOff(active), unison ? "On" : "Off",
         // Off keeps every control tied, so nothing changes until a tie is switched off.
         (value) => sendCam1Settings(value === "On" ? "unison" : dualTies.map(([token]) => token).join(",")), 2);
 
@@ -20780,7 +20807,7 @@ std::string_view webControlPageHtml()
         const grid = createDomElement("div", "pill-grid ladder-pair");
         row.appendChild(grid);
         ties.appendChild(row);
-        buildOptionButtonsInto(grid, dualOnOff(configured && !unison), tied.includes(token) ? "On" : "Off", (value) => {
+        buildOptionButtonsInto(grid, dualOnOff(active && !unison), tied.includes(token) ? "On" : "Off", (value) => {
           const next = value === "On" ? tied.concat([token]) : tied.filter((other) => other !== token);
           sendCam1Settings(dualTies.map(([other]) => other).filter((other) => next.includes(other)).join(","));
         }, 2);
@@ -20790,7 +20817,7 @@ std::string_view webControlPageHtml()
       });
 
       buildOptionButtons("dualSensorRecordOptions", dualRecordOptions.map((value) => ({
-        value, label: value, enabled: configured,
+        value, label: value, enabled: active,
       })), uiState.record_cameras || "Both", async (value) => {
         try {
           await sendCommand({ cmd: "set_record_cameras", value });
