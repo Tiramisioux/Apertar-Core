@@ -445,12 +445,21 @@ std::string_view webControlPageHtml()
       --p0-l: 50%; --p1-l: 0%;
     }
 
-    /* Both views: the panes carry their own pills, so no band above them. The stage is two 16:9 panes high plus the
-       band below for the timecode and REC (9/13 of the height is the panes). Below 700 px the stacked rule wins. */
+    /* Both views: the panes carry their own pills, timecodes and REC, so the stage is exactly the two 16:9 panes, with
+       no band above or below. Below 700 px the stacked rule wins. */
     .preview-stage.dual.view-both,
     .preview-stage.dual.view-bothleft {
-      aspect-ratio: 32 / 13;
-      --p0-t: 0%; --p1-t: 0%; --p0-h: 69.23%; --p1-h: 69.23%;
+      aspect-ratio: 32 / 9;
+      --p0-t: 0%; --p1-t: 0%; --p0-h: 100%; --p1-h: 100%;
+    }
+
+    /* The VU meter (16 px in from the stage's bottom-left, 34 px wide) now lies on the left pane: that pane's timecode
+       moves to its right. */
+    @media (min-width: 701px) {
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-both .pane-tc.p0,
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-bothleft .pane-tc.p1 {
+        left: 58px;
+      }
     }
 
     .preview-stage.dual.view-cam0 {
