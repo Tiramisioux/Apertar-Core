@@ -13291,7 +13291,8 @@ std::optional<std::string> ApertarCoreApp::cam1RefusalBefore(const ControlComman
     ControlClient::Snapshot cam1 = cam1Client_.snapshot();
     if (command.name == "set_dual_sensor_enabled" && cam1.recording)
         return std::string("Stop recording first.");
-    if (cam1.recording && !camera_.isRecording() && commandclasses::refusedWhileCam1Records(command.name))
+    const bool filterOnly = command.name == "set_mode_ladder" && commandclasses::isAspectsOnlyLadder(command.fields);   // accepted in a take
+    if (cam1.recording && !camera_.isRecording() && !filterOnly && commandclasses::refusedWhileCam1Records(command.name))
         return std::string(cam1state::kCam1RecordingRefusal);
     if (command.name == "record_start") {
         cam1state::BusyVerdict verdict = cam1state::busyVerdict(cam1.pending, cam1.busyForMs, false);
@@ -13323,8 +13324,26 @@ std::string ApertarCoreApp::handleCam1Only(const ControlCommand &command, const 
     const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
     if (const auto down = cam1state::linkDownRefusal(cam1WordOf(cam1), cam1.linked))
         return errorReply(command.id, *down);
-    if (command.name == "get_mode_ladder" || command.name == "set_mode_ladder")
-        return errorReply(command.id, cam1state::kCam1DidNotAnswer);   // the relayed ladder pair: T61 piece 4
+    if (command.name == "get_mode_ladder" || command.name == "set_mode_ladder") {
+        // The relayed ladder pair (design 4.4): cam1's table can only be read from its own reply, so the caller waits for it,
+        // up to 1 s. The read is outside the FIFO and the count; the setter goes through both and keeps its order.
+        std::map<std::string, std::string> ladderFields = command.fields;
+        for (const char *drop : {"id", "cmd", "camera"})
+            ladderFields.erase(drop);
+        const std::shared_ptr<ControlClient::Reply> reply = command.name == "get_mode_ladder"
+            ? cam1Client_.readNow(command.name, ladderFields)
+            : cam1Client_.enqueueWithReply(command.name, ladderFields);
+        if (!reply)
+            return errorReply(command.id, "CAM1 is offline.");
+        std::string line;
+        if (!reply->wait(cam1state::kBusyWaitMs, &line)) {
+            cam1Client_.forget(reply);
+            return errorReply(command.id, cam1state::kCam1DidNotAnswer);
+        }
+        if (!jsonkeys::boolOf(line, "ok").value_or(false))
+            return errorReply(command.id, jsonkeys::stringOf(line, "error").value_or("CAM1 refused."));
+        return okReply(command.id, resync::replyMembers(line));
+    }
     // cam0 records alone: a reconfigure-type setter on cam1 waits for the stop (design 4.3).
     if (commandclasses::reconfiguresCamera(command.name) && (camera_.isRecording() || camera_.rawTakeActive()))
         return errorReply(command.id, cam1state::kCam0RecordingRefusal);
