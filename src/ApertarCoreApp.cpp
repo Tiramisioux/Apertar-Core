@@ -9,6 +9,7 @@
 #include "camera/CameraPort.hpp"
 #include "camera/ExposureMetering.hpp"
 #include "ipc/Cam1State.hpp"
+#include "ipc/Cam1Texts.hpp"
 #include "ipc/CommandClasses.hpp"
 #include "ipc/JsonKeys.hpp"
 #include "util/TakeSlots.hpp"
@@ -2251,11 +2252,8 @@ std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
 // The `cam1` object and `record_cameras` for both state bodies (design 4.5), with a leading comma; "" when cam1 is not
 // configured, so a one-sensor rig, or the switch off, keeps today's state byte for byte. Reads the relay's snapshot
 // only: no commandMutex_, no controller accessor.
-std::string cam1StateMembers(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+std::string cam1WordOf(const ControlClient::Snapshot &cam1)
 {
-    if (!client.configured())
-        return {};
-    const ControlClient::Snapshot cam1 = client.snapshot();
     cam1state::RankInputs rank;
     rank.linked = cam1.linked;
     rank.lost = cam1.lost;
@@ -2265,7 +2263,15 @@ std::string cam1StateMembers(const ControlClient &client, const SharedUiSettings
     rank.refused = cam1.refused;
     rank.standby = cam1.standby;
     rank.pending = cam1.pending;
-    const std::string word = cam1state::word(rank);
+    return cam1state::word(rank);
+}
+
+std::string cam1StateMembers(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+{
+    if (!client.configured())
+        return {};
+    const ControlClient::Snapshot cam1 = client.snapshot();
+    const std::string word = cam1WordOf(cam1);
 
     cam1state::Cam1View view;
     view.state = word;
@@ -13144,14 +13150,21 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (secondaryRole())
         return handleCommandLocal(command);   // the secondary never relays and ignores the camera field (design 4.2)
     const bool cam1Configured = cam1Client_.configured();
+    // The ties (amendment A2) matter only to a command with a `camera` field or one that is forwarded.
+    commandclasses::Ties ties;
+    if (cam1Configured && (command.fields.count("camera") || commandclasses::classOf(command.name) == commandclasses::Class::Both))
+        ties = commandclasses::parseTies(readSharedUiSettings().cam1Settings);
     const auto cameraField = command.fields.find("camera");
     if (cameraField != command.fields.end()) {
-        if (const auto refusal = commandclasses::cameraFieldRefusal(command.name, cameraField->second, cam1Configured))
+        if (const auto refusal = commandclasses::cameraFieldRefusal(command.name, cameraField->second, cam1Configured, ties, command.fields))
             return errorReply(command.id, *refusal);
     }
     if (cam1Configured) {
         if (const auto refusal = cam1RefusalBefore(command))
             return errorReply(command.id, *refusal);
+        // `camera=cam1` goes to cam1 alone and never runs locally (design 4.1 The hook).
+        if (cameraField != command.fields.end() && cameraField->second == "cam1" && commandclasses::takesCameraField(command.name))
+            return handleCam1Only(command, ties);
     }
     const std::string reply = handleCommandLocal(command);
     // Standby is the primary's own flag for the relay thread, which must not ask the controller (its mutex_).
@@ -13160,7 +13173,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     else if (command.name == "wake" && reply.rfind("{\"ok\":true", 0) == 0)
         primaryStandby_.store(false, std::memory_order_release);
     if (cam1Configured)
-        cam1ForwardAfter(command, reply);
+        cam1ForwardAfter(command, reply, ties);
     return reply;
 }
 
@@ -13189,11 +13202,39 @@ std::optional<std::string> ApertarCoreApp::cam1RefusalBefore(const ControlComman
 
 // After the local ok: the one place a command goes to cam1. The seam for part 2's tie filter is
 // commandclasses::planForward. A forward that cannot be sent (no link) is dropped; the resync on relink catches up.
-void ApertarCoreApp::cam1ForwardAfter(const ControlCommand &command, const std::string &reply)
+void ApertarCoreApp::cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties)
 {
-    const commandclasses::ForwardPlan plan = commandclasses::planForward(command.name, command.fields, reply);
+    const commandclasses::ForwardPlan plan = commandclasses::planForward(command.name, command.fields, reply, ties);
     if (plan.send)
         cam1Client_.enqueue(command.name, plan.fields);
+}
+
+// A `camera=cam1` setter on an untied control (design 4.1 The hook): cam0 does not run it. It is queued for cam1 alone,
+// in the same FIFO and busy count as the forwards, and the caller gets ok with no settings body; the result shows in
+// cam1.settings at the next poll, and a refusal or a clamp from cam1 in cam1.message. Runs under commandMutex_.
+std::string ApertarCoreApp::handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties)
+{
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    if (const auto down = cam1state::linkDownRefusal(cam1WordOf(cam1), cam1.linked))
+        return errorReply(command.id, *down);
+    if (command.name == "get_mode_ladder" || command.name == "set_mode_ladder")
+        return errorReply(command.id, cam1state::kCam1DidNotAnswer);   // the relayed ladder pair: T61 piece 4
+    // cam0 records alone: a reconfigure-type setter on cam1 waits for the stop (design 4.3).
+    if (commandclasses::reconfiguresCamera(command.name) && (camera_.isRecording() || camera_.rawTakeActive()))
+        return errorReply(command.id, cam1state::kCam0RecordingRefusal);
+    std::map<std::string, std::string> fields;
+    if (command.name == "apply_preset") {
+        fields = commandclasses::presetKeysFor(command.fields, ties, commandclasses::PresetReach::Untied);
+        if (fields.empty())
+            return okReply(command.id);   // nothing in the preset is cam1's to apply
+    } else {
+        fields = command.fields;
+        for (const char *drop : {"id", "cmd", "camera"})
+            fields.erase(drop);
+    }
+    if (!cam1Client_.enqueue(command.name, fields))
+        return errorReply(command.id, "CAM1 is offline.");
+    return okReply(command.id);
 }
 
 std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)

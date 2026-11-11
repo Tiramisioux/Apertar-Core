@@ -10,6 +10,7 @@
 #include "hardware/Pcf8574Input.hpp"
 #include "hardware/RecordingIndicatorOutput.hpp"
 #include "hardware/TriggerOutput.hpp"
+#include "ipc/CommandClasses.hpp"
 #include "ipc/ControlClient.hpp"
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
@@ -88,7 +89,8 @@ private:
     // The relay (design 4.1). All of it is inert while cam1Client_ is not configured.
     void startCam1Client();
     std::optional<std::string> cam1RefusalBefore(const ControlCommand &command);
-    void cam1ForwardAfter(const ControlCommand &command, const std::string &reply);
+    void cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties);
+    std::string handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties);
     bool cam1HoldsMedium() const;
     // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
     bool secondaryRole() const;

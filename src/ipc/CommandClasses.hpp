@@ -111,6 +111,137 @@ inline const char *controlText(Control control)
     }
 }
 
+// ---- A2: which controls are tied to cam0 --------------------------------------------------------------------------------
+// `cam1Settings` is Unison (default: everything tied) or a comma list of the tied controls. A tied control is cam0's value,
+// forwarded and compared; an untied one is per camera. `resolution` stands for the whole Recording group.
+struct Ties {
+    bool resolution = true;
+    bool iso = true;
+    bool shutter = true;
+    bool fps = true;
+    bool wb = true;
+
+    bool tied(Control control) const
+    {
+        switch (control) {
+        case Control::Resolution: return resolution;
+        case Control::Iso: return iso;
+        case Control::Shutter: return shutter;
+        case Control::Fps: return fps;
+        case Control::Wb: return wb;
+        default: return true;   // the always-shared setters and anything unlisted go to both
+        }
+    }
+    bool allTied() const { return resolution && iso && shutter && fps && wb; }
+    bool noneTied() const { return !resolution && !iso && !shutter && !fps && !wb; }
+    bool operator==(const Ties &other) const
+    {
+        return resolution == other.resolution && iso == other.iso && shutter == other.shutter && fps == other.fps && wb == other.wb;
+    }
+    bool operator!=(const Ties &other) const { return !(*this == other); }
+};
+
+// Reads UI.conf's cam1Settings in its normalised form: "unison" (or anything unreadable) ties all five, "" none, and a
+// list names the tied ones.
+inline Ties parseTies(std::string_view canonical)
+{
+    Ties ties;
+    size_t b = 0, e = canonical.size();
+    while (b < e && (canonical[b] == ' ' || canonical[b] == '\t')) ++b;
+    while (e > b && (canonical[e - 1] == ' ' || canonical[e - 1] == '\t')) --e;
+    const std::string_view text = canonical.substr(b, e - b);
+    if (text == "unison") return ties;
+    ties = Ties{false, false, false, false, false};
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t comma = text.find(',', start);
+        std::string_view token = text.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+        while (!token.empty() && token.front() == ' ') token.remove_prefix(1);
+        while (!token.empty() && token.back() == ' ') token.remove_suffix(1);
+        if (token == "resolution") ties.resolution = true;
+        else if (token == "iso") ties.iso = true;
+        else if (token == "shutter") ties.shutter = true;
+        else if (token == "fps") ties.fps = true;
+        else if (token == "wb") ties.wb = true;
+        if (comma == std::string_view::npos) break;
+        start = comma + 1;
+    }
+    return ties;
+}
+
+using Fields = std::map<std::string, std::string>;
+
+// ---- presets (§4.4 "What cam1 gets") -------------------------------------------------------------------------------------
+// apply_preset arrives flat (the clients flatten a preset's `settings`). cam1 gets only the camera keys, minus the clip
+// template (the primary's), with `timecodeMode` mapped to `cameraTimecodeMode`.
+
+// App normalizeTimecodeModeValue: "rec run" and "rec_run" (any case) read "Rec Run", everything else "Free Run"; the
+// camera key takes `rec_run` or `free_run` only.
+inline std::string cameraTimecodeFor(std::string_view value)
+{
+    std::string text;
+    for (const char c : value) text.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.erase(text.begin());
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.pop_back();
+    return text == "rec run" || text == "rec_run" ? "rec_run" : "free_run";
+}
+
+namespace detail {
+inline bool startsWith(std::string_view text, std::string_view prefix)
+{
+    return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
+}
+} // namespace detail
+
+// The control a preset key belongs to; Control::None for a key cam1 never gets (the clip template, anything unknown).
+inline Control controlOfPresetKey(std::string_view key)
+{
+    using detail::startsWith;
+    if (!startsWith(key, "camera")) return Control::None;
+    if (key == "cameraClipNameTemplate") return Control::None;
+    if (key == "cameraFps" || key == "cameraConformFps") return Control::Fps;
+    if (key == "cameraIso" || key == "cameraExposureCompensation" || key == "cameraExposureMetering") return Control::Iso;
+    if (startsWith(key, "cameraShutter")) return Control::Shutter;
+    if (key == "cameraWhiteBalance") return Control::Wb;
+    if (startsWith(key, "cameraFpsSpeedRamp") || key == "cameraFpsPhaseLock" || key == "cameraTimecodeMode") return Control::Shared;
+    if (startsWith(key, "cameraResolution") || key == "cameraRecordingFormat" || startsWith(key, "cameraCdng") ||
+        key == "cameraLossyDngRatio" || startsWith(key, "cameraProres") || key == "cameraTuningFile" ||
+        key == "cameraH264Resolution" || key == "cameraRawBitDepth" || key == "cameraClearHdr" || startsWith(key, "cameraHdr") ||
+        startsWith(key, "cameraAutofocus"))
+        return Control::Resolution;
+    return Control::None;
+}
+
+// The keys that pick cam1's mode: left out of a resync's preset while the primary's ladder or its override picks the mode.
+inline bool isPresetModeKey(std::string_view key)
+{
+    return detail::startsWith(key, "cameraResolution") || key == "cameraRawBitDepth" || key == "cameraClearHdr";
+}
+
+enum class PresetReach {
+    Forward,   // apply_preset without camera, and the resync: the tied controls' keys plus the always-shared keys
+    Untied,    // apply_preset camera=cam1: only the untied controls' keys
+};
+
+inline Fields presetKeysFor(const Fields &flat, const Ties &ties, PresetReach reach, bool dropModeKeys = false)
+{
+    Fields out;
+    Fields camera = flat;
+    // timecodeMode goes as cameraTimecodeMode, dropped when the preset has its own.
+    const auto uiTimecode = camera.find("timecodeMode");
+    if (uiTimecode != camera.end() && camera.find("cameraTimecodeMode") == camera.end())
+        camera["cameraTimecodeMode"] = cameraTimecodeFor(uiTimecode->second);
+    for (const auto &[key, value] : camera) {
+        const Control control = controlOfPresetKey(key);
+        if (control == Control::None) continue;
+        if (dropModeKeys && isPresetModeKey(key)) continue;
+        const bool keep = control == Control::Shared ? reach == PresetReach::Forward
+                          : reach == PresetReach::Forward ? ties.tied(control) : !ties.tied(control);
+        if (keep) out[key] = value;
+    }
+    return out;
+}
+
 // The commands that take a `camera` field (§4.2): the camera setters, apply_preset and the ladder pair. On any other
 // command the field means nothing and is ignored, as today.
 inline bool takesCameraField(std::string_view name)
@@ -118,19 +249,34 @@ inline bool takesCameraField(std::string_view name)
     return classOf(name) == Class::Both || name == "get_mode_ladder";
 }
 
-// The refusal for a `camera` field, or nullopt to carry on. `cam1Configured` is the relay's configured test (§4.1).
-// T61 part 1: a `camera=cam1` setter is always refused, because every control is treated as tied. Part 2 replaces the
-// last branch with the tie lookup (cam1Settings, amendment A2) and lets an untied control through.
-inline std::optional<std::string> cameraFieldRefusal(std::string_view name, std::string_view camera, bool cam1Configured)
+// The refusal for a `camera` field, or nullopt to carry on. `cam1Configured` is the relay's configured test (§4.1); `ties`
+// decide which controls cam1 may be set on (amendment A2). `fields` is the command's own, for the ladder's special cases.
+inline std::optional<std::string> cameraFieldRefusal(std::string_view name, std::string_view camera, bool cam1Configured,
+                                                     const Ties &ties = Ties{}, const Fields &fields = Fields{})
 {
     if (!takesCameraField(name) || camera.empty() || camera == "cam0") return std::nullopt;
     if (camera != "cam1") return std::string("camera must be cam0 or cam1.");
     if (!cam1Configured) return std::string("No CAM1 is configured.");
+    if (name == "get_mode_ladder") return std::nullopt;   // a relayed read, whenever cam1 is configured (§4.4)
     const Control control = controlOf(name);
     if (control == Control::Shared) return std::string("Both cameras share this setting.");
-    if (control == Control::None)   // apply_preset, get_mode_ladder: part 2 gives them their own rules
-        return std::string("CAM1 follows CAM0. Untie a control in System > Dual Sensor first.");
-    return std::string("CAM1 follows CAM0 for ") + controlText(control) + ". Untie it in System > Dual Sensor first.";
+    if (name == "apply_preset") {
+        // Only the untied controls' keys reach cam1; with none untied there is nothing to apply.
+        if (ties.allTied()) return std::string("CAM1 follows CAM0. Untie a control in System > Dual Sensor first.");
+        return std::nullopt;
+    }
+    if (name == "set_mode_ladder") {
+        const auto enabled = fields.find("enabled");
+        if (enabled != fields.end() && (enabled->second == "true" || enabled->second == "1"))
+            return std::string("The Mode Ladder runs on CAM0 only.");   // cam1's ladder is off by rule
+        const bool aspectsOnly = fields.count("aspects") && !fields.count("resolutions") && !fields.count("enabled") &&
+                                 !fields.count("ramp_ready");
+        if (aspectsOnly || !ties.resolution) return std::nullopt;   // the filter is each Core's own
+    }
+    if (control == Control::None) return std::nullopt;
+    if (ties.tied(control))
+        return std::string("CAM1 follows CAM0 for ") + controlText(control) + ". Untie it in System > Dual Sensor first.";
+    return std::nullopt;
 }
 
 // §4.3, "cam1 records alone": the primary accepts reads, the exposure setters, display keys, user_activity and
@@ -141,18 +287,26 @@ inline bool refusedWhileCam1Records(std::string_view name)
     return classOf(name) == Class::Both && !isExposureSetter(name);
 }
 
-// What goes to cam1 after the primary's ok reply (§4.1 The hook). The seam for part 2: the tie filter goes here, and
-// nowhere else. Part 1 treats everything as Unison: the whole Both row is forwarded.
+// What goes to cam1 after the primary's ok reply (§4.1 The hook): the whole Both row for the controls that are tied, plus
+// the always-shared ones. A command on an untied control goes by `camera` instead and is not forwarded here.
 struct ForwardPlan {
     bool send = false;
     std::map<std::string, std::string> fields;   // without id, cmd and camera
 };
 
-inline ForwardPlan planForward(std::string_view name, const std::map<std::string, std::string> &fields, std::string_view primaryReply)
+inline ForwardPlan planForward(std::string_view name, const std::map<std::string, std::string> &fields, std::string_view primaryReply,
+                               const Ties &ties = Ties{})
 {
     ForwardPlan plan;
     if (classOf(name) != Class::Both) return plan;
     if (primaryReply.rfind("{\"ok\":true", 0) != 0) return plan;
+    if (name == "apply_preset") {
+        // The camera keys of the tied controls and the always-shared keys; nothing left, nothing sent.
+        plan.fields = presetKeysFor(fields, ties, PresetReach::Forward);
+        plan.send = !plan.fields.empty();
+        return plan;
+    }
+    if (!ties.tied(controlOf(name))) return plan;
     plan.fields = fields;
     for (const char *drop : {"id", "cmd", "camera"}) plan.fields.erase(drop);
     if (name == "enter_standby") {
@@ -170,6 +324,12 @@ inline ForwardPlan planForward(std::string_view name, const std::map<std::string
     }
     plan.send = true;
     return plan;
+}
+
+// The setters that reconfigure the sensor (§4.3 Busy window): refused on cam1 while cam0 records alone.
+inline bool reconfiguresCamera(std::string_view name)
+{
+    return name == "apply_preset" || controlOf(name) == Control::Resolution;
 }
 
 } // namespace apertar::commandclasses
