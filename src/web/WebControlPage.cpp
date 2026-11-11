@@ -631,6 +631,7 @@ std::string_view webControlPageHtml()
       position: absolute;
       inset: 0;
       border: 4px solid #ff4d4d;
+      border-radius: calc(var(--radius-xl) - 1px);   /* the card's corner, inside its 1px border */
       pointer-events: none;
       z-index: 6;
     }
