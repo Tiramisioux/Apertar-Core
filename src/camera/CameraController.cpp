@@ -12826,6 +12826,29 @@ bool CameraController::previewClipName(const std::string &value, std::string *ex
     return true;
 }
 
+apertar::clipname::TwoNames CameraController::twoCameraClipNames(const apertar::clipname::PartnerNaming &partner,
+                                                                 int64_t wallMicros, const std::string &templateText) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::filesystem::path root = mediaRootPath(mediaRoot_);
+    const std::chrono::system_clock::time_point at{std::chrono::duration_cast<std::chrono::system_clock::duration>(
+        std::chrono::microseconds(wallMicros))};
+    const apertar::clipname::Values own = clipNameValues(settings_, clipNameSensorLocked(), at);
+    return apertar::clipname::nameTwoCameras(
+        templateText.empty() ? settings_.clipNameTemplate : templateText, own, partner, wallMicros, settings_.fps,
+        [&](const std::string &name) {
+            std::error_code ec;
+            return std::filesystem::exists(root / name, ec);
+        },
+        [&] {
+            std::vector<std::string> names;
+            std::error_code ec;
+            for (const auto &entry : std::filesystem::directory_iterator(root, ec))
+                names.push_back(entry.path().filename().string());
+            return names;
+        });
+}
+
 bool CameraController::setFpsPhaseLock(bool enabled)
 {
     std::lock_guard<std::mutex> lock(mutex_);

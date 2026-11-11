@@ -12,6 +12,8 @@
 #include "ipc/Cam1Texts.hpp"
 #include "ipc/CommandClasses.hpp"
 #include "ipc/JsonKeys.hpp"
+#include "ipc/Cam1Names.hpp"
+#include "ipc/TakePlan.hpp"
 #include "util/TakeSlots.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
@@ -2292,7 +2294,10 @@ std::string cam1StateMembers(const ControlClient &client, const SharedUiSettings
     cameras.cam0Recording = cam0Recording;
     cameras.cam1State = word;
     cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
-    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + cam1state::recordCamerasWord(cameras) + "\"";
+    // A running take with cam1 in it names its own cameras (design 6.1); otherwise the policy's answer for the next press.
+    const std::string recordWord =
+        cam1.inTake ? (cam1.takeCam1Only ? "cam1" : "both") : std::string(cam1state::recordCamerasWord(cameras));
+    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + recordWord + "\"";
 }
 
 // The running (or last) take's folder name and, for a take with start_us, the slots of its first and last frame
@@ -8272,6 +8277,7 @@ void ApertarCoreApp::startCam1Client()
         return std::pair<int64_t, int64_t>{rate.first, rate.second};
     };
     options.primaryLocked = [this] { return relayPrimaryLocked_.load(std::memory_order_acquire); };
+    options.onTakeChange = [this] { onCam1TakeChange(); };
     cam1Client_.start(std::move(options));
 }
 
@@ -8531,7 +8537,7 @@ bool ApertarCoreApp::start()
         std::cerr << "ApertarCore recording indicator LED disabled: "
                   << recordingIndicatorOutput_.lastError() << "\n";
     }
-    recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive());
+    recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive());
     recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
     syncRecordingTracking(camera_.isRecording());
 
@@ -8699,7 +8705,7 @@ void ApertarCoreApp::wait()
         lock.unlock();
         {
             std::lock_guard commandLock(commandMutex_);
-            if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
+            if (camera_.checkRecordingFailure()) endFailedTake();
         }
         if (secondaryRole()) {   // no idle-standby timer on the secondary (design 3.3); the loop and the check above stay
             lock.lock();
@@ -8709,7 +8715,7 @@ void ApertarCoreApp::wait()
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const int timeout = readSharedUiSettings().standbyTimeoutSeconds;
         if (timeout != previousTimeout || camera_.isRecording() ||
-            camera_.timelapseActive() || soundRecordingActive()) {
+            camera_.timelapseActive() || soundRecordingActive() || cam1RecordingActive()) {
             lastUserActivityMs_.store(now);
             previousTimeout = timeout;
         }
@@ -9431,7 +9437,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             WebServer::Response response;
             response.status = 400;
             response.contentType = "application/json; charset=utf-8";
@@ -9514,7 +9520,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             WebServer::Response response;
             response.status = 400;
             response.contentType = "application/json; charset=utf-8";
@@ -9728,7 +9734,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const CameraState cameraState = camera_.state();
     const CaptureSettings settings = camera_.settings();
     const bool soundRecording = soundRecordingActive();
-    const bool recording = camera_.isRecording() || soundRecording;
+    const bool recording = camera_.isRecording() || soundRecording || cam1OnlyTakeActive();
     const bool timelapseActive = camera_.timelapseActive();
     const double timelapseIntervalSeconds = camera_.timelapseIntervalSeconds();
     const std::string sensorName = camera_.sensorName();
@@ -11132,7 +11138,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
                     { "count", std::to_string(photoBurstCountFromValue(uiSettings.photoBurst)) },
                 });
             }
-        } else if (camera_.isRecording() || soundRecordingActive()) {
+        } else if (camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive()) {
             dispatch("record_stop");
         } else {
             dispatch("record_start");
@@ -11141,7 +11147,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "record_toggle") {
-        if (camera_.isRecording() || soundRecordingActive())
+        if (camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive())
             dispatch("record_stop");
         else
             dispatch("record_start");
@@ -11169,7 +11175,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "eject") {
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             std::cerr << "Hardware input eject ignored while recording or timelapse is active.\n";
             return;
         }
@@ -11470,7 +11476,7 @@ void ApertarCoreApp::runMediaWatcher()
                 if (camera_.isRecording() && camera_.flagMediaFault(why, true)) {
                     std::lock_guard<std::mutex> commandLock(commandMutex_);
                     if (camera_.checkRecordingFailure())
-                        syncRecordingTracking(false);
+                        endFailedTake();
                 }
             }
             // Only now the profile and the root helper: a sudo round-trip must not
@@ -11821,7 +11827,7 @@ void ApertarCoreApp::runStoragePrerollOnce(storagepreroll::Trigger trigger, unsi
         if (!storagePrerollRunning_.load())
             return;
         if (camera_.checkRecordingFailure())
-            syncRecordingTracking(false);
+            endFailedTake();
         const storagepreroll::GuardDecision decision = storagePrerollGuard(trigger);
         if (!decision.run) {
             skip(decision.reason);
@@ -12944,7 +12950,8 @@ void ApertarCoreApp::wakeControlsWorker()
 
 bool ApertarCoreApp::recordingGateActive()
 {
-    return camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.stillExposureStatus().active;
+    return camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.stillExposureStatus().active ||
+           cam1OnlyTakeActive();
 }
 
 // T39: one thread applies the hardware file. It wakes on a save, and every 2 s looks for an edit made outside
@@ -13030,7 +13037,7 @@ void ApertarCoreApp::applyHardwareText(const std::string &text)
     if (gpio) {
         recordingIndicatorOutput_.start();
         std::lock_guard<std::mutex> commandLock(commandMutex_);   // a record_start publishes under this lock
-        recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive());
+        recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive());
         recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
     }
     if (groups.count("CFexpress hat"))
@@ -13397,6 +13404,187 @@ std::string ApertarCoreApp::handleCam1Only(const ControlCommand &command, const 
     return okReply(command.id);
 }
 
+namespace {
+// The slot clock of the takes (CLOCK_BOOTTIME, the SensorTimestamp domain the controller's gate uses; on the Pi, which
+// never suspends, it reads as CLOCK_MONOTONIC) and the wall clock, in microseconds.
+int64_t takeClockUs(clockid_t clock)
+{
+    timespec now{};
+    ::clock_gettime(clock, &now);
+    return static_cast<int64_t>(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
+
+takeslots::Rate takeRateOf(double fps)
+{
+    const auto rate = recordingFrameRate(fps > 0 ? fps : 25.0);
+    return takeslots::Rate{rate.first, rate.second};
+}
+
+int64_t takePeriodUs(const takeslots::Rate &rate)
+{
+    return rate.valid() ? 1000000 * rate.den / rate.num : 40000;
+}
+
+// cam1's boundary on its own grid (design 6.2, "Two fps in Independent"): (ceil(t / T1) - 1/2) T1. Equal rates keep t.
+int64_t onCam1Grid(int64_t boundaryUs, const takeslots::Rate &rate0, const takeslots::Rate &rate1)
+{
+    if (rate0.num * rate1.den == rate1.num * rate0.den)
+        return boundaryUs;
+    return takeslots::boundaryUs(takeslots::ceilSlotUs(boundaryUs, rate1), rate1);
+}
+} // namespace
+
+ApertarCoreApp::Cam1TakeStart ApertarCoreApp::prepareCam1Take(const ControlCommand &command, const TakeViews &views,
+                                                              CameraController::TakeOptions &take)
+{
+    Cam1TakeStart out;
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    takeplan::PressInputs press;
+    if (command.fields.count("cameras")) {
+        press.explicitCameras = command.string("cameras").value_or("");
+        if (!takeplan::maskOfCameras(press.explicitCameras)) {
+            out.refused = true;
+            out.refusal = takeplan::kCamerasInvalid;
+            return out;
+        }
+    }
+    press.recordCameras = views.recordCameras;
+    press.previewSource = views.previewSource;
+    press.hdmi1Source = views.hdmi1Source;
+    press.cam1Word = cam1WordOf(cam1);
+    press.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
+    const takeplan::Decision decision = takeplan::decide(press);
+    if (decision.refused) {
+        out.refused = true;
+        out.refusal = decision.refusal;
+        return out;
+    }
+    out.cameras = decision.cameras;
+    if (decision.droppedCam1)
+        std::cerr << "ApertarCore take rolls without CAM1 (cam1 " << press.cam1Word << ")\n";
+
+    // One clip number for both names, each built from its own camera's values (design 6.2 step 2). A clip_name given on
+    // the command (a hand-made take) stays cam0's.
+    const int64_t wallUs = takeClockUs(CLOCK_REALTIME);
+    const int64_t bootUs = takeClockUs(CLOCK_BOOTTIME);
+    const clipname::TwoNames names = camera_.twoCameraClipNames(cam1names::partnerFrom(cam1.settings, cam1.sensor), wallUs);
+    if (!names.ok) {
+        out.refused = true;
+        out.refusal = names.error;
+        return out;
+    }
+    if (take.clipName.empty() && (out.cameras & takeplan::kCam0))
+        take.clipName = names.cam0;
+    if (!(out.cameras & takeplan::kCam1))
+        return out;   // a cam0-only take starts as today: now, no lead (design 6.2)
+
+    // The slot (design 6.2 step 1) on cam0's grid, the lead from the larger period; cam1's boundary on its own grid.
+    const CaptureSettings settings = camera_.settings();
+    const takeslots::Rate rate0 = takeRateOf(settings.fps);
+    const double fps1 = jsonkeys::numberOf(cam1.settings, "fps").value_or(settings.fps);
+    const takeslots::Rate rate1 = takeRateOf(fps1);
+    const int64_t lead = takeplan::leadUs(settings.fpsPhaseLock, std::max(takePeriodUs(rate0), takePeriodUs(rate1)));
+    if (take.startUs <= 0)
+        take.startUs = takeslots::startUsFor(bootUs, lead, rate0);
+    if (!take.hasTcOffset) {   // timecode from the slot on both Cores (design 6.3): slot time + the wall clock's offset
+        take.hasTcOffset = true;
+        take.tcOffsetUs = wallUs - bootUs;
+    }
+    if (out.cameras == takeplan::kBoth && takeslots::fpsDiffer(fps1, settings.fps))
+        take.unsyncedReason = "two frame rates";
+    out.cam1StartUs = onCam1Grid(take.startUs, rate0, rate1);
+
+    // Published before the relay can send cam1's record_start (design 4.1 Locks, 6.2 step 3), so a poll answered in between
+    // finds cam1's take under rule 1.
+    const int64_t pickedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    cam1Client_.publishTake(names.cam1, out.cameras == takeplan::kCam1, out.cam1StartUs, pickedMs);
+    out.reply = cam1Client_.sendStart({
+        { "cameras", "cam1" },
+        { "start_us", std::to_string(out.cam1StartUs) },
+        { "clip_name", names.cam1 },
+        { "tc_offset_us", std::to_string(take.tcOffsetUs) },
+        { "audio_enabled", "false" },
+        { "gyro_enabled", "false" },
+        { "sound_only", "false" },
+    });
+    if (!out.reply) {   // the link went between the snapshot and now
+        cam1Client_.withdrawTake();
+        if (out.cameras == takeplan::kCam1) {
+            out.refused = true;
+            out.refusal = takeplan::downRefusal("offline");
+            return out;
+        }
+        out.cameras = takeplan::kCam0;
+        std::cerr << "ApertarCore take rolls without CAM1 (link down at the start)\n";
+    }
+    return out;
+}
+
+// A cam1-only take (design 6.2): the press waits up to 1 s for cam1's reply. The primary starts no camera and sets no
+// takePending_. Runs under commandMutex_; the wait is bounded by kBusyWaitMs.
+std::string ApertarCoreApp::startCam1OnlyTake(const ControlCommand &command, const Cam1TakeStart &plan)
+{
+    std::string line;
+    if (!plan.reply->wait(cam1state::kBusyWaitMs, &line)) {
+        cam1Client_.abandonTake(plan.cam1StartUs);   // a late start stops at once; the relink rules remember it (rule 2)
+        return errorReply(command.id, cam1state::kCam1DidNotAnswer);
+    }
+    if (!jsonkeys::boolOf(line, "ok").value_or(false)) {
+        cam1Client_.withdrawTake();
+        return errorReply(command.id, jsonkeys::stringOf(line, "error").value_or("CAM1 refused the take."));
+    }
+    cam1OnlyTake_.store(true, std::memory_order_release);
+    syncRecordingTracking(true);
+    publishEvent("{\"event\":\"recording\",\"active\":true}");
+    if (cam1Client_.takeClip().empty())   // cam1 left between its reply and here: the relay's end found no take to end
+        endCam1OnlyTake();
+    return okReply(command.id, "\"recording\":true,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+}
+
+void ApertarCoreApp::endCam1OnlyTake()
+{
+    if (!cam1OnlyTake_.exchange(false, std::memory_order_acq_rel))
+        return;
+    syncRecordingTracking(false);
+    publishEvent("{\"event\":\"recording\",\"active\":false}");
+    cam1Client_.takeFinished();
+}
+
+// Replaces `if (camera_.checkRecordingFailure()) syncRecordingTracking(false);` at the four sites (design 6.2 Failure
+// stops). cam0's active:false has gone out already; a two-camera take also stops cam1 on the next slot, with no wait.
+void ApertarCoreApp::endFailedTake()
+{
+    syncRecordingTracking(false);
+    if (secondaryRole() || !cam1Client_.configured() || cam1OnlyTakeActive() || cam1Client_.takeClip().empty())
+        return;
+    const CaptureSettings settings = camera_.settings();
+    const takeslots::Rate rate0 = takeRateOf(settings.fps);
+    const takeslots::Rate rate1 = takeRateOf(jsonkeys::numberOf(cam1Client_.snapshot().settings, "fps").value_or(settings.fps));
+    const int64_t stopUs = onCam1Grid(takeslots::stopUsFor(takeClockUs(CLOCK_BOOTTIME), 0, rate0), rate0, rate1);
+    std::cerr << "ApertarCore cam0's take failed: CAM1 stops on the next slot\n";
+    cam1Client_.stopTake(stopUs, 0);
+    cam1Client_.takeFinished();
+}
+
+// The relay's take events (design 4.6): an adopted cam1-only take (tally, `recording` with adopted:true, no pulse), or a
+// cam1-only take that ended without a press. On the relay thread with no lock held: publishEvent takes only the event and
+// the clients' write locks; nothing here takes commandMutex_ or the controller's mutex_.
+void ApertarCoreApp::onCam1TakeChange()
+{
+    const ControlClient::TakeEvents events = cam1Client_.takeEvents();
+    if (events.adopted) {
+        cam1OnlyTake_.store(true, std::memory_order_release);
+        syncRecordingTracking(true);
+        publishEvent("{\"event\":\"recording\",\"active\":true,\"adopted\":true}");
+    }
+    if (events.ended) {
+        if (!events.endReason.empty())
+            std::cerr << "ApertarCore cam1-only take ended: " << events.endReason << "\n";
+        endCam1OnlyTake();
+    }
+}
+
 std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
 {
     // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
@@ -13411,7 +13599,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (reason != playback::Hold::None)
             playbackYield().yieldFor(reason, playbackNowMs());
     }
-    if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
+    if (camera_.checkRecordingFailure()) endFailedTake();
     if (mediaDeleteActive_.load() && (command.name == "capture_photo" || command.name == "record_start" ||
                                       (command.name == "timelapse_start" && !camera_.timelapseActive())))
         return errorReply(command.id, "Deleting media. One moment.");
@@ -13435,7 +13623,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         std::lock_guard lock(mediaSpeedMutex_);
         speedTestActive = mediaSpeedTestRunning_;
     }
-    if (mediaAction && (camera_.isRecording() || soundRecordingActive() ||
+    if (mediaAction && (camera_.isRecording() || soundRecordingActive() || cam1RecordingActive() ||
                        camera_.timelapseActive() || camera_.mediaWritesPending() || speedTestActive))
         return errorReply(command.id, "Stop recording, still captures and media tests before changing media.");
     if (speedTestActive && (command.name == "record_start" || command.name == "capture_photo" ||
@@ -13765,7 +13953,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const MediaSnapshot mediaState = mediaSnapshot();
         const SharedUiSettingsSnapshot uiState = readSharedUiSettings();
         const bool soundRecording = soundRecordingActive();
-        const bool recording = camera_.isRecording() || soundRecording;
+        const bool recording = camera_.isRecording() || soundRecording || cam1OnlyTakeActive();
         // The lock's state as /api/state carries it (design §8.1): err_us is the last frame's grid error.
         const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
         std::ostringstream body;
@@ -15740,17 +15928,23 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
                 return errorReply(command.id, clipname::kInvalidClipName);
             }
         }
-        // Cam1 configured: the {cam} rule applies to a template-made name (ClipName.hpp ensureCamToken), and two
-        // different frame rates in a take that both cameras record make it NOT SYNCED from its first frame (design
-        // 6.2, "Two fps in Independent"). T64 narrows this to the cameras that really roll.
+        // Cam1 configured (design 6.1, 6.2): which cameras roll, one clip number for both names, and with cam1 in the take
+        // the slot, the published take and cam1's record_start, sent before the audio sleep and cam0's start. The {cam}
+        // rule applies to every name (ClipName.hpp ensureCamToken). With no cam1 none of this runs.
+        Cam1TakeStart cam1Take;
+        struct StartingGuard {
+            std::atomic<bool> &flag;
+            ~StartingGuard() { flag.store(false, std::memory_order_release); }
+        } startingGuard{primaryTakeStarting_};
         if (!secondaryRole() && cam1Client_.configured()) {
+            primaryTakeStarting_.store(true, std::memory_order_release);
             takeOptions.twoCameras = true;
-            if (uiSettings.recordCameras == "Both") {
-                const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
-                const auto cam1Fps = jsonkeys::numberOf(cam1.settings, "fps");
-                if (cam1.linked && cam1Fps && takeslots::fpsDiffer(*cam1Fps, camera_.settings().fps))
-                    takeOptions.unsyncedReason = "two frame rates";
-            }
+            cam1Take = prepareCam1Take(command, TakeViews{uiSettings.recordCameras, uiSettings.previewSource, uiSettings.hdmi1Source},
+                                       takeOptions);
+            if (cam1Take.refused)
+                return errorReply(command.id, cam1Take.refusal);
+            if (cam1Take.cameras == takeplan::kCam1)
+                return startCam1OnlyTake(command, cam1Take);
         }
 
         if (audioOptions.enabled) {
@@ -15758,8 +15952,13 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             std::this_thread::sleep_for(std::chrono::milliseconds(220));
         }
 
-        if (!camera_.startRecording(audioOptions, gyroOptions, takeOptions))
+        if (!camera_.startRecording(audioOptions, gyroOptions, takeOptions)) {
+            if (cam1Take.reply)   // cam1 was told: it stops what it started, at once (design 4.6)
+                cam1Client_.abandonTake(cam1Take.cam1StartUs);
             return errorReply(command.id, camera_.lastError());
+        }
+        if (!secondaryRole() && cam1Client_.configured() && !cam1Take.reply)
+            cam1Client_.noteTake();   // a take without cam1: this process has had a take (design 4.6 rule 3)
         syncRecordingTracking(true);
         return okReply(command.id, std::string("\"recording\":true,\"recording_has_dropped_frames\":")
                        + (camera_.recordingHasDroppedFrames() ? "true" : "false")
@@ -15850,10 +16049,45 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         bool stopPresent = false;
         if (!wholeNumberField(command, "stop_us", &stopUs, &stopPresent) || (stopPresent && stopUs <= 0))
             return errorReply(command.id, "stop_us must be a number.");
-        if (bufferbudget::safetyStopState().active.load(std::memory_order_acquire))
+        const bool safetyStop = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
+        if (safetyStop)
             stopUs = 0;
+        // cam1 in the take (design 6.2 Stop): its record_stop goes first, ahead of the relay's FIFO, and the press waits
+        // until the line is written, bounded at the stop lead minus 2T; cam0 then stops on the same slot. A safety stop
+        // stops cam0 at once and gives cam1 the next slot, with no wait. With the link down cam1's stop is kept.
+        const bool cam1Configured = !secondaryRole() && cam1Client_.configured();
+        if (cam1Configured && (cam1OnlyTakeActive() || !cam1Client_.takeClip().empty())) {
+            const CaptureSettings settings = camera_.settings();
+            const takeslots::Rate rate0 = takeRateOf(settings.fps);
+            const takeslots::Rate rate1 =
+                takeRateOf(jsonkeys::numberOf(cam1Client_.snapshot().settings, "fps").value_or(settings.fps));
+            const int64_t nowUs = takeClockUs(CLOCK_BOOTTIME);
+            const int64_t periodUs = takePeriodUs(rate0);
+            const int64_t slotStopUs =
+                stopPresent ? stopUs : takeslots::stopUsFor(nowUs, safetyStop ? 0 : takeplan::stopLeadUs(periodUs), rate0);
+            const ControlClient::StopOutcome outcome =
+                cam1Client_.stopTake(onCam1Grid(slotStopUs, rate0, rate1), safetyStop ? 0 : takeplan::stopWaitMs(periodUs));
+            if (outcome.pending)
+                std::cerr << "ApertarCore cam1's stop kept for the relink\n";
+            if (cam1OnlyTakeActive()) {
+                // The take state ends at cam1's reply or its `recording` event (onCam1TakeChange), or now when no reply
+                // will come: the stop is pending, or cam1 was no longer in the take.
+                if (!outcome.inTake || outcome.pending)
+                    endCam1OnlyTake();
+                return okReply(command.id, "\"recording\":false,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+            }
+            if (!safetyStop)
+                stopUs = slotStopUs;
+        }
+        if (cam1Configured && !camera_.isRecording() && !camera_.rawTakeActive()) {
+            cam1Client_.takeFinished();   // cam0's side already ended (a failure stop); cam1's stop went above
+            syncRecordingTracking(false);
+            return okReply(command.id, "\"recording\":false,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+        }
         if (!camera_.stopRecording(stopUs))
             return errorReply(command.id, camera_.lastError());
+        if (cam1Configured)
+            cam1Client_.takeFinished();   // the `refused` hold and a settled `lost` end with the take
         syncRecordingTracking(false);
         return okReply(command.id, std::string("\"recording\":false,\"recording_has_dropped_frames\":")
                        + (camera_.recordingHasDroppedFrames() ? "true" : "false")
@@ -15934,7 +16168,8 @@ void ApertarCoreApp::handleTriggerEvent(const std::string &eventJson)
     if (eventJson.find("\"event\":\"recording\"") != std::string::npos) {
         if (eventJson.find("\"active\":true") != std::string::npos) {
             recordingIndicatorOutput_.setRecordingActive(true);
-            triggerOutput_.pulse(TriggerOutput::Event::RecordingStart);
+            if (eventJson.find("\"adopted\":true") == std::string::npos)   // an adopted take sends no pulse (design 4.6)
+                triggerOutput_.pulse(TriggerOutput::Event::RecordingStart);
             return;
         }
         if (eventJson.find("\"active\":false") != std::string::npos)

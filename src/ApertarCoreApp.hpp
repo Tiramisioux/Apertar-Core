@@ -94,6 +94,30 @@ private:
     void cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties);
     std::string handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties);
     bool cam1HoldsMedium() const;
+    // The take with cam1 (design 6.1, 6.2). prepareCam1Take runs in the record_start branch under commandMutex_: the
+    // cameras, and with cam1 in the take the slot, both names, the published take and cam1's record_start (not waited for).
+    struct Cam1TakeStart {
+        bool refused = false;
+        std::string refusal;
+        int cameras = 1;                                  // takeplan::kCam0 / kCam1 / kBoth
+        int64_t cam1StartUs = 0;
+        std::shared_ptr<ControlClient::Reply> reply;      // cam1's answer to its record_start
+    };
+    struct TakeViews {                                    // the UI.conf settings the policy reads (design 6.1)
+        std::string recordCameras;
+        std::string previewSource;
+        std::string hdmi1Source;
+    };
+    Cam1TakeStart prepareCam1Take(const ControlCommand &command, const TakeViews &views, CameraController::TakeOptions &take);
+    std::string startCam1OnlyTake(const ControlCommand &command, const Cam1TakeStart &plan);
+    void endCam1OnlyTake();                               // the tally and `active:false`, once
+    void endFailedTake();                                 // cam0's take failed: cam1 in it stops on the next slot
+    void onCam1TakeChange();                              // the relay thread, no lock held: adopted / ended
+    // cam1 records or is in the primary's take (P7): the card is in use. Lock-free; false with no cam1.
+    bool cam1RecordingActive() const { return cam1Client_.configured() && cam1Client_.recordingNow(); }
+    // The primary runs a take that only cam1 records (or adopted one): `recording`, the tally, REC toggles to stop.
+    bool cam1OnlyTakeActive() const { return cam1OnlyTake_.load(std::memory_order_acquire); }
+    std::atomic<bool> cam1OnlyTake_{false};
     // The primary's side of the relay's resync and compare (design 4.1 Locks, 4.4): what the command thread publishes.
     void publishRelayView(const std::string &afterCommand);
     resync::PrimaryView relayView() const;

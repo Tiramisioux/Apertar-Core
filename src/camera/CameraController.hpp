@@ -3,6 +3,7 @@
 #include "camera/FramePhaseLock.hpp"
 #include "camera/ModeLadder.hpp"
 #include <apertar/core/Types.hpp>
+#include "util/ClipName.hpp"
 #include "util/RecordingDropWarning.hpp"
 
 #include <atomic>
@@ -135,6 +136,11 @@ public:
     // The name the NEXT clip would get with `value` (the saved template when empty), real counter and clock.
     // No side effects; false with `error` set when the template is invalid.
     bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
+    // The two names of a take with cam1 configured (dual-sensor design 6.2 step 2): one clip number, the lowest free under
+    // both, with {cam} in both. `partner` is cam1's side (cam1names::partnerFrom), `wallMicros` the take's wall-clock
+    // instant. With `templateText` empty the saved template is used. No side effects.
+    apertar::clipname::TwoNames twoCameraClipNames(const apertar::clipname::PartnerNaming &partner, int64_t wallMicros,
+                                                   const std::string &templateText = std::string()) const;
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
     bool setPreviewTdn(bool enabled);
