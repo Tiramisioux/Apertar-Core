@@ -54,6 +54,9 @@ public:
     CameraController(EventCallback eventCallback, PreviewCallback previewCallback);
     ~CameraController();
 
+    // --camera (src/camera/CameraPort.hpp): "" or cam0 = the primary, any other value a secondary. Process-wide; call it
+    // before start().
+    static void selectCamera(const std::string &value);
     bool start(const std::string &mediaRoot, bool simulateCamera);
     void stop();
     bool enterStandby();

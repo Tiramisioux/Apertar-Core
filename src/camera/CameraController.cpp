@@ -3,6 +3,7 @@
 #include <optional>
 #include "camera/CameraController.hpp"
 #include <apertar/core/RecordingCapabilities.hpp>
+#include "camera/CameraPort.hpp"
 #include "camera/DefaultTuningSelection.hpp"
 #include "camera/ExposureMetering.hpp"
 #include "camera/StillBracketing.hpp"
@@ -235,6 +236,8 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -1123,6 +1126,64 @@ std::filesystem::path mediaRootPath(const std::string &mediaRoot)
                              : std::filesystem::path(mediaRoot);
 }
 
+// ---- Camera by port (src/camera/CameraPort.hpp, design 3.2) ----
+// --camera, resolved once, and what the session opened. cam0 / "" is the primary; any other value a secondary.
+struct CameraSelectionState {
+    std::mutex mutex;
+    std::string value;                 // --camera as given
+    cameraport::Node node;             // the I2C node of `value` (the primary: cam0's); valid only when it resolved
+    bool resolved = false;
+    bool cam0Waited = false;           // the primary's wait for cam0's subdev has run
+    std::string openedId;              // libcamera id of the camera the session picked
+    std::string openedPort;            // its port, "" when neither cam0 nor cam1
+    bool noPersist = false;            // the primary fell back to another port's camera: no camera settings are saved
+};
+
+CameraSelectionState &cameraSelection()
+{
+    static CameraSelectionState state;
+    return state;
+}
+
+bool cameraIsSecondary(const std::string &value)
+{
+    return !value.empty() && value != "cam0";
+}
+
+void resolveCameraSelectionLocked(CameraSelectionState &state)
+{
+    if (state.resolved)
+        return;
+    state.node = cameraport::resolve({}, cameraIsSecondary(state.value) ? state.value : "cam0");
+    state.resolved = true;
+}
+
+// The port in the state and in clip names: the opened camera's, else the one --camera names, else cam0.
+std::string cameraPortLabel()
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    resolveCameraSelectionLocked(state);
+    if (!state.openedPort.empty())
+        return state.openedPort;
+    if (state.value == "cam0" || state.value == "cam1")
+        return state.value;
+    if (!state.node.port.empty())
+        return state.node.port;
+    return cameraIsSecondary(state.value) ? std::string() : std::string("cam0");
+}
+
+// The camera_id / camera_port fields of a settings copy (not persisted).
+void fillCameraIdentity(CaptureSettings &settings)
+{
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        settings.cameraId = state.openedId;
+    }
+    settings.cameraPort = cameraPortLabel();
+}
+
 // ---- Clip names (src/util/ClipName.hpp) ----------------------------------------------------------------
 // The {format} token: the prefix the camera always used, without its trailing underscore.
 std::string clipNameFormatToken(const CaptureSettings &settings)
@@ -1172,7 +1233,8 @@ apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const 
     const int nominalFps = std::max(1, static_cast<int>(std::llround(fps)));
     v.frame = std::min(nominalFps - 1, static_cast<int>(static_cast<double>(micros % 1000000) * fps / 1000000.0));
     v.format = clipNameFormatToken(settings);
-    v.cam = "cam0";   // one camera per Apertar
+    v.cam = cameraPortLabel();
+    if (v.cam.empty()) v.cam = "cam0";
     v.sensor = sanitize(sensor, 12);
     std::string model = CdngEncoder::Metadata{}.model;   // "Apertar D1", the Model tag of the DNGs
     if (model.rfind("Apertar ", 0) == 0) model.erase(0, 8);
@@ -7018,24 +7080,29 @@ private:
 
 #if APERTARCORE_HAS_LIBCAMERA
 
-// Returns an open descriptor for the imx585 subdev, or -1.
+// The I2C node the Core's subdev lookups are limited to, "" = every subdev (today's behaviour). A secondary is
+// always limited to its node (one that matched no node gets a scope nothing lies under). The primary is limited to
+// cam0's node when a sensor subdev is there; with none (a one-sensor rig on cam1, or cam0's sensor missing) it
+// looks everywhere as before.
+std::string subdevScopeNode()
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    resolveCameraSelectionLocked(state);
+    if (cameraIsSecondary(state.value))
+        return state.node.valid ? state.node.path : std::string("/-");
+    if (!state.node.valid)
+        return {};
+    return cameraport::sensorSubdevUnder({}, state.node.path) ? state.node.path : std::string();
+}
+
+// Returns an open descriptor for the imx585 subdev under the Core's I2C node, or -1.
 int openImx585Subdev()
 {
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
-        if (ec)
-            break;
-        const std::string node = entry.path().filename().string();
-        if (node.rfind("v4l-subdev", 0) != 0)
-            continue;
-        std::ifstream nameFile(entry.path() / "name");
-        std::string name;
-        std::getline(nameFile, name);
-        if (name.find("imx585") == std::string::npos)
-            continue;
-        return ::open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
-    }
-    return -1;
+    const std::string node = cameraport::findSubdevNode({}, subdevScopeNode(), "imx585");
+    if (node.empty())
+        return -1;
+    return ::open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
 }
 
 bool imx585SubdevPresent()
@@ -7047,24 +7114,91 @@ bool imx585SubdevPresent()
     return true;
 }
 
-// True when a sensor subdev of another known family (IMX283, IMX294, IMX477, IMX577) is on the bus: the sensor is
-// positively not an IMX585. A missing imx585 subdev alone proves nothing (the driver may still be binding at boot).
+// True when a sensor subdev of another known family (IMX283, IMX294, IMX477, IMX577) is on the Core's I2C node: the
+// sensor is positively not an IMX585. A missing imx585 subdev alone proves nothing (the driver may still be binding
+// at boot).
 bool otherSensorSubdevPresent()
 {
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
-        if (ec)
-            break;
-        if (entry.path().filename().string().rfind("v4l-subdev", 0) != 0)
-            continue;
-        std::ifstream nameFile(entry.path() / "name");
-        std::string name;
-        std::getline(nameFile, name);
-        const SensorFamily family = detectSensorFamily(name);
+    for (const auto &subdev : cameraport::subdevsUnder({}, subdevScopeNode())) {
+        const SensorFamily family = detectSensorFamily(subdev.name);
         if (family != SensorFamily::Unknown && family != SensorFamily::Imx585)
             return true;
     }
     return false;
+}
+
+// The camera this Core opens, from the libcamera list: a secondary takes the camera on its own port or nothing
+// (never front()); the primary prefers cam0's port, else the first non-USB camera, else front() as before.
+std::shared_ptr<libcamera::Camera> pickCamera(const std::vector<std::shared_ptr<libcamera::Camera>> &cameras)
+{
+    std::string value;
+    cameraport::Node node;
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        value = state.value;
+        node = state.node;
+    }
+    const auto notUsb = [](const auto &camera) {
+        return camera && camera->id().find("/usb") == std::string::npos;
+    };
+    if (cameraIsSecondary(value) || node.valid) {
+        const auto own = std::find_if(cameras.begin(), cameras.end(), [&](const auto &camera) {
+            return notUsb(camera) && cameraport::cameraIdUnder(camera->id(), node.path);
+        });
+        if (own != cameras.end())
+            return *own;
+        if (cameraIsSecondary(value))
+            return nullptr;
+    }
+    const auto selected = std::find_if(cameras.begin(), cameras.end(), notUsb);
+    return selected != cameras.end() ? *selected : cameras.empty() ? nullptr : cameras.front();
+}
+
+// What the session opened: its id and port for the state, and the primary's fallback guard. When config.txt names a
+// sensor on cam0 and the camera opened lies on another port (cam0's sensor failed to probe), the primary records as
+// today but saves no camera settings, so cam0's saved choice (Clear HDR, 16 bit, 4K) survives until the IMX585 is back.
+void recordOpenedCamera(const std::string &cameraId)
+{
+    auto &state = cameraSelection();
+    bool fallback = false;
+    std::string port;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        state.openedId = cameraId;
+        state.openedPort = cameraport::portOfCameraId({}, cameraId);
+        port = state.openedPort;
+        fallback = !cameraIsSecondary(state.value) && state.node.valid &&
+                   !cameraport::cameraIdUnder(cameraId, state.node.path) && cameraport::configNamesPort({}, "cam0");
+        state.noPersist = fallback;
+    }
+    if (fallback)
+        std::cerr << "ApertarCore camera: config.txt names a sensor on cam0 but " << cameraId
+                  << " is open (port " << (port.empty() ? "?" : port)
+                  << "); camera settings are not saved in this fallback.\n";
+}
+
+// The primary's wait for cam0's sensor subdev when config.txt names a sensor on cam0: a boot may not have probed it
+// yet, and the primary would otherwise hand cam1's sensor to itself. Once per process; 0.5 s polls up to 20 s.
+void waitForCam0Subdev()
+{
+    cameraport::Node node;
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        if (state.cam0Waited || cameraIsSecondary(state.value) || !state.node.valid)
+            return;
+        state.cam0Waited = true;
+        node = state.node;
+    }
+    if (!cameraport::configNamesPort({}, "cam0") || cameraport::sensorSubdevUnder({}, node.path))
+        return;
+    if (!cameraport::waitForSensorSubdev({}, node.path, 20000, 500))
+        std::cerr << "ApertarCore camera: config.txt names a sensor on cam0 but no subdev appeared under " << node.path
+                  << " in 20 s; going on with the first camera libcamera lists.\n";
 }
 
 // Writes wide_dynamic_range and reads it back. Must run before libcamera's
@@ -7207,11 +7341,7 @@ std::vector<CameraController::SensorMode> probeSensorModes()
         }
         {
             const auto cameras = manager.cameras();
-            const auto selected = std::find_if(cameras.begin(), cameras.end(), [](const auto &camera) {
-                return camera && camera->id().find("/usb") == std::string::npos;
-            });
-            const std::shared_ptr<libcamera::Camera> camera = selected != cameras.end() ? *selected
-                : cameras.empty() ? nullptr : cameras.front();
+            const std::shared_ptr<libcamera::Camera> camera = pickCamera(cameras);
             if (camera && camera->acquire() == 0) {
                 auto config = camera->generateConfiguration({libcamera::StreamRole::Raw});
                 if (config && config->size() > 0) {
@@ -7301,13 +7431,19 @@ void probeSensorModesOnce()
         std::lock_guard<std::mutex> lock(probedSensorModesMutex);
         if (sensorModesProbed)
             return;
-        sensorModesProbed = true;
+        if (!boolEnvValue("APERTAR_SENSOR_PROBE", true)) {
+            sensorModesProbed = true;
+            return;
+        }
     }
-    if (!boolEnvValue("APERTAR_SENSOR_PROBE", true))
-        return;
     auto modes = probeSensorModes();
     std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    // Done only after a probe that found modes: a WDR EBUSY, a failed manager start or the wrong camera leaves the
+    // pool empty, and the next start probes again.
+    if (modes.empty())
+        return;
     probedSensorModes = std::move(modes);
+    sensorModesProbed = true;
 }
 
 #endif
@@ -7348,6 +7484,7 @@ public:
         // sanitiser does for the family later. A subdev that is merely not found yet (the driver still binding at
         // boot, or an open() failure) keeps the setting: setSensorWideDynamicRange fails the start with its error
         // and the saved choice is not rewritten.
+        waitForCam0Subdev();
         const bool otherSensor = (sensorFamily_ != SensorFamily::Unknown && sensorFamily_ != SensorFamily::Imx585) ||
                                  otherSensorSubdevPresent();
         if (settings.clearHdr && otherSensor && !imx585SubdevPresent()) {
@@ -7385,7 +7522,8 @@ public:
             return activePath;
         };
         std::string tuningPath = automaticTuning
-            ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline))
+            ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline,
+                                                                       "/sys/class/video4linux", subdevScopeNode()))
             : settings.tuningFile;
         if (automaticTuning && settings.clearHdr && tuningPath.find("_clearHDR") == std::string::npos)
             std::cerr << "ApertarCore Clear HDR tuning variant (<sensor>_clearHDR.json) not found; "
@@ -7420,10 +7558,7 @@ public:
                 return false;
             }
 
-            auto selected = std::find_if(cameras.begin(), cameras.end(), [](const auto &camera) {
-                return camera && camera->id().find("/usb") == std::string::npos;
-            });
-            camera_ = selected != cameras.end() ? *selected : cameras.front();
+            camera_ = pickCamera(cameras);
 
             if (!camera_) {
                 setError(error, "Failed to select a libcamera camera.");
@@ -7508,8 +7643,14 @@ public:
 
         sensorFamily_ = detectSensorFamily(camera_->id());
         settings_ = sanitizeSettingsForSensor(settings, sensorFamily_, monochromeSensor_);
+        recordOpenedCamera(camera_->id());
 
-        if (camera_->acquire() != 0) {
+        if (const int acquired = camera_->acquire(); acquired != 0) {
+            if (acquired == -EBUSY && cameraIsSecondary(cameraSelection().value)) {
+                std::cerr << "ApertarCore camera " << cameraSelection().value << ": " << cameraIdForLog(camera_)
+                          << " is held by another process (EBUSY); exiting.\n";
+                cameraport::busyExitRequested().store(true);
+            }
             setError(error, "Failed to acquire camera " + cameraIdForLog(camera_) + ".");
             stop();
             return false;
@@ -10973,6 +11114,15 @@ CameraController::~CameraController()
     captureSettingsPersister().flush();
 }
 
+void CameraController::selectCamera(const std::string &value)
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.value = value;
+    state.resolved = false;
+    state.cam0Waited = false;
+}
+
 bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -13096,6 +13246,7 @@ CaptureSettings CameraController::settings() const
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     result.isoMax = maximumIsoForSettings(result, family);
     result.fpsMax = maximumFpsForSettings(result, family);
+    fillCameraIdentity(result);
     fillLadderFieldsLocked(result);
     fillClipNameExampleLocked(result);
     return result;
@@ -13306,6 +13457,13 @@ void CameraController::persistSettingsLocked()
         stillSettings_ = settings_;
     else
         formatSettings_[settingsProfileFormat(settings_.recordingFormat)] = settings_;
+    {
+        // The primary fell back to another port's camera (recordOpenedCamera): cam0's saved settings stay as they are.
+        auto &camera = cameraSelection();
+        std::lock_guard<std::mutex> lock(camera.mutex);
+        if (camera.noPersist)
+            return;
+    }
     captureSettingsPersister().schedule(settings_, formatSettings_, stillSettings_);
 }
 
@@ -13370,6 +13528,7 @@ void CameraController::emitSettingsEventLocked()
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
+    fillCameraIdentity(settings_);
     fillLadderFieldsLocked(settings_);
     fillClipNameExampleLocked(settings_);
     settings_.cdngLogApplied = cdngLogApplicableLocked();

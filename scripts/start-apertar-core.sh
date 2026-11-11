@@ -17,6 +17,24 @@ if [[ -n "${APERTAR_TUNING_FILE:-}" ]]; then
     export LIBCAMERA_RPI_TUNING_FILE="$APERTAR_TUNING_FILE"
 fi
 
+# The pipeline config the live Core runs with (FE queue depth 4, drop-frames recipe row 8), when the rig has it; an
+# env of the same name wins. libcamera opens this as a path: a bare file name is not found and it falls back to its
+# defaults (depth 2) with only a warning.
+PIPELINE_CONFIG=/home/pi/Tuning-Files/pipeline/pisp-depth4.yaml
+if [[ -z "${LIBCAMERA_RPI_CONFIG_FILE:-}" && -f "$PIPELINE_CONFIG" ]]; then
+    export LIBCAMERA_RPI_CONFIG_FILE="$PIPELINE_CONFIG"
+fi
+
+# Dual sensor: APERTAR_CAMERA picks the camera by port (cam0, cam1, or an I2C node such as i2c@88000), and
+# APERTAR_WEB_PORT the web port. With neither set the command line below is just --socket and --media.
+EXTRA_ARGS=()
+if [[ -n "${APERTAR_CAMERA:-}" ]]; then
+    EXTRA_ARGS+=(--camera "$APERTAR_CAMERA")
+fi
+if [[ -n "${APERTAR_WEB_PORT:-}" ]]; then
+    EXTRA_ARGS+=(--web-port "$APERTAR_WEB_PORT")
+fi
+
 # APERTAR_RT=1: run Core under SCHED_FIFO (APERTAR_RT_PRIORITY, default 70) on the cores in
 # APERTAR_RT_CPUS (default 1-3, empty = no pinning) with the best-effort I/O class, the way
 # cinemate starts cinepi-raw (src/module/cinepi_multi.py run()). The unit needs LimitRTPRIO
@@ -41,4 +59,4 @@ if [[ "${APERTAR_RT:-0}" == "1" ]]; then
 fi
 
 mkdir -p "$(dirname "$SOCKET_PATH")"
-exec ${PREFIX[@]+"${PREFIX[@]}"} "$CORE_BIN" --socket "$SOCKET_PATH" --media "$MEDIA_ROOT"
+exec ${PREFIX[@]+"${PREFIX[@]}"} "$CORE_BIN" --socket "$SOCKET_PATH" --media "$MEDIA_ROOT" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}

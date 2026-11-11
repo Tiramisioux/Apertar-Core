@@ -372,6 +372,8 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -8062,6 +8064,7 @@ bool ApertarCoreApp::start()
     }
 #endif
 
+    CameraController::selectCamera(options_.camera);
     if (!camera_.start(options_.mediaRoot, options_.simulateCamera)) {
         stopMjpegEncoder();
         stopPreviewPublisher();
@@ -9535,6 +9538,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend

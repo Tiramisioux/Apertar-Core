@@ -1,4 +1,5 @@
 #include "ApertarCoreApp.hpp"
+#include "camera/CameraPort.hpp"
 
 #include <csignal>
 #include <cerrno>
@@ -33,6 +34,7 @@ void printUsage(const char *argv0)
         << "  --media PATH        Recording media root (default: /media/RAW)\n"
         << "  --web-bind ADDR     Web control bind address (default: 0.0.0.0)\n"
         << "  --web-port PORT     Web control port, 0 disables it (default: 8000)\n"
+        << "  --camera PORT       Camera by port: cam0 (default), cam1, or an I2C node such as i2c@88000\n"
         << "  --simulate          Run without opening the camera yet\n"
         << "  --help              Show this help\n";
 }
@@ -63,6 +65,10 @@ int main(int argc, char **argv)
         }
         if (arg == "--web-bind" && i + 1 < argc) {
             options.webBindAddress = argv[++i];
+            continue;
+        }
+        if (arg == "--camera" && i + 1 < argc) {
+            options.camera = argv[++i];
             continue;
         }
         if (arg == "--web-port" && i + 1 < argc) {
@@ -103,9 +109,27 @@ int main(int argc, char **argv)
     ::sigaction(SIGINT, &action, nullptr);
     ::sigaction(SIGTERM, &action, nullptr);
 
+    // A secondary with no sensor on its port exits 0 before app.start(): start() restores the low-power state and
+    // starts threads before the camera, and a failed start exits 1, which Restart=on-failure would loop. sysfs only,
+    // no libcamera call, so the primary's camera is never touched.
+    if (!options.simulateCamera && !options.camera.empty() && options.camera != "cam0") {
+        const auto node = apertar::cameraport::resolve({}, options.camera);
+        std::string why;
+        if (!apertar::cameraport::secondaryHasSensor({}, options.camera,
+                                                     node.valid && apertar::cameraport::configNamesPort({}, node.port),
+                                                     20000, 500, &why)) {
+            std::cerr << why << "\n";
+            return 0;
+        }
+    }
+
     apertar::ApertarCoreApp app(options);
 
     if (!app.start()) {
+        if (apertar::cameraport::busyExitRequested().load()) {
+            std::cerr << "ApertarCore camera " << options.camera << " is held by another Core; exiting.\n";
+            return 0;
+        }
         std::cerr << "ApertarCore failed to start.\n";
         return 1;
     }

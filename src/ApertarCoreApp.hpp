@@ -40,6 +40,7 @@ public:
         std::string mediaRoot = "/media/RAW";
         std::string webBindAddress = "0.0.0.0";
         uint16_t webPort = 8000;
+        std::string camera;     // --camera: "" or cam0 = the primary; cam1 or an I2C node (i2c@88000) = a secondary
         bool simulateCamera = false;
     };
 
