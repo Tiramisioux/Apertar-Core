@@ -8211,6 +8211,29 @@ bool dualSensorSwitchOn()
     }
     return value;
 }
+// UI.conf cam1Settings as the relay thread reads it once a second (amendment A2), re-parsed only when the file changed.
+commandclasses::Ties cam1TiesCached()
+{
+    static std::mutex mutex;
+    static std::filesystem::file_time_type seenTime{};
+    static std::uintmax_t seenSize = static_cast<std::uintmax_t>(-1);
+    static commandclasses::Ties value;
+    std::error_code error;
+    const std::filesystem::path path = sharedUiSettingsPath();
+    const auto time = std::filesystem::last_write_time(path, error);
+    const std::uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+    std::lock_guard<std::mutex> lock(mutex);
+    if (error) {
+        seenSize = static_cast<std::uintmax_t>(-1);
+        return value = commandclasses::Ties{};
+    }
+    if (time != seenTime || size != seenSize) {
+        seenTime = time;
+        seenSize = size;
+        value = commandclasses::parseTies(readSharedUiSettings().cam1Settings);
+    }
+    return value;
+}
 } // namespace
 
 bool ApertarCoreApp::secondaryRole() const
@@ -8234,6 +8257,11 @@ void ApertarCoreApp::startCam1Client()
         return node.valid && cameraport::sensorSubdevUnder({}, node.path);
     };
     options.primaryInStandby = [this] { return primaryStandby_.load(std::memory_order_acquire); };
+    options.ties = [] { return cam1TiesCached(); };
+    options.primaryView = [this] { return relayView(); };
+    options.primaryIdle = [this] { return primaryIdleForRelay(); };
+    options.primaryTakeActive = [this] { return primaryTakeActiveForRelay(); };
+    options.primaryTakeStarting = [this] { return primaryTakeStarting_.load(std::memory_order_acquire); };
     cam1Client_.start(std::move(options));
 }
 
@@ -8247,6 +8275,80 @@ bool ApertarCoreApp::cam1HoldsMedium() const
         return false;
     const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
     return cam1.recording || cam1.writing;
+}
+
+// ---- the relay's view of the primary (design 4.1 Locks, 4.4) ---------------------------------------------------------------
+// Runs on the command thread under commandMutex_ (or in start()). The relay thread reads the copies and the flags; it takes
+// neither commandMutex_ nor the controller's mutex_.
+
+bool ApertarCoreApp::primaryIdleForRelay() const
+{
+    return !camera_.rawTakeActive() && !storagepreroll::prerollActive() && !relayRecording_.load(std::memory_order_acquire) &&
+           !relayTimelapse_.load(std::memory_order_acquire) && !relayStillExposure_.load(std::memory_order_acquire) &&
+           !relayMediaWrites_.load(std::memory_order_acquire) && !relayPhotoMode_.load(std::memory_order_acquire) &&
+           !primaryTakeStarting_.load(std::memory_order_acquire);
+}
+
+bool ApertarCoreApp::primaryTakeActiveForRelay() const
+{
+    return camera_.rawTakeActive() || storagepreroll::prerollActive() || relayRecording_.load(std::memory_order_acquire);
+}
+
+resync::PrimaryView ApertarCoreApp::relayView() const
+{
+    std::lock_guard<std::mutex> lock(relayViewMutex_);
+    return relayView_;
+}
+
+// The controller's events keep the flags that change without a command (a write finishing, a take ending on its own).
+void ApertarCoreApp::noteRelayEvent(const std::string &eventJson)
+{
+    const bool on = eventJson.find("\"active\":true") != std::string::npos;
+    if (eventJson.find("\"event\":\"recording\"") != std::string::npos)
+        relayRecording_.store(on, std::memory_order_release);
+    else if (eventJson.find("\"event\":\"media_write_state\"") != std::string::npos)
+        relayMediaWrites_.store(eventJson.find("\"media_writes_pending\":true") != std::string::npos, std::memory_order_release);
+    else if (eventJson.find("\"event\":\"still_exposure\"") != std::string::npos)
+        relayStillExposure_.store(eventJson.find("\"still_exposure_active\":true") != std::string::npos, std::memory_order_release);
+}
+
+// After each command: the primary's settingsBody (what the compare reads), the take flags, and, after the commands that can
+// change what a resync sends (a "both" command, record_stop, the tie and switch settings), the preset of the same
+// settings and the ladder definition.
+void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
+{
+    if (secondaryRole())
+        return;
+    const CaptureSettings settings = camera_.settings();
+    relayRecording_.store(camera_.isRecording(), std::memory_order_release);
+    relayTimelapse_.store(camera_.timelapseActive(), std::memory_order_release);
+    relayPhotoMode_.store(settings.photoModeEnabled, std::memory_order_release);
+    relayMediaWrites_.store(camera_.mediaWritesPending(), std::memory_order_release);
+    std::string body = "{" + settingsBody(settings) + "}";
+
+    bool rebuild;
+    {
+        std::lock_guard<std::mutex> lock(relayViewMutex_);
+        rebuild = !relayView_.valid || commandclasses::classOf(afterCommand) == commandclasses::Class::Both ||
+                  afterCommand == "record_stop" || afterCommand == "set_cam1_settings" || afterCommand == "set_dual_sensor_enabled";
+    }
+    resync::Fields preset;
+    std::string ladderJson;
+    if (rebuild) {
+        preset = resync::flattenPreset(buildCurrentPresetPayload("relay", settings));
+        ladderJson = camera_.modeLadderJson();
+    }
+    std::lock_guard<std::mutex> lock(relayViewMutex_);
+    relayView_.valid = true;
+    relayView_.settings = std::move(body);
+    if (rebuild) {
+        relayView_.preset = std::move(preset);
+        const auto text = jsonkeys::stringOf(ladderJson, "resolutions_text");
+        relayView_.ladderKnown = text.has_value();
+        relayView_.ladderResolutions = text.value_or("");
+        relayView_.ladderEnabled = jsonkeys::boolOf(ladderJson, "enabled").value_or(false);
+        relayView_.ladderRampReady = jsonkeys::boolOf(ladderJson, "ramp_ready").value_or(false);
+    }
 }
 
 bool ApertarCoreApp::start()
@@ -8330,6 +8432,7 @@ bool ApertarCoreApp::start()
     }
 
     mediaTrimSetting_.store(camera_.settings().mediaTrimEnabled);
+    publishRelayView("start");   // the relay's first resync reads this (design 4.4)
     // The secondary does not read UI.conf here: it forces photo mode, long exposure and bracketing off, so a stale
     // camera_settings.conf in .config-cam1 cannot leave cam1 in photo mode (design 3.3).
     SharedUiSettingsSnapshot stillSettings = secondaryRole() ? SharedUiSettingsSnapshot() : readSharedUiSettings();
@@ -13172,8 +13275,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         primaryStandby_.store(true, std::memory_order_release);
     else if (command.name == "wake" && reply.rfind("{\"ok\":true", 0) == 0)
         primaryStandby_.store(false, std::memory_order_release);
-    if (cam1Configured)
+    if (cam1Configured) {
         cam1ForwardAfter(command, reply, ties);
+        if (command.name != "ping")
+            publishRelayView(command.name);
+    }
     return reply;
 }
 
@@ -15730,6 +15836,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
 void ApertarCoreApp::publishEvent(const std::string &eventJson)
 {
     handleTriggerEvent(eventJson);
+    noteRelayEvent(eventJson);
 
     // Settings must also reach the separate HDMI process immediately, not just
     // the command's requester. These events cannot be collected into its reply.

@@ -12,6 +12,7 @@
 #include "hardware/TriggerOutput.hpp"
 #include "ipc/CommandClasses.hpp"
 #include "ipc/ControlClient.hpp"
+#include "ipc/Resync.hpp"
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
@@ -92,6 +93,12 @@ private:
     void cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties);
     std::string handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties);
     bool cam1HoldsMedium() const;
+    // The primary's side of the relay's resync and compare (design 4.1 Locks, 4.4): what the command thread publishes.
+    void publishRelayView(const std::string &afterCommand);
+    resync::PrimaryView relayView() const;
+    bool primaryIdleForRelay() const;
+    bool primaryTakeActiveForRelay() const;
+    void noteRelayEvent(const std::string &eventJson);
     // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
     bool secondaryRole() const;
     std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
@@ -174,6 +181,15 @@ private:
     ControlServer controlServer_;
     ControlClient cam1Client_;                       // the relay thread; started in the primary role only
     std::atomic<bool> primaryStandby_{false};        // published by the command thread for the relay
+    // The take flags the relay reads without a lock (4.1 Locks), kept by the command thread and by the controller's events.
+    std::atomic<bool> relayRecording_{false};
+    std::atomic<bool> relayTimelapse_{false};
+    std::atomic<bool> relayStillExposure_{false};
+    std::atomic<bool> relayMediaWrites_{false};
+    std::atomic<bool> relayPhotoMode_{false};
+    std::atomic<bool> primaryTakeStarting_{false};   // the record_start branch publishes its take here (T62)
+    mutable std::mutex relayViewMutex_;              // guards relayView_ only; never held across a call into the controller
+    resync::PrimaryView relayView_;
     WebServer webServer_;
     GpioInput gpioInput_;
     StandbyPowerButtonInput standbyPowerButton_;

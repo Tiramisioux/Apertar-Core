@@ -57,6 +57,19 @@ inline Fields flattenPreset(std::string_view payload)
     return out;
 }
 
+// A reply line from cam1 re-addressed to the caller: its members but "ok" and "id" (the caller's own reply puts them
+// back), or empty. Used for the ladder pair with camera=cam1.
+inline std::string replyMembers(std::string_view line)
+{
+    std::string out;
+    for (const jsonkeys::Member &member : jsonkeys::topLevel(line)) {
+        if (member.key == "ok" || member.key == "id") continue;
+        if (!out.empty()) out += ',';
+        out.append(line.substr(member.begin, member.end - member.begin));
+    }
+    return out;
+}
+
 // ---- the compare (§4.4) ----------------------------------------------------------------------------------------------
 
 namespace detail {
