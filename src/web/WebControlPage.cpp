@@ -628,16 +628,23 @@ std::string_view webControlPageHtml()
       display: none;
     }
 
+    /* Narrow screens: the two panes stacked, exactly two 16:9 pictures (8:9), no band above or below. The VU meter (12 px
+       in) then lies on the lower pane's corner, so that pane's timecode moves right of it while the meter shows. */
     @media (max-width: 700px) {
       .preview-stage.dual.view-both,
       .preview-stage.dual.view-bothleft {
-        aspect-ratio: 7 / 10;
-        --p0-l: 0%; --p0-t: 10.5%; --p0-w: 100%; --p0-h: 39.5%;
-        --p1-l: 0%; --p1-t: 50%; --p1-w: 100%; --p1-h: 39.5%;
+        aspect-ratio: 8 / 9;
+        --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 50%;
+        --p1-l: 0%; --p1-t: 50%; --p1-w: 100%; --p1-h: 50%;
       }
 
       .preview-stage.dual.view-bothleft {
-        --p0-t: 50%; --p1-t: 10.5%;
+        --p0-t: 50%; --p1-t: 0%;
+      }
+
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-both .pane-tc.p1,
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-bothleft .pane-tc.p0 {
+        left: 54px;
       }
     }
 
