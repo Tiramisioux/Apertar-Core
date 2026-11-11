@@ -5562,6 +5562,56 @@ std::optional<double> readCpuTemperatureC()
     return static_cast<double>(*milliDegrees) / 1000.0;
 }
 
+// The NVMe controller of a media partition: /dev/nvme0n1p2 -> nvme0; "" when the device is not NVMe.
+std::string nvmeControllerOfDevice(const std::string &devicePath)
+{
+    const std::string prefix = "/dev/nvme";
+    if (devicePath.rfind(prefix, 0) != 0)
+        return {};
+    size_t end = prefix.size();
+    while (end < devicePath.size() && std::isdigit(static_cast<unsigned char>(devicePath[end])))
+        ++end;
+    if (end == prefix.size() || end >= devicePath.size() || devicePath[end] != 'n')
+        return {};
+    return devicePath.substr(5, end - 5);
+}
+
+// Sectors (512 bytes) written to a block device since boot: field 7 of /sys/class/block/<name>/stat.
+std::optional<uint64_t> readBlockSectorsWritten(const std::string &devicePath)
+{
+    const std::string name = std::filesystem::path(devicePath).filename().string();
+    if (name.empty())
+        return std::nullopt;
+    std::ifstream input("/sys/class/block/" + name + "/stat");
+    uint64_t field = 0;
+    for (int index = 0; index < 7; ++index) {
+        if (!(input >> field))
+            return std::nullopt;
+    }
+    return field;
+}
+
+// The controller's hwmon directory (/sys/class/nvme/nvme0/hwmon1), "" when the kernel has none.
+std::filesystem::path nvmeHwmonDirectory(const std::string &controller)
+{
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/nvme/" + controller, ec)) {
+        if (ec)
+            break;
+        if (entry.path().filename().string().rfind("hwmon", 0) == 0)
+            return entry.path();
+    }
+    return {};
+}
+
+std::optional<double> readMilliDegreesC(const std::filesystem::path &path)
+{
+    const auto milliDegrees = readLongLongFile(path);
+    if (!milliDegrees)
+        return std::nullopt;
+    return static_cast<double>(*milliDegrees) / 1000.0;
+}
+
 std::optional<std::pair<uint64_t, uint64_t>> readCpuTicks()
 {
     std::ifstream input("/proc/stat");
@@ -9392,6 +9442,67 @@ std::string ApertarCoreApp::buildWebStateJson() const
         cpuSampleValid_ = true;
     }
 
+    // The card's write rate and temperature, when the media is NVMe (a CFexpress card in the hat, or an M.2 SSD). The
+    // rate comes from the block layer's counter (a sysfs read). The temperature read is an NVMe admin command (the
+    // drive's SMART log), so it runs at most every 10 s.
+    std::optional<double> mediaWriteMBps;
+    std::optional<double> mediaTempC;
+    std::optional<double> mediaTempMaxC;
+    std::optional<double> mediaTempCritC;
+    std::string mediaCardLabel;
+    if (const std::string controller = mediaMounted ? nvmeControllerOfDevice(mediaSnap.device) : std::string();
+        !controller.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto sectors = readBlockSectorsWritten(mediaSnap.device);
+        std::lock_guard<std::mutex> lock(telemetryMutex_);
+        if (mediaStatDevice_ != mediaSnap.device) {
+            mediaStatDevice_ = mediaSnap.device;
+            mediaStatValid_ = false;
+            mediaWriteMBps_.reset();
+            mediaTempAt_ = {};
+        }
+        if (sectors) {
+            const double seconds = std::chrono::duration<double>(now - lastMediaStatAt_).count();
+            if (!mediaStatValid_ || *sectors < lastMediaSectorsWritten_) {
+                lastMediaSectorsWritten_ = *sectors;
+                lastMediaStatAt_ = now;
+                mediaStatValid_ = true;
+            } else if (seconds >= 0.5) {
+                mediaWriteMBps_ = static_cast<double>(*sectors - lastMediaSectorsWritten_) * 512.0 / 1e6 / seconds;
+                lastMediaSectorsWritten_ = *sectors;
+                lastMediaStatAt_ = now;
+            }
+        }
+        if (mediaTempAt_ == std::chrono::steady_clock::time_point{} || now - mediaTempAt_ >= std::chrono::seconds(10)) {
+            mediaTempAt_ = now;
+            const std::filesystem::path hwmon = nvmeHwmonDirectory(controller);
+            mediaTempC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_input");
+            mediaTempMaxC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_max");
+            mediaTempCritC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_crit");
+            mediaCardLabel_ = loadCfeHatConfig().enabled ? "CFE" : "NVMe";
+        }
+        mediaWriteMBps = mediaWriteMBps_;
+        mediaTempC = mediaTempC_;
+        mediaTempMaxC = mediaTempMaxC_;
+        mediaTempCritC = mediaTempCritC_;
+        mediaCardLabel = mediaCardLabel_;
+    }
+    // The write bar is the rate against the last speed test on this media, when there is one.
+    std::optional<double> mediaWritePercent;
+    if (mediaWriteMBps && mediaSpeedLastWriteSpeedMBps > 0.0)
+        mediaWritePercent = std::clamp(*mediaWriteMBps / mediaSpeedLastWriteSpeedMBps * 100.0, 0.0, 100.0);
+    std::ostringstream mediaWriteLabel;
+    if (mediaSpeedLastWriteSpeedMBps > 0.0)
+        mediaWriteLabel << "Speed test " << std::llround(mediaSpeedLastWriteSpeedMBps) << " MB/s";
+    else
+        mediaWriteLabel << "To " << options_.mediaRoot;
+    std::optional<double> mediaTempPercent;
+    if (mediaTempC && mediaTempCritC && *mediaTempCritC > 0.0)
+        mediaTempPercent = std::clamp(*mediaTempC / *mediaTempCritC * 100.0, 0.0, 100.0);
+    const char *mediaTempLabel = !mediaTempC ? "Unavailable"
+        : (!mediaTempMaxC || *mediaTempC < *mediaTempMaxC) ? "Normal"
+        : (!mediaTempCritC || *mediaTempC < *mediaTempCritC) ? "Warm" : "Hot";
+
     std::error_code spaceEc;
     const std::filesystem::path existingMediaPath = mediaMounted
         ? nearestExistingPath(options_.mediaRoot)
@@ -9586,6 +9697,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"power_sensor_available\":"
         << ((power.voltageV.has_value() || power.powerW.has_value() || power.capacityPercent.has_value() || power.currentA.has_value()) ? "true" : "false")
         << ",\"media_free_bytes\":" << mediaFreeBytes
+        << ",\"media_card_label\":\"" << escapeJson(mediaCardLabel) << "\""
+        << ",\"media_write_mb_s\":" << jsonNumberOrNull(mediaWriteMBps, 1)
+        << ",\"media_write_percent\":" << jsonNumberOrNull(mediaWritePercent, 1)
+        << ",\"media_write_label\":\"" << escapeJson(mediaWriteLabel.str()) << "\""
+        << ",\"media_temp_c\":" << jsonNumberOrNull(mediaTempC, 1)
+        << ",\"media_temp_percent\":" << jsonNumberOrNull(mediaTempPercent, 1)
+        << ",\"media_temp_label\":\"" << mediaTempLabel << "\""
         << mediaTrimStateJson()
         << ",\"media_trim_enabled\":" << (mediaTrimSetting_.load() ? "true" : "false")
         << ",\"media_trim_env_off\":" << (mediaTrimEnvOff() ? "true" : "false")

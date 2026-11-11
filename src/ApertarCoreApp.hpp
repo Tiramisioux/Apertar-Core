@@ -241,6 +241,17 @@ private:
     mutable bool cpuSampleValid_ = false;
     mutable uint64_t lastCpuIdleTicks_ = 0;
     mutable uint64_t lastCpuTotalTicks_ = 0;
+    // The media card's write rate and temperature (NVMe only), under telemetryMutex_.
+    mutable std::string mediaStatDevice_;
+    mutable bool mediaStatValid_ = false;
+    mutable uint64_t lastMediaSectorsWritten_ = 0;
+    mutable std::chrono::steady_clock::time_point lastMediaStatAt_{};
+    mutable std::optional<double> mediaWriteMBps_;
+    mutable std::chrono::steady_clock::time_point mediaTempAt_{};
+    mutable std::optional<double> mediaTempC_;
+    mutable std::optional<double> mediaTempMaxC_;
+    mutable std::optional<double> mediaTempCritC_;
+    mutable std::string mediaCardLabel_;
     bool recordingStartKnown_ = false;
     std::chrono::steady_clock::time_point recordingStartedAt_{};
 

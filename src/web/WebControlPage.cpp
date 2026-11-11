@@ -4734,6 +4734,37 @@ std::string_view webControlPageHtml()
                   <div class="progress-track"><div class="progress-fill" id="timeLeftProgress"></div></div>
                 </div>
               </div>
+
+              <!-- The media card's write rate and temperature: only when the media is NVMe (a CFexpress card, an M.2 SSD). -->
+              <div class="telemetry-card" id="cardWriteCard" hidden>
+                <div class="telemetry-inner">
+                  <div class="telemetry-top">
+                    <div class="section-icon">
+                      <img class="icon-image" src="/icons/media.png" alt="">
+                    </div>
+                    <span class="telemetry-progress-text" id="cardWriteProgressText">--%</span>
+                  </div>
+                  <div class="telemetry-value" id="cardWriteValue">--</div>
+                  <div class="telemetry-label" id="cardWriteLabel">CFE write</div>
+                  <div class="telemetry-sublabel" id="cardWriteSub">--</div>
+                  <div class="progress-track"><div class="progress-fill" id="cardWriteProgress"></div></div>
+                </div>
+              </div>
+
+              <div class="telemetry-card" id="cardTempCard" hidden>
+                <div class="telemetry-inner">
+                  <div class="telemetry-top">
+                    <div class="section-icon">
+                      <img class="icon-image" src="/icons/thermal.png" alt="">
+                    </div>
+                    <span class="telemetry-progress-text" id="cardTempProgressText">--%</span>
+                  </div>
+                  <div class="telemetry-value" id="cardTempValue">--</div>
+                  <div class="telemetry-label" id="cardTempLabel">CFE temp</div>
+                  <div class="telemetry-sublabel" id="cardTempSub">--</div>
+                  <div class="progress-track"><div class="progress-fill" id="cardTempProgress"></div></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -16704,6 +16735,24 @@ std::string_view webControlPageHtml()
         hasMedia ? snapshot.system.time_left_percent : 0
       );
       setText("timeLeftLabel", mediaRemainingLabel);
+
+      // The media card (NVMe only): write rate and temperature, labelled CFE with the CFexpress hat, else NVMe.
+      const cardKind = hasMedia ? String(snapshot.system.media_card_label || "") : "";
+      const cardWriteCard = document.getElementById("cardWriteCard");
+      const cardTempCard = document.getElementById("cardTempCard");
+      if (cardWriteCard)
+        cardWriteCard.hidden = cardKind === "";
+      if (cardTempCard)
+        cardTempCard.hidden = cardKind === "";
+      if (cardKind !== "") {
+        const writeMBps = snapshot.system.media_write_mb_s;
+        setText("cardWriteLabel", cardKind + " write");
+        setText("cardTempLabel", cardKind + " temp");
+        setMetric("cardWrite", typeof writeMBps === "number" ? Math.round(writeMBps) + " MB/s" : "--",
+          snapshot.system.media_write_label || "", snapshot.system.media_write_percent);
+        setMetric("cardTemp", formatDegrees(snapshot.system.media_temp_c), snapshot.system.media_temp_label || "",
+          snapshot.system.media_temp_percent);
+      }
 
       renderFavoritesPanel(snapshot);
 
