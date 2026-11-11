@@ -384,6 +384,14 @@ std::string_view webControlPageHtml()
       --p0-l: 50%; --p1-l: 0%;
     }
 
+    /* Both views: the panes carry their own pills, so no band above them. The stage is two 16:9 panes high plus the
+       band below for the timecode and REC (9/13 of the height is the panes). Below 700 px the stacked rule wins. */
+    .preview-stage.dual.view-both,
+    .preview-stage.dual.view-bothleft {
+      aspect-ratio: 32 / 13;
+      --p0-t: 0%; --p1-t: 0%; --p0-h: 69.23%; --p1-h: 69.23%;
+    }
+
     .preview-stage.dual.view-cam0 {
       --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
     }
@@ -540,6 +548,144 @@ std::string_view webControlPageHtml()
       font-style: italic;
       color: #e4e4e7;
       margin-bottom: 6px;
+    }
+
+    /* Per-pane settings pills, recording frame and REC tag (dual sensor on). The pane boxes are the --p0-* / --p1-* vars. */
+    .pane-pills,
+    .pane-frame,
+    .pane-rec {
+      display: none;
+    }
+
+    .preview-stage.dual .pane-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      position: absolute;
+      z-index: 3;
+      pointer-events: none;
+      max-width: calc(var(--pw) - 16px);
+    }
+
+    .preview-stage.dual .pane-pills.p0 { --pl: var(--p0-l); --pt: var(--p0-t); --pw: var(--p0-w); left: calc(var(--p0-l) + 8px); top: calc(var(--p0-t) + 34px); }
+    .preview-stage.dual .pane-pills.p1 { --pl: var(--p1-l); --pt: var(--p1-t); --pw: var(--p1-w); left: calc(var(--p1-l) + 8px); top: calc(var(--p1-t) + 34px); }
+    .preview-stage.dual.view-cam0 .pane-pills.p0 { top: calc(var(--p0-t) + 12px); }
+    .preview-stage.dual.view-cam1 .pane-pills.p1 { top: calc(var(--p1-t) + 12px); }
+
+    .pane-pills .badge {
+      font-size: 12px;
+      padding: 3px 9px;
+    }
+
+    .pane-pills.dim .badge {
+      opacity: 0.5;
+    }
+
+    /* The main pane carries the pills: not the inset, not a pane that is not shown. */
+    .preview-stage.dual.view-cam0 .pane-pills.p1,
+    .preview-stage.dual.view-pip0 .pane-pills.p1,
+    .preview-stage.dual.view-cam1 .pane-pills.p0,
+    .preview-stage.dual.view-pip1 .pane-pills.p0 {
+      display: none;
+    }
+
+    /* The page's own pills replace the picture's corner badges (left group and WB) while dual is on. */
+    .preview-stage.dual .preview-badges.left,
+    .preview-stage.dual #wbBadge {
+      display: none;
+    }
+
+    .preview-stage.dual.rec0 .pane-frame.p0,
+    .preview-stage.dual.rec1 .pane-frame.p1 {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      border: 3px solid #ff4d4d;
+      box-sizing: border-box;
+    }
+
+    .preview-stage.dual .pane-frame.p0 { left: var(--p0-l); top: var(--p0-t); width: var(--p0-w); height: var(--p0-h); }
+    .preview-stage.dual .pane-frame.p1 { left: var(--p1-l); top: var(--p1-t); width: var(--p1-w); height: var(--p1-h); }
+
+    .preview-stage.dual.rec0 .pane-rec.p0,
+    .preview-stage.dual.rec1 .pane-rec.p1 {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #ff4d4d;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    .preview-stage.dual .pane-rec.p0 { left: calc(var(--p0-l) + var(--p0-w) - 8px); top: calc(var(--p0-t) + 8px); transform: translateX(-100%); }
+    .preview-stage.dual .pane-rec.p1 { left: calc(var(--p1-l) + var(--p1-w) - 8px); top: calc(var(--p1-t) + 8px); transform: translateX(-100%); }
+
+    .preview-stage.dual.view-cam0 .pane-frame.p1, .preview-stage.dual.view-cam0 .pane-rec.p1,
+    .preview-stage.dual.view-cam1 .pane-frame.p0, .preview-stage.dual.view-cam1 .pane-rec.p0 {
+      display: none;
+    }
+
+    /* The card's own frame stays for a single camera and with no dual; the panes carry theirs in Both and PiP. */
+    .preview-stage.dual.view-both.recording-frame::after,
+    .preview-stage.dual.view-bothleft.recording-frame::after,
+    .preview-stage.dual.view-pip0.recording-frame::after,
+    .preview-stage.dual.view-pip1.recording-frame::after {
+      display: none;
+    }
+
+    /* Dual sensor on: the preview card spans the page and the System column moves below it. */
+    @media (min-width: 1121px) {
+      .main-grid.dual-wide > .column:first-child {
+        display: contents;
+      }
+
+      .main-grid.dual-wide .preview-card { grid-column: 1 / -1; grid-row: 1; }
+      .main-grid.dual-wide #cameraSettingsCard { grid-column: 1; grid-row: 2; }
+      .main-grid.dual-wide #remoteControlsCard { grid-column: 1; grid-row: 3; }
+      .main-grid.dual-wide > aside.column { grid-column: 2; grid-row: 2 / span 2; }
+      .main-grid.dual-wide.dual-cols #cameraSettingsCard { grid-column: 1 / -1; }
+      .main-grid.dual-wide.dual-cols > aside.column { grid-row: 3; }
+    }
+
+    /* Settings not in unison: two columns, CAM0 left, CAM1 right (the clone of the stack is CAM1's). */
+    .cam1-stack,
+    .dual-col-head {
+      display: none;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .card-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px 28px;
+      align-items: start;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .section-head {
+      grid-column: 1 / -1;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .cam1-stack {
+      display: flex;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .dual-col-head {
+      display: block;
+      font-size: 15px;
+      font-weight: 700;
+      color: #f4f4f5;
+      margin-bottom: -8px;
+    }
+
+    @media (max-width: 700px) {
+      .main-grid.dual-cols #cameraSettingsCard .card-body {
+        grid-template-columns: minmax(0, 1fr);
+      }
     }
 
     .dual-view-row {
@@ -4793,6 +4939,13 @@ std::string_view webControlPageHtml()
             <span class="preview-cam-tag cam0" id="previewCamTag0">CAM0</span>
             <span class="preview-cam-tag cam1" id="previewCamTag1">CAM1</span>
             <span class="preview-no-signal" id="previewNoSignal1">NO SIGNAL · CAM1</span>
+            <!-- Dual sensor on: each pane's own settings pills, recording frame and REC tag. -->
+            <div class="pane-pills p0" id="panePills0"></div>
+            <div class="pane-pills p1" id="panePills1"></div>
+            <div class="pane-frame p0" id="paneFrame0"></div>
+            <div class="pane-frame p1" id="paneFrame1"></div>
+            <span class="pane-rec p0" id="paneRec0">REC</span>
+            <span class="pane-rec p1" id="paneRec1">REC</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -4872,7 +5025,7 @@ std::string_view webControlPageHtml()
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="cameraSettingsCard">
           <div class="card-body">
             <div class="section-head">
               <div class="section-icon">
@@ -4882,8 +5035,7 @@ std::string_view webControlPageHtml()
               <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
             </div>
 
-            <div class="dual-settings-for" id="dualSettingsForCamera" hidden></div>
-            <div class="stack">
+            <div class="stack" id="cameraStack">
               <section class="select-block" data-dual-tie="fps">
                 <div class="select-topline">
                   <span>Frame rate</span>
@@ -4938,7 +5090,7 @@ std::string_view webControlPageHtml()
           </div>
         </div>
 
-        <div class="card" data-search="remote controls simulate press click hold turn knob button switch from afar">
+        <div class="card" id="remoteControlsCard" data-search="remote controls simulate press click hold turn knob button switch from afar">
           <div class="card-body">
             <div class="section-head">
               <div class="section-icon">
@@ -6293,6 +6445,7 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="bootConfigCam1LinkSelect"></select>
                   <span class="subtle-note" id="bootConfigCam1LinkNote">CSI-2 lane rate: sets the frame-rate ceiling.</span>
                 </div>
+                <span class="subtle-note hidden" id="bootConfigCam1DualNote">CAM1 runs its own Core. Its picture is in Monitoring; its ties and the shooting mode are in the Dual Sensor card, after this one; its own settings are on the camera and recording panels (Settings for: CAM1).</span>
                 <div class="field-stack" id="bootConfigRp1Field">
                   <span class="input-label">RP1 overclock</span>
                   <div class="pill-grid two-col" id="bootConfigRp1Options"></div>
@@ -14579,6 +14732,60 @@ std::string_view webControlPageHtml()
       return label !== "Cam 0";
     }
 
+    // Per pane: its settings pills and its recording state. CAM0's pills are the picture's own badges' text; CAM1's come
+    // from cam1.settings ("-" and dimmed before they exist). The pane frames show only with the recording-frame option on.
+    function panePillTexts(settings) {
+      const bits = rawBitDepthNumber(settings.raw_bit_depth);
+      const resolution = String(settings.resolution || "") + (bits > 0 ? " · " + bits + "-bit" : "") + (settings.clear_hdr ? " · Clear HDR" : "");
+      const isoInUse = settings.iso_auto && Number(settings.iso_actual) > 0 ? Number(settings.iso_actual) : 0;
+      const wbInUse = settings.wb_auto && settings.wb_measured && Number(settings.wb_actual_kelvin) > 0
+        ? Math.round(Number(settings.wb_actual_kelvin)) + "K" : (settings.wb_auto ? "Auto" : Math.round(Number(settings.wb_kelvin)) + "K");
+      return [
+        { text: resolution },
+        { text: Math.round(Number(settings.fps)) + " FPS" },
+        { text: "ISO " + (settings.iso_auto ? (isoInUse > 0 ? isoInUse : "Auto") : settings.iso), system: settings.iso_auto_after_clear_hdr === true },
+        { text: "WB " + wbInUse, system: settings.wb_auto_after_clear_hdr === true },
+      ];
+    }
+
+    function fillPanePills(id, items, dim) {
+      const host = document.getElementById(id);
+      if (!host)
+        return;
+      host.classList.toggle("dim", dim);
+      const key = JSON.stringify(items);
+      if (host.dataset.built === key)
+        return;
+      host.dataset.built = key;
+      host.innerHTML = "";
+      items.forEach((item) => host.appendChild(createDomElement("span", "badge" + (item.system ? " system-value" : ""), item.text)));
+    }
+
+    function renderPanes(base, shown) {
+      const stage = document.getElementById("previewStage");
+      if (!stage)
+        return;
+      const dual = dualActive(base);
+      if (!dual) {
+        stage.classList.remove("rec0", "rec1");
+        return;
+      }
+      const cam1 = dualCam1(base);
+      const projected = !!(shown && shown.dual_projected);
+      const cam0Items = projected ? panePillTexts(base) : ["resolutionBadge", "fpsBadge", "isoBadge", "wbBadge"].map((id) => ({
+        text: document.getElementById(id).textContent, system: document.getElementById(id).classList.contains("system-value") }));
+      fillPanePills("panePills0", cam0Items, false);
+      const settings = cam1 && cam1.settings && Number(cam1.settings.width) > 0 ? cam1.settings : null;
+      fillPanePills("panePills1", settings ? panePillTexts(settings) : ["—", "—", "—", "—"].map((text) => ({ text })), !settings);
+      // The cameras in the take: record_cameras (cam0, cam1, both) while recording; the card's flag for CAM0 without it.
+      const recording = !!base.recording;
+      const cameras = typeof base.record_cameras === "string" ? base.record_cameras : "";
+      const rec0 = recording && (cameras === "" || cameras === "cam0" || cameras === "both" || cameras === "none");
+      const rec1 = recording && (cameras === "cam1" || cameras === "both");
+      stage.classList.toggle("rec0", rec0);
+      stage.classList.toggle("rec1", rec1);
+    }
+
     function renderDualViewRow(active) {
       const row = document.getElementById("dualViewRow");
       if (!row)
@@ -15392,7 +15599,8 @@ std::string_view webControlPageHtml()
       state.deferFetchUntilMs = Math.max(state.deferFetchUntilMs, gateUntilMs);
 
       try {
-        if (hadSnapshot && applyCommandSnapshotPatch(payload, null, true))
+        const cam1Command = !!payload && payload.camera === "cam1" && !(state.snapshot && state.snapshot.dual_projected);
+        if (hadSnapshot && !cam1Command && applyCommandSnapshotPatch(payload, null, true))
           renderSnapshot(state.snapshot);
 
         const response = await fetch("/api/command", {
@@ -15407,7 +15615,7 @@ std::string_view webControlPageHtml()
           throw new Error(result.error || "Command failed.");
         }
 
-        if (hadSnapshot && applyCommandSnapshotPatch(payload, result, false))
+        if (hadSnapshot && !cam1Command && applyCommandSnapshotPatch(payload, result, false))
           renderSnapshot(state.snapshot);
 
         state.deferFetchUntilMs = performance.now() + refreshDelayMs;
@@ -16215,8 +16423,16 @@ std::string_view webControlPageHtml()
       return minutes > 0 ? minutes + " min" + (rest > 0 ? " " + rest + " s" : "") : rest + " s";
     }
 
-    function renderSnapshot(snapshot) {
-      snapshot = dualShownSnapshot(snapshot);
+    function renderSnapshot(snapshot, options) {
+      const columnPass = !!(options && options.columnPass);
+      if (!columnPass) {
+        snapshot = dualShownSnapshot(snapshot);
+        const base = dualBaseSnapshot(snapshot);
+        const columns = !!base && dualColumnsActive(base);
+        dualLayoutClasses(base, columns);
+        if (columns)
+          renderCam1Column(base);   // CAM1's column first; this pass then draws the page's own values over everything else
+      }
       // /api/state carries the write-buffer, storage pre-roll, split and merge fields under "system"; the page reads them at the top level.
       const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
       if (systemFields) {
@@ -16386,7 +16602,8 @@ std::string_view webControlPageHtml()
       updateDualPreview(dualBaseSnapshot(snapshot));
       renderDualSettingsFor(snapshot);
       renderModesSwitch();
-      applyDualTies(snapshot);
+      renderPanes(dualBaseSnapshot(snapshot), snapshot);
+      applyDualTies(snapshot, columnPass);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
 
@@ -21060,6 +21277,7 @@ std::string_view webControlPageHtml()
     // the lines already there; this card shows that state, asks Core what a change would do (dry_run) before saving,
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
     const bootConfig = {
+      linkNote: "",           // the two IMX585 lines differed in config.txt: Save writes Camera 0's rate on both
       payload: null,          // the last GET: path, revision, state, drm, text, helper
       form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
       loading: false,
@@ -21151,6 +21369,50 @@ std::string_view webControlPageHtml()
       if (!info || !info.link)
         return null;
       return form.links[port] === null || form.links[port] === undefined ? info.link.default_hz : Number(form.links[port]);
+    }
+
+    // Dual rules (design §5.4). The driver's mode table is shared, so two IMX585 run one link frequency, Camera 0's leading.
+    // It applies only when both ports are IMX585 (colour or mono): an IMX283 line never gets 891 MHz.
+    function bootConfigIsImx585(key) {
+      return String(key || "").indexOf("imx585") === 0;
+    }
+
+    function bootConfigTwoImx585(form) {
+      return bootConfigIsImx585(form.sensors.cam0) && bootConfigIsImx585(form.sensors.cam1);
+    }
+
+    // After any change: both IMX585 ports hold one value. `leader` is the port the user just changed (Camera 0 when none).
+    function bootConfigPairLinks(form, leader) {
+      if (!bootConfigTwoImx585(form))
+        return;
+      const from = leader === "cam1" ? "cam1" : "cam0";
+      const to = from === "cam0" ? "cam1" : "cam0";
+      form.links[to] = bootConfigEffectiveLink(form, from);
+    }
+
+    // On load: two different values in config.txt load Camera 0's into both and say so (the card then reads Unsaved).
+    function bootConfigLoadPairNote(form) {
+      bootConfig.linkNote = "";
+      if (!bootConfigTwoImx585(form))
+        return;
+      const hz0 = bootConfigEffectiveLink(form, "cam0");
+      const hz1 = bootConfigEffectiveLink(form, "cam1");
+      if (hz0 === null || hz1 === null || hz0 === hz1)
+        return;
+      bootConfig.linkNote = "The two link frequencies differ in config.txt; Save writes Camera 0's (" + megahertzText(hz0) + ") on both.";
+      bootConfigPairLinks(form, "cam0");
+    }
+
+    // Warnings for the pair on the card now (the form, not the file): what the relay can and cannot link.
+    function bootConfigPairWarning(form) {
+      const cam0 = form.sensors.cam0;
+      const cam1 = form.sensors.cam1;
+      if (!cam1 || cam1 === "none")
+        return "";
+      if (!cam0 || cam0 === "none")
+        return "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.";
+      const ok = bootConfigIsImx585(cam0) && (bootConfigIsImx585(cam1) || cam1 === "imx283");
+      return ok ? "" : "Dual sensor needs an IMX585 on Camera 0 and an IMX585 or an IMX283 on Camera 1.";
     }
 
     function bootConfigDirty() {
@@ -21393,9 +21655,103 @@ std::string_view webControlPageHtml()
       return snapshot.dual_projected ? snapshot : dualProjectSnapshot(base);
     }
 
+    // The Camera settings card in two columns while some control is untied: CAM0's is the page's own stack, CAM1's a
+    // clone of it (ids suffixed __c1) rendered by a second pass of renderSnapshot over the CAM1 projection, with the ids
+    // swapped for that pass. Clicks inside the clone swap state.snapshot to the projection for the handler and route the
+    // setters to cam1 (the window below covers a handler that sends several commands).
+    const cam1Column = { el: null, routeUntil: 0 };
+
+    function dualColumnsActive(base) {
+      return dualSettingsSwitchVisible(base);
+    }
+
+    function ensureCam1Column() {
+      if (cam1Column.el)
+        return cam1Column.el;
+      const stack = document.getElementById("cameraStack");
+      const clone = stack.cloneNode(true);
+      clone.id = "";
+      clone.classList.add("cam1-stack");
+      clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id + "__c1"; });
+      stack.parentNode.insertBefore(clone, stack.nextSibling);
+      stack.insertBefore(createDomElement("div", "dual-col-head", "CAM0"), stack.firstChild);
+      clone.insertBefore(createDomElement("div", "dual-col-head", "CAM1"), clone.firstChild);
+      // The one handler the page installs once on an element: the white balance slider.
+      const range = clone.querySelector("#whiteBalanceRange__c1");
+      range.addEventListener("input", () => {
+        const base = dualBaseSnapshot(state.snapshot);
+        const settings = dualCam1(base) && dualCam1(base).settings;
+        if (!settings || settings.wb_available !== true)
+          return;
+        const kelvin = whiteBalanceFromSliderValue(range.value);
+        const label = clone.querySelector("#whiteBalanceValue__c1");
+        if (label)
+          label.textContent = kelvin + "K";
+        clearTimeout(state.wbCommitTimer);
+        state.wbCommitTimer = window.setTimeout(async () => {
+          try {
+            await sendCommand({ cmd: "set_wb", kelvin: kelvin, camera: "cam1" });
+          } catch (error) {
+            showToast(error.message, true);
+          }
+        }, 160);
+      });
+      let restore = null;
+      ["click", "input", "change"].forEach((type) => {
+        document.addEventListener(type, (event) => {
+          const inside = clone.contains(event.target);
+          cam1Column.routeUntil = inside ? performance.now() + 3000 : 0;
+          if (inside && state.snapshot && !state.snapshot.dual_projected) {
+            restore = state.snapshot;
+            state.snapshot = dualProjectSnapshot(dualBaseSnapshot(state.snapshot));
+          }
+        }, true);
+        clone.addEventListener(type, () => {
+          if (restore) {
+            state.snapshot = restore;
+            restore = null;
+          }
+        });
+      });
+      cam1Column.el = clone;
+      return clone;
+    }
+
+    function swapCam1Ids(toClone) {
+      const stack = document.getElementById("cameraStack");
+      const clone = cam1Column.el;
+      const own = Array.from(stack.querySelectorAll("[id]")).filter((element) => !clone.contains(element));
+      if (toClone) {
+        own.forEach((element) => { element.id = element.id + "__c0"; });
+        clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id.replace(/__c1$/, ""); });
+      } else {
+        clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id + "__c1"; });
+        own.forEach((element) => { element.id = element.id.replace(/__c0$/, ""); });
+      }
+    }
+
+    function renderCam1Column(base) {
+      ensureCam1Column();
+      swapCam1Ids(true);
+      try {
+        renderSnapshot(dualProjectSnapshot(base), { columnPass: true });
+      } finally {
+        swapCam1Ids(false);
+      }
+    }
+
+    function dualLayoutClasses(base, columns) {
+      const grid = document.querySelector(".main-grid");
+      if (!grid)
+        return;
+      grid.classList.toggle("dual-wide", dualActive(base));
+      grid.classList.toggle("dual-cols", columns);
+    }
+
     function dualRoutePayload(payload) {
       const snapshot = state.snapshot;
-      if (!snapshot || !snapshot.dual_projected || !payload || payload.camera !== undefined || !dualCam1Setters[payload.cmd])
+      const routed = !!snapshot && (snapshot.dual_projected === true || performance.now() < cam1Column.routeUntil);
+      if (!routed || !payload || payload.camera !== undefined || !dualCam1Setters[payload.cmd])
         return payload;
       return Object.assign({}, payload, { camera: "cam1" });
     }
@@ -21410,7 +21766,7 @@ std::string_view webControlPageHtml()
       const base = dualBaseSnapshot(snapshot);
       const visible = dualSettingsSwitchVisible(base);
       const linked = dualCam1Linked(base);
-      ["dualSettingsForCamera", "dualSettingsForRecord"].forEach((id) => {
+      ["dualSettingsForRecord"].forEach((id) => {
         const host = document.getElementById(id);
         if (!host)
           return;
@@ -21433,11 +21789,14 @@ std::string_view webControlPageHtml()
     }
 
     // Grey what CAM1 does not own, with the note; on CAM0 every mark is cleared.
-    function applyDualTies(snapshot) {
+    function applyDualTies(snapshot, columnPass) {
       const cam1View = !!(snapshot && snapshot.dual_projected);
       const tied = cam1View ? dualTiedControls(snapshot) : [];
       const linked = dualCam1Linked(snapshot);
       document.querySelectorAll("[data-dual-tie]").forEach((element) => {
+        // The CAM1 column's marks belong to its own pass, the rest to the page's.
+        if ((cam1Column.el && cam1Column.el.contains(element)) !== !!columnPass)
+          return;
         const kind = element.dataset.dualTie;
         let note = "";
         if (cam1View) {
@@ -21572,6 +21931,11 @@ std::string_view webControlPageHtml()
       if (bootState.board && !bootState.board.detected)
         notes.push("No Raspberry Pi device tree here: the card reads config.txt as a Pi 5 would.");
       (bootState.warnings || []).forEach((warning) => notes.push(warning));
+      if (bootConfig.linkNote)
+        notes.push(bootConfig.linkNote);
+      const pairWarning = bootConfigPairWarning(bootConfig.form);
+      if (pairWarning)
+        notes.push(pairWarning);
       if (bootState.camera_auto_detect === 1)
         notes.push("camera_auto_detect=1: Save sets it to 0, because the file names its sensors.");
       const warnings = document.getElementById("bootConfigWarnings");
@@ -21583,6 +21947,8 @@ std::string_view webControlPageHtml()
       const loaded = bootConfigFormFrom(bootState);
       renderBootConfigPort("cam0", bootState, loaded, editable);
       renderBootConfigPort("cam1", bootState, loaded, editable);
+      document.getElementById("bootConfigCam1DualNote").classList.toggle("hidden",
+        !(bootConfigPorts().includes("cam1") && bootConfig.form.sensors.cam1 !== "none"));
 
       const form = bootConfig.form;
       const onOff = (on) => (on ? "On" : "Off");
@@ -21635,6 +22001,7 @@ std::string_view webControlPageHtml()
         bootConfig.payload = result.boot_config;
         if (!keepForm || !bootConfig.form) {
           bootConfig.form = bootConfigFormFrom(bootConfig.payload.state);
+          bootConfigLoadPairNote(bootConfig.form);
           bootConfig.text = null;
           closeBootConfigEditor(true);
         }
@@ -21890,6 +22257,7 @@ std::string_view webControlPageHtml()
         const uploaded = bootConfigFormFrom(result.state);
         if (!bootConfigRp1Available())
           uploaded.rp1 = bootConfig.form.rp1;
+        bootConfigLoadPairNote(uploaded);
         bootConfig.form = uploaded;
         bootConfigChanged();
         showToast("Loaded " + file.name + " into the card: not saved yet.", false);
@@ -21999,12 +22367,17 @@ std::string_view webControlPageHtml()
             && info.link.options.some((option) => option.hz === Number(current));
           bootConfig.form.links[port] = sensor === loaded.sensors[port] && camera ? camera.link_frequency
             : offered ? Number(current) : (candidates && candidates[sensor]) || null;
+          // Two IMX585: Camera 0's rate leads (choosing IMX585 for Camera 1 copies it; an IMX283 never takes it).
+          bootConfigPairLinks(bootConfig.form, "cam0");
+          bootConfig.linkNote = "";
           bootConfigChanged();
         });
         document.getElementById(prefix + "LinkSelect").addEventListener("change", (event) => {
           if (!bootConfig.form)
             return;
           bootConfig.form.links[port] = Number(event.target.value);
+          bootConfigPairLinks(bootConfig.form, port);   // either select changes both
+          bootConfig.linkNote = "";
           bootConfigChanged();
         });
       });
