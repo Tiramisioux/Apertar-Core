@@ -2230,6 +2230,44 @@ std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
            + ",\"cam1_mode\":\"" + escapeJson(ui.cam1Mode) + "\"";
 }
 
+// The `cam1` object and `record_cameras` for both state bodies (design 4.5), with a leading comma; "" when cam1 is not
+// configured, so a one-sensor rig, or the switch off, keeps today's state byte for byte. Reads the relay's snapshot
+// only: no commandMutex_, no controller accessor.
+std::string cam1StateMembers(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+{
+    if (!client.configured())
+        return {};
+    const ControlClient::Snapshot cam1 = client.snapshot();
+    cam1state::RankInputs rank;
+    rank.linked = cam1.linked;
+    rank.lost = cam1.lost;
+    rank.sensorMissing = cam1.sensorMissing;
+    rank.recording = cam1.recording;
+    rank.writing = cam1.writing;
+    rank.refused = cam1.refused;
+    rank.standby = cam1.standby;
+    rank.pending = cam1.pending;
+    const std::string word = cam1state::word(rank);
+
+    cam1state::Cam1View view;
+    view.state = word;
+    view.message = cam1.message;
+    view.droppedFrames = cam1.droppedFrames;
+    view.settings = cam1.settings;
+    view.sensor = cam1.sensor;
+    view.sensorMono = cam1.sensorMono;   // locked false and skew_us 0 until the live skew exists (part 2)
+
+    cam1state::RecordCamerasInputs cameras;
+    cameras.recordCameras = ui.recordCameras;
+    cameras.previewSource = ui.previewSource;
+    cameras.hdmi1Source = ui.hdmi1Source;
+    cameras.soundRecorder = ui.soundRecorderEnabled;
+    cameras.cam0Recording = cam0Recording;
+    cameras.cam1State = word;
+    cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
+    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + cam1state::recordCamerasWord(cameras) + "\"";
+}
+
 std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
 {
     std::map<std::string, std::string> values;
@@ -9973,6 +10011,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"favorites_order\":" << jsonStringArray(uiSettings.favoritesOrder)
         << "," << valueStepsJson(uiSettings, camera_.sensorName())
         << "}"
+        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui, as in get_state (design 4.5)
         << ",\"audio\":{"
         << "\"input_devices\":" << jsonAudioDeviceOptions(audioDevices.inputOptions)
         << ",\"output_devices\":" << jsonAudioDeviceOptions(audioDevices.outputOptions)
@@ -13436,6 +13475,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const auto mediaWrite = camera_.mediaWriteStatus();
         // The watcher's latest probe; never touches the device.
         const MediaSnapshot mediaState = mediaSnapshot();
+        const SharedUiSettingsSnapshot uiState = readSharedUiSettings();
         const bool soundRecording = soundRecordingActive();
         const bool recording = camera_.isRecording() || soundRecording;
         // The lock's state as /api/state carries it (design §8.1): err_us is the last frame's grid error.
@@ -13474,7 +13514,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
              << clipMergeStateJson()
-             << ",\"ui\":{" << dualSensorUiStateJson(readSharedUiSettings()) << "}";
+             << ",\"ui\":{" << dualSensorUiStateJson(uiState) << "}"
+             << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
         return okReply(command.id, body.str());
     }
 
