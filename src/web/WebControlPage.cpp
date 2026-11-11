@@ -477,14 +477,15 @@ std::string_view webControlPageHtml()
     }
 
     /* PiP: the inset is 28 % of the stage, 3 % from the right and below the badges, top right. */
+    /* PiP: the inset sits top right, 3% in from the right edge and 5% down (about the same distance in pixels). */
     .preview-stage.dual.view-pip0 {
       --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
-      --p1-l: 69%; --p1-t: 13%; --p1-w: 28%; --p1-h: 28%;
+      --p1-l: 69%; --p1-t: 5%; --p1-w: 28%; --p1-h: 28%;
     }
 
     .preview-stage.dual.view-pip1 {
       --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%;
-      --p0-l: 69%; --p0-t: 13%; --p0-w: 28%; --p0-h: 28%;
+      --p0-l: 69%; --p0-t: 5%; --p0-w: 28%; --p0-h: 28%;
     }
 
     .preview-stage.dual .preview-stream:not(.preview-stream-cam1),
