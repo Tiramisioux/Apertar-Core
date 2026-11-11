@@ -453,6 +453,12 @@ std::string_view webControlPageHtml()
       --p0-t: 0%; --p1-t: 0%; --p0-h: 100%; --p1-h: 100%;
     }
 
+    /* In the Both views the footer (the VU meter) sits 8 px up, the same as the pane timecodes, so their bottoms line up. */
+    .preview-card:has(.preview-stage.dual.view-both) .preview-footer,
+    .preview-card:has(.preview-stage.dual.view-bothleft) .preview-footer {
+      bottom: 8px;
+    }
+
     /* The VU meter (16 px in from the stage's bottom-left, 34 px wide) now lies on the left pane: that pane's timecode
        moves to its right. */
     @media (min-width: 701px) {
