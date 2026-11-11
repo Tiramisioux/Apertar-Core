@@ -10,6 +10,7 @@
 // second and nothing else: no socket, no log line, configured() stays false.
 #include "ipc/CommandClasses.hpp"
 #include "ipc/Resync.hpp"
+#include "ipc/Skew.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -44,6 +45,11 @@ public:
         std::function<bool()> primaryIdle;                     // the 4.3 idle test on cam0, from published flags
         std::function<bool()> primaryTakeActive;               // a take (or pre-roll) runs on cam0
         std::function<bool()> primaryTakeStarting;             // a record_start is publishing its take (T62)
+        // The live sync check (design 7.6): the primary's recent preview frames, its frame rate as a fraction and its
+        // phase-lock verdict, all from published atomics. Unset: the check stays unknown.
+        std::function<std::vector<skew::Stamp>()> primaryFrames;
+        std::function<std::pair<int64_t, int64_t>()> frameRate;   // recordingFrameRate(fps)
+        std::function<bool()> primaryLocked;
     };
 
     // Where a queued command came from: a "both" command forwarded after the primary's ok, a camera=cam1 setter, or one of
@@ -85,6 +91,9 @@ public:
         int64_t lastBufferEventMs = 0;
         int64_t lastMediaWriteEventMs = 0;
         int64_t lastPreviewFrameMs = 0;
+        bool locked = false;                // both Cores locked at equal fps, skew within the bound (7.6)
+        bool skewKnown = false;             // enough frame pairs to say; skew_us is null while false
+        double skewUs = 0;                  // median cam1 - cam0 of the last second
     };
 
     ControlClient() = default;
@@ -156,6 +165,7 @@ private:
     void compareWith(const resync::PrimaryView &view, int64_t sentMs);
     void updateRefusedLocked();
     void failReplies();
+    void measureSkew();
 
     Options options_;
     std::thread thread_;
@@ -176,6 +186,8 @@ private:
     bool prevTakeActive_ = false;
     bool cam1RecordedThisTake_ = false;
     std::vector<std::string> lastDiffs_;   // the fields the last differing compare found
+    skew::Meter skewMeter_;                // relay thread only
+    bool cam1PhaseLocked_ = false;         // cam1's get_state: fps_phase_lock_locked (under mutex_)
     int64_t nextTickMs_ = 0;
     bool settled_ = false;          // the relink actions (standby, wake) have run for this link
 

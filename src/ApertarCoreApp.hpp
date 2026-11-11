@@ -19,6 +19,7 @@
 #include "util/MediaProfile.hpp"
 #include "util/StoragePreroll.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -98,6 +99,8 @@ private:
     resync::PrimaryView relayView() const;
     bool primaryIdleForRelay() const;
     bool primaryTakeActiveForRelay() const;
+    std::vector<skew::Stamp> primaryFramesForRelay() const;
+    void noteRelayFrame(int64_t timestampUs);
     void noteRelayEvent(const std::string &eventJson);
     // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
     bool secondaryRole() const;
@@ -190,6 +193,13 @@ private:
     std::atomic<bool> primaryTakeStarting_{false};   // the record_start branch publishes its take here (T62)
     mutable std::mutex relayViewMutex_;              // guards relayView_ only; never held across a call into the controller
     resync::PrimaryView relayView_;
+    // The primary's recent preview frames for the live sync check (design 7.6): a ring the preview publisher writes and the
+    // relay reads, no lock. A torn entry only costs one pair.
+    static constexpr size_t kRelayFrameRing = 64;
+    std::array<std::atomic<int64_t>, kRelayFrameRing> relayFrameUs_{};
+    std::array<std::atomic<int64_t>, kRelayFrameRing> relayFrameAtMs_{};
+    std::atomic<uint32_t> relayFrameHead_{0};
+    std::atomic<bool> relayPrimaryLocked_{false};
     WebServer webServer_;
     GpioInput gpioInput_;
     StandbyPowerButtonInput standbyPowerButton_;

@@ -2279,7 +2279,10 @@ std::string cam1StateMembers(const ControlClient &client, const SharedUiSettings
     view.droppedFrames = cam1.droppedFrames;
     view.settings = cam1.settings;
     view.sensor = cam1.sensor;
-    view.sensorMono = cam1.sensorMono;   // locked false and skew_us 0 until the live skew exists (part 2)
+    view.sensorMono = cam1.sensorMono;
+    view.locked = cam1.locked;           // the live sync check (design 7.6): both Cores locked, equal fps, skew in the bound
+    view.skewKnown = cam1.skewKnown;
+    view.skewUs = cam1.skewUs;
 
     cam1state::RecordCamerasInputs cameras;
     cameras.recordCameras = ui.recordCameras;
@@ -8262,6 +8265,13 @@ void ApertarCoreApp::startCam1Client()
     options.primaryIdle = [this] { return primaryIdleForRelay(); };
     options.primaryTakeActive = [this] { return primaryTakeActiveForRelay(); };
     options.primaryTakeStarting = [this] { return primaryTakeStarting_.load(std::memory_order_acquire); };
+    options.primaryFrames = [this] { return primaryFramesForRelay(); };
+    options.frameRate = [this] {
+        const auto fps = jsonkeys::numberOf(relayView().settings, "fps");
+        const auto rate = recordingFrameRate(fps.value_or(25.0));
+        return std::pair<int64_t, int64_t>{rate.first, rate.second};
+    };
+    options.primaryLocked = [this] { return relayPrimaryLocked_.load(std::memory_order_acquire); };
     cam1Client_.start(std::move(options));
 }
 
@@ -8294,6 +8304,28 @@ bool ApertarCoreApp::primaryTakeActiveForRelay() const
     return camera_.rawTakeActive() || storagepreroll::prerollActive() || relayRecording_.load(std::memory_order_acquire);
 }
 
+void ApertarCoreApp::noteRelayFrame(int64_t timestampUs)
+{
+    const int64_t atMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const uint32_t slot = relayFrameHead_.load(std::memory_order_relaxed) % kRelayFrameRing;
+    relayFrameUs_[slot].store(timestampUs, std::memory_order_relaxed);
+    relayFrameAtMs_[slot].store(atMs, std::memory_order_relaxed);
+    relayFrameHead_.fetch_add(1, std::memory_order_release);   // one writer: the preview publisher
+}
+
+std::vector<skew::Stamp> ApertarCoreApp::primaryFramesForRelay() const
+{
+    std::vector<skew::Stamp> frames;
+    const uint32_t head = relayFrameHead_.load(std::memory_order_acquire);
+    const uint32_t count = std::min<uint32_t>(head, static_cast<uint32_t>(kRelayFrameRing));
+    frames.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t slot = (head - 1 - i) % kRelayFrameRing;
+        frames.push_back({relayFrameUs_[slot].load(std::memory_order_relaxed), relayFrameAtMs_[slot].load(std::memory_order_relaxed)});
+    }
+    return frames;
+}
+
 resync::PrimaryView ApertarCoreApp::relayView() const
 {
     std::lock_guard<std::mutex> lock(relayViewMutex_);
@@ -8324,6 +8356,7 @@ void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
     relayTimelapse_.store(camera_.timelapseActive(), std::memory_order_release);
     relayPhotoMode_.store(settings.photoModeEnabled, std::memory_order_release);
     relayMediaWrites_.store(camera_.mediaWritesPending(), std::memory_order_release);
+    relayPrimaryLocked_.store(camera_.phaseLockStatus().locked, std::memory_order_release);
     std::string body = "{" + settingsBody(settings) + "}";
 
     bool rebuild;
@@ -15927,6 +15960,8 @@ void ApertarCoreApp::handleTriggerEvent(const std::string &eventJson)
 
 void ApertarCoreApp::publishPreviewFrame(const PreviewFrameDescriptor &frame)
 {
+    if (!frame.registration && !secondaryRole())
+        noteRelayFrame(static_cast<int64_t>(frame.timestampUs));   // the live sync check pairs these with cam1's (design 7.6)
     std::vector<int> attachedFds;
     if (frame.registration) {
         const int layoutPlaneCount = std::max(0, std::min(frame.planeCount, 3));

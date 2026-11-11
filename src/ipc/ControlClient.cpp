@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
@@ -347,6 +348,7 @@ void ControlClient::tick()
         return;
     }
     watchTies();
+    measureSkew();
     if (pollId_ == 0) {
         pollId_ = kPollIdBase + (nextId_++ & 0xFFFFF);
         pollSentMs_ = nowMs();
@@ -354,6 +356,33 @@ void ControlClient::tick()
             dropLink("send failed");
     }
     serviceResync();
+}
+
+// The live check (design 7.6): cam1's preview frames against the primary's, paired by gridPoint() slot. Unknown, and not
+// locked, with no primary frames to pair with, at two frame rates, or with too few pairs.
+void ControlClient::measureSkew()
+{
+    skew::Result result;
+    if (options_.primaryFrames && options_.frameRate && fd_ >= 0) {
+        const resync::PrimaryView view = options_.primaryView ? options_.primaryView() : resync::PrimaryView{};
+        std::string cam1Settings;
+        bool cam1Locked;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cam1Settings = state_.settings;
+            cam1Locked = cam1PhaseLocked_ && state_.answered;
+        }
+        const auto primaryFps = jsonkeys::numberOf(view.settings, "fps");
+        const auto cam1Fps = jsonkeys::numberOf(cam1Settings, "fps");
+        const bool equalFps = ties_.fps || (primaryFps && cam1Fps && std::abs(*primaryFps - *cam1Fps) < 0.0005);
+        const auto rate = options_.frameRate();
+        result = skewMeter_.measure(options_.primaryFrames(), nowMs(), rate.first, rate.second, equalFps,
+                                    cam1Locked && (!options_.primaryLocked || options_.primaryLocked()));
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.locked = result.locked;
+    state_.skewKnown = result.known;
+    state_.skewUs = result.known ? result.skewUs : 0;
 }
 
 // A change of cam1Settings runs the transition resync (design 4.4): untying resolution alone sends cam1 the ladder off,
@@ -548,8 +577,11 @@ void ControlClient::handleReply(const std::string &line)
 void ControlClient::handleEvent(const std::string &line)
 {
     if (hasPrefix(line, "{\"event\":\"preview_frame\"")) {
+        const int64_t now = nowMs();
+        if (const auto timestamp = jsonkeys::numberOf(line, "timestamp_us"))
+            skewMeter_.addCam1({static_cast<int64_t>(*timestamp), now});   // relay thread only
         std::lock_guard<std::mutex> lock(mutex_);
-        state_.lastPreviewFrameMs = nowMs();
+        state_.lastPreviewFrameMs = now;
     } else if (hasPrefix(line, "{\"event\":\"recording\"")) {
         const auto active = jsonkeys::boolOf(line, "active");
         std::lock_guard<std::mutex> lock(mutex_);
@@ -593,6 +625,7 @@ void ControlClient::handleGetState(const std::string &line)
         state_.droppedFrames = static_cast<long long>(jsonkeys::numberOf(line, "recording_dropped_frames").value_or(0));
         state_.sensor = jsonkeys::stringOf(line, "sensor").value_or(state_.sensor);
         state_.sensorMono = jsonkeys::boolOf(line, "sensor_mono").value_or(state_.sensorMono);
+        cam1PhaseLocked_ = jsonkeys::boolOf(line, "fps_phase_lock_locked").value_or(false);
         if (!run.empty())
             state_.settings = "{" + run + "}";
         doSettle = !settled_;
@@ -783,6 +816,8 @@ void ControlClient::dropLink(const char *why)
         busySinceMs_ = 0;
         step1Failed_ = false;
         state_.answered = false;
+        state_.locked = false;
+        state_.skewKnown = false;
         state_.idle = false;
         state_.standby = false;
         state_.writing = false;

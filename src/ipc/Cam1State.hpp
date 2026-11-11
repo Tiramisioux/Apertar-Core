@@ -3,6 +3,7 @@
 //
 // The state word's ranking, the configured test (amendment A1), the busy window's verdict, the `cam1` object and the
 // top-level `record_cameras`. ControlClient keeps the inputs; ApertarCoreApp writes the result into both state bodies.
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -121,6 +122,7 @@ struct Cam1View {
     long long droppedFrames = 0;
     bool locked = false;
     double skewUs = 0;
+    bool skewKnown = false;        // enough frame pairs to say; skew_us reads null otherwise (§7.6)
     std::string settings = "{}";   // cam1's settingsBody from its last get_state, as an object
     std::string sensor;
     bool sensorMono = false;
@@ -150,7 +152,7 @@ inline std::string objectJson(const Cam1View &view)
     return "\"cam1\":{\"state\":\"" + detail::escape(view.state) + "\",\"message\":\"" + detail::escape(view.message) +
            "\",\"recording_dropped_frames\":" + std::to_string(view.droppedFrames) +
            ",\"locked\":" + (view.locked ? "true" : "false") +
-           ",\"skew_us\":" + std::to_string(static_cast<long long>(view.skewUs)) +
+           ",\"skew_us\":" + (view.skewKnown ? std::to_string(static_cast<long long>(std::llround(view.skewUs))) : std::string("null")) +
            ",\"settings\":" + (view.settings.empty() ? "{}" : view.settings) +
            ",\"sensor\":\"" + detail::escape(view.sensor) + "\",\"sensor_mono\":" + (view.sensorMono ? "true" : "false") + "}";
 }
