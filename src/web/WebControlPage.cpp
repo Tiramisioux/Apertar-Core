@@ -256,6 +256,28 @@ std::string_view webControlPageHtml()
       color: var(--info);
     }
 
+    /* Dropped frames in the take: an amber badge beside the status pill, the count or "!" (as the touch UI's
+       DroppedFrameWarning). */
+    .drop-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      align-self: stretch;
+      min-width: 40px;
+      box-sizing: border-box;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(170, 121, 55, 0.75);
+      background: rgba(59, 42, 19, 0.9);
+      color: #ffd27a;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .drop-badge[hidden] {
+      display: none;
+    }
+
     .icon-button {
       width: 44px;
       height: 44px;
@@ -4445,6 +4467,7 @@ std::string_view webControlPageHtml()
           <span class="status-dot" id="statusDot">●</span>
             <span id="recordingStatus">READY</span>
           </div>
+          <span class="drop-badge" id="droppedFrameBadge" role="status" hidden></span>
         </div>
         <button class="icon-button" id="mediaBrowserButton" aria-label="Open clip browser">
           <img class="icon-image" src="/icons/folder.png" alt="">
@@ -15598,6 +15621,15 @@ std::string_view webControlPageHtml()
       const pillRecording = isRecording && !bufferStopped;
       const prerollShown = snapshot.storage_preroll_active === true && !pillRecording && !isTimelapse;
       setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (pillRecording ? "REC" : snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true ? "WRITING" : "READY"))));
+      // Dropped frames in the take (as the touch UI): the count, or "!" when Core gives no count.
+      const dropBadge = document.getElementById("droppedFrameBadge");
+      if (dropBadge) {
+        const dropCount = Number(snapshot.recording_dropped_frames) || 0;
+        dropBadge.hidden = snapshot.recording_has_dropped_frames !== true;
+        dropBadge.textContent = dropCount > 0 ? String(dropCount) : "!";
+        dropBadge.title = dropCount > 0 ? dropCount + " dropped frames in the take" : "Dropped frames in the take";
+        dropBadge.setAttribute("aria-label", dropBadge.title);
+      }
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
