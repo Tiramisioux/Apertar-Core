@@ -15191,7 +15191,9 @@ std::string_view webControlPageHtml()
         wipeUi.dir = ui.preview_wipe_direction;
     }
 
-    // At most one send per 120 ms, the latest values merged, so the HDMI follows a drag while it moves.
+    // At most one send per 120 ms, the latest values merged, so the HDMI follows a drag while it moves. A quiet POST, as
+    // user_activity's: sendCommand would re-render the page twice per send and hold REC disabled while each is in flight,
+    // so REC blinked during a drag. The wipe keeps its own state (wipeUi) and follows the snapshot once the sends settle.
     function wipeSend(fields) {
       Object.assign(wipeUi.pending, fields);
       if (wipeUi.timer)
@@ -15202,7 +15204,10 @@ std::string_view webControlPageHtml()
         wipeUi.timer = 0;
         wipeUi.holdUntil = performance.now() + 1500;
         try {
-          await sendCommand(body);
+          const response = await fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const result = await response.json();
+          if (!result.ok)
+            showToast(result.error || "Command failed.", true);
         } catch (error) {
           showToast(error.message, true);
         }
