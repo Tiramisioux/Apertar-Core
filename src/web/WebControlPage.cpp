@@ -502,6 +502,46 @@ std::string_view webControlPageHtml()
       }
     }
 
+    /* Settings for CAM0 | CAM1: the switch, and the controls CAM1 shares with CAM0 (greyed, with their note). */
+    .dual-settings-for {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .dual-settings-for[hidden],
+    .dual-settings-for-card[hidden],
+    .dual-fps-max[hidden] {
+      display: none;
+    }
+
+    .dual-settings-for-label {
+      font-size: 13px;
+      color: #a1a1aa;
+    }
+
+    .dual-tied {
+      position: relative;
+      opacity: 0.42;
+    }
+
+    .dual-tied > :not(.dual-shared-note) {
+      pointer-events: none;
+    }
+
+    .dual-shared-note {
+      display: none;
+    }
+
+    .dual-tied > .dual-shared-note {
+      display: block;
+      font-size: 12px;
+      font-style: italic;
+      color: #e4e4e7;
+      margin-bottom: 6px;
+    }
+
     .dual-view-row {
       display: flex;
       flex-wrap: wrap;
@@ -4842,8 +4882,9 @@ std::string_view webControlPageHtml()
               <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
             </div>
 
+            <div class="dual-settings-for" id="dualSettingsForCamera" hidden></div>
             <div class="stack">
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="fps">
                 <div class="select-topline">
                   <span>Frame rate</span>
                   <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder"></span>
@@ -4851,35 +4892,36 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="iso">
                 <div class="select-topline">
                   <span>ISO</span>
                 </div>
                 <div class="pill-grid" id="isoOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="shutter">
                 <div class="select-topline">
                   <span id="shutterSectionLabel">Shutter angle</span>
                 </div>
                 <div class="pill-grid" id="shutterOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="resolution">
                 <div class="select-topline">
                   <span id="quickResolutionLabel">Resolution</span>
+                  <span class="select-note dual-fps-max" id="dualFpsMax" hidden></span>
                 </div>
                 <div class="pill-grid three-col" id="resolutionOptions"></div>
               </section>
 
-              <section class="select-block hidden" id="cropRatioBlock">
+              <section class="select-block hidden" id="cropRatioBlock" data-dual-tie="resolution">
                 <div class="select-topline">
                   <span id="quickCropLabel">Crop mode</span>
                 </div>
                 <div class="pill-grid three-col" id="cropRatioOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="wb">
                 <div class="select-topline">
                   <span>White balance</span>
                   <span class="select-value select-value-pill" id="whiteBalanceValue">5600K</span>
@@ -5157,7 +5199,8 @@ std::string_view webControlPageHtml()
 
         <div class="settings-panels">
           <section class="settings-panel" data-panel="record">
-            <div class="settings-card">
+            <div class="settings-card dual-settings-for-card" id="dualSettingsForRecord" hidden></div>
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Still Mode</h3>
@@ -5204,7 +5247,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Sound Recorder</h3>
@@ -5215,7 +5258,7 @@ std::string_view webControlPageHtml()
               <div class="pill-grid" id="settingsSoundRecorderOptions"></div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="resolution">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Recording format</h3>
@@ -5321,7 +5364,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="iso">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Exposure Compensation</h3>
@@ -5339,7 +5382,7 @@ std::string_view webControlPageHtml()
               <p class="settings-card-copy" id="settingsExposureCompensationNote">Enable Auto ISO or Auto Shutter to adjust exposure.</p>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Gyro Data</h3>
@@ -5350,7 +5393,7 @@ std::string_view webControlPageHtml()
               <div class="pill-grid" id="settingsGyroDataOptions"></div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Gyro Calibration</h3>
@@ -5410,7 +5453,7 @@ std::string_view webControlPageHtml()
               <span class="subtle-note" id="settingsImuCalibrationStatus"></span>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="shared">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
@@ -5427,7 +5470,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="resolution">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Autofocus</h3>
@@ -6159,7 +6202,7 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
                 <div class="pill-grid" id="settingsMediaTrimOptions"></div>
               </section>
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="shared">
                 <div class="select-topline">
                   <span>Frame-rate phase lock</span>
                 </div>
@@ -6576,7 +6619,7 @@ std::string_view webControlPageHtml()
               </div>
               <div class="field-stack" id="settingsValueLists"></div>
               <!-- Speed Ramp, under the frame-rate list (renderValueListsEditor puts it after the Frame Rate row). -->
-              <div class="field-stack value-list-row speed-ramp-block" id="settingsSpeedRampCard">
+              <div class="field-stack value-list-row speed-ramp-block" id="settingsSpeedRampCard" data-dual-tie="shared">
                 <span class="input-label">Speed Ramp</span>
                 <span class="subtle-note hidden" id="settingsSpeedRampNote"></span>
                 <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
@@ -15151,6 +15194,7 @@ std::string_view webControlPageHtml()
     }
 
     async function sendCommand(payload) {
+      payload = dualRoutePayload(payload);   // CAM1's panels send their setters with camera=cam1
       const previousSnapshot = cloneSnapshot(state.snapshot);
       const hadSnapshot = !!state.snapshot;
       const refreshDelayMs = payload && payload.cmd === "record_start" ? 80 : 140;
@@ -15985,6 +16029,7 @@ std::string_view webControlPageHtml()
     }
 
     function renderSnapshot(snapshot) {
+      snapshot = dualShownSnapshot(snapshot);
       // /api/state carries the write-buffer, storage pre-roll, split and merge fields under "system"; the page reads them at the top level.
       const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
       if (systemFields) {
@@ -16151,7 +16196,9 @@ std::string_view webControlPageHtml()
       setPreviewSmpteEnabled(smpteEnabled);
       setFalseColorLegend(falseColorMode, falseColorEnabled && !smpteEnabled);
       setPreviewAspectForSnapshot(snapshot);
-      updateDualPreview(snapshot);
+      updateDualPreview(dualBaseSnapshot(snapshot));
+      renderDualSettingsFor(snapshot);
+      applyDualTies(snapshot);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
 
@@ -21090,6 +21137,144 @@ std::string_view webControlPageHtml()
         return null;   // config.txt not read yet
       const sensor = (port) => String((cameras[port] && cameras[port].sensor) || "none").toLowerCase();
       return { cam0: sensor("cam0"), cam1: sensor("cam1") };
+    }
+
+    // ---- Settings for CAM0 | CAM1 (design §5.3, A2) ----------------------------------------------------------
+    // Shown only while some control is untied. On CAM1 the page renders a projection of the snapshot: cam1.settings
+    // (cam1's settingsBody) over the top-level fields, with cam1's sensor in place of cam0's, so the existing renderers
+    // and helpers (which take the snapshot) see cam1. Its setters are sent with camera=cam1; controls still tied to
+    // cam0 are greyed "Shared with CAM0". The projection carries dual_real, the snapshot it came from.
+    const dualSettings = { target: "cam0" };
+    const dualCam1Setters = {
+      set_resolution: "resolution", set_raw_bit_depth: "resolution", set_record_format: "resolution",
+      set_cdng_compression: "resolution", set_cdng_log: "resolution", set_lossy_dng_ratio: "resolution",
+      set_cdng_preview_color_profile: "resolution", set_prores_color_profile: "resolution",
+      set_prores_profile: "resolution", set_tuning_file: "resolution", set_clear_hdr: "resolution",
+      set_h264_resolution: "resolution", set_af_mode: "resolution", set_af_range: "resolution",
+      set_af_speed: "resolution", set_af_window: "resolution",
+      set_iso: "iso", set_iso_auto: "iso", set_exposure_compensation: "iso", set_exposure_metering: "iso",
+      set_shutter_us: "shutter", set_shutter_auto: "shutter", set_wb: "wb", set_wb_auto: "wb",
+      set_fps: "fps", set_conform_fps: "fps",
+    };
+
+    // The tied controls: every control for "unison", else the comma list.
+    function dualTiedControls(snapshot) {
+      const raw = snapshot && snapshot.ui && typeof snapshot.ui.cam1_settings === "string" ? snapshot.ui.cam1_settings.trim() : "unison";
+      if (raw === "unison" || raw === "")
+        return raw === "" ? [] : dualTies.map(([token]) => token);
+      return raw.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+    }
+
+    function dualSettingsSwitchVisible(snapshot) {
+      return !!dualCam1(snapshot) && dualActive(snapshot)
+        && dualTies.some(([token]) => !dualTiedControls(snapshot).includes(token));
+    }
+
+    // With no link CAM1's panels show the last settings greyed and Core refuses camera=cam1 setters (§4.5).
+    function dualCam1Linked(snapshot) {
+      const cam1 = dualCam1(snapshot);
+      return !!cam1 && !["not_found", "offline", "lost"].includes(cam1.state);
+    }
+
+    function dualBaseSnapshot(snapshot) {
+      return snapshot && snapshot.dual_projected && snapshot.dual_real ? snapshot.dual_real : snapshot;
+    }
+
+    function dualProjectSnapshot(base) {
+      const cam1 = dualCam1(base);
+      const view = Object.assign({}, base, cam1.settings && typeof cam1.settings === "object" ? cam1.settings : {});
+      view.capture = Object.assign({}, base.capture, { sensor: String(cam1.sensor || "") });
+      view.sensor = String(cam1.sensor || "");
+      view.sensor_mono = cam1.sensor_mono === true;
+      view.dual_projected = true;
+      view.dual_real = base;
+      return view;
+    }
+
+    // What the page renders: the snapshot itself, or its CAM1 projection. A projection that is still wanted passes
+    // through, so an optimistic patch on it survives a re-render.
+    function dualShownSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object")
+        return snapshot;
+      const base = dualBaseSnapshot(snapshot);
+      if (dualSettings.target === "cam1" && !dualSettingsSwitchVisible(base))
+        dualSettings.target = "cam0";   // the last tie went back on, or dual is off
+      if (dualSettings.target !== "cam1")
+        return base;
+      return snapshot.dual_projected ? snapshot : dualProjectSnapshot(base);
+    }
+
+    function dualRoutePayload(payload) {
+      const snapshot = state.snapshot;
+      if (!snapshot || !snapshot.dual_projected || !payload || payload.camera !== undefined || !dualCam1Setters[payload.cmd])
+        return payload;
+      return Object.assign({}, payload, { camera: "cam1" });
+    }
+
+    function setDualSettingsTarget(target) {
+      dualSettings.target = target === "cam1" ? "cam1" : "cam0";
+      if (state.snapshot)
+        renderSnapshot(dualBaseSnapshot(state.snapshot));
+    }
+
+    function renderDualSettingsFor(snapshot) {
+      const base = dualBaseSnapshot(snapshot);
+      const visible = dualSettingsSwitchVisible(base);
+      const linked = dualCam1Linked(base);
+      ["dualSettingsForCamera", "dualSettingsForRecord"].forEach((id) => {
+        const host = document.getElementById(id);
+        if (!host)
+          return;
+        host.hidden = !visible;
+        if (!visible)
+          return;
+        const key = dualSettings.target + "|" + (linked ? 1 : 0);
+        if (host.dataset.built === key)
+          return;
+        host.dataset.built = key;
+        host.innerHTML = "";
+        host.appendChild(createDomElement("span", "dual-settings-for-label", "Settings for"));
+        const grid = createDomElement("div", "pill-grid two-col");
+        host.appendChild(grid);
+        buildOptionButtonsInto(grid, [{ value: "cam0", label: "CAM0", enabled: true }, { value: "cam1", label: "CAM1", enabled: true }],
+          dualSettings.target, setDualSettingsTarget, 2);
+        if (dualSettings.target === "cam1" && !linked)
+          host.appendChild(createDomElement("span", "subtle-note", "CAM1 has no link: its last settings are shown greyed."));
+      });
+    }
+
+    // Grey what CAM1 does not own, with the note; on CAM0 every mark is cleared.
+    function applyDualTies(snapshot) {
+      const cam1View = !!(snapshot && snapshot.dual_projected);
+      const tied = cam1View ? dualTiedControls(snapshot) : [];
+      const linked = dualCam1Linked(snapshot);
+      document.querySelectorAll("[data-dual-tie]").forEach((element) => {
+        const kind = element.dataset.dualTie;
+        let note = "";
+        if (cam1View) {
+          if (!linked)
+            note = "CAM1 has no link";
+          else if (kind === "cam0only")
+            note = "CAM0 only";
+          else if (kind === "shared" || tied.includes(kind))
+            note = "Shared with CAM0";
+        }
+        element.classList.toggle("dual-tied", note !== "");
+        element.inert = note !== "";
+        let noteElement = element.querySelector(":scope > .dual-shared-note");
+        if (note !== "" && !noteElement) {
+          noteElement = createDomElement("span", "dual-shared-note");
+          element.insertBefore(noteElement, element.firstChild);
+        }
+        if (noteElement)
+          noteElement.textContent = note;
+      });
+      const fpsMax = document.getElementById("dualFpsMax");
+      if (fpsMax) {
+        const max = cam1View && snapshot.dual_real && dualCam1(snapshot.dual_real) ? Number(dualCam1(snapshot.dual_real).settings && dualCam1(snapshot.dual_real).settings.fps_max) : 0;
+        fpsMax.hidden = !(max > 0);
+        fpsMax.textContent = max > 0 ? "CAM1 max " + (Math.round(max * 10) / 10) + " fps" : "";
+      }
     }
 
     async function sendCam1Settings(value) {
