@@ -167,11 +167,11 @@ inline const std::vector<Sensor> &sensors()
             {891000000, 1782, 0, true, true},  {909000000, 1818, 0, true, true},  {918000000, 1836, 0, true, true},
             {945000000, 1890, 0, true, true},  {972000000, 1944, 0, true, true}}},
         {"imx577", "imx577", "IMX577", false, 0, 0, {}},
+        {"imx283", "imx283", "OneInchEye (IMX283)", false, 720000000, 0, {
+            {360000000, 720, 0, false, false}, {720000000, 1440, 0, false, false}}},
         {"imx585", "imx585", "StarlightEye (IMX585, colour)", false, 720000000, 891000000, imx585Options},
         {"imx585_mono", "imx585", "StarlightEye (IMX585, mono)", true, 720000000, 891000000, imx585Options},
         {"imx294", "imx294", "IMX294", false, 0, 0, {}},
-        {"imx283", "imx283", "OneInchEye (IMX283)", false, 720000000, 0, {
-            {360000000, 720, 0, false, false}, {720000000, 1440, 0, false, false}}},
     };
     return list;
 }
