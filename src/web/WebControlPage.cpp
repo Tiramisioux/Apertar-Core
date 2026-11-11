@@ -16866,6 +16866,9 @@ std::string_view webControlPageHtml()
       if (state.snapshot.recording) {
         const elapsedMs = performance.now() - state.recordingBasePerfMs;
         elapsedSeconds = state.recordingBaseElapsedSeconds + elapsedMs / 1000;
+        state.lastTakeElapsedSeconds = elapsedSeconds;
+      } else if (state.lastTakeElapsedSeconds > 0) {
+        elapsedSeconds = state.lastTakeElapsedSeconds;   // a stopped take keeps its last timecode until the next one starts
       }
       setText("timecodeValue", formatTimecode(elapsedSeconds * fpsInt, fpsInt));
     }
