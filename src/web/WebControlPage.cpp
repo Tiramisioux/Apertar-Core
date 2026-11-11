@@ -1684,6 +1684,11 @@ std::string_view webControlPageHtml()
       opacity: 0.6;
     }
 
+    /* The Dual Sensor card with one sensor: its own options greyed (phase lock stays usable). */
+    #settingsDualSensorCard.locked .select-block:not(.dual-keep) {
+      opacity: 0.6;
+    }
+
     .clip-example {
       font-family: ui-monospace, Menlo, Consolas, monospace;
       word-break: break-all;
@@ -4945,6 +4950,10 @@ std::string_view webControlPageHtml()
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/media.png" alt=""></span>
             <span>Media</span>
           </button>
+          <button class="settings-nav-item" data-panel="controls" type="button">
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
+            <span>Controls</span>
+          </button>
           <button class="settings-nav-item" data-panel="system" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/system.png" alt=""></span>
             <span>System</span>
@@ -4952,10 +4961,6 @@ std::string_view webControlPageHtml()
           <button class="settings-nav-item" data-panel="presets" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/levels.png" alt=""></span>
             <span>Presets</span>
-          </button>
-          <button class="settings-nav-item" data-panel="controls" type="button">
-            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
-            <span>Controls</span>
           </button>
           <button class="settings-nav-item" data-panel="config" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/config.png" alt=""></span>
@@ -5983,13 +5988,6 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
                 <div class="pill-grid" id="settingsMediaTrimOptions"></div>
               </section>
-              <section class="select-block">
-                <div class="select-topline">
-                  <span>Frame-rate phase lock</span>
-                </div>
-                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
-                <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
-              </section>
               <section class="select-block" data-search="frames per folder part split clip folder dng take long">
                 <div class="select-topline">
                   <span>Frames per folder</span>
@@ -6131,6 +6129,46 @@ std::string_view webControlPageHtml()
                   <button class="secondary-button" id="closeBootConfigEditorButton" type="button">Close</button>
                 </div>
               </div>
+            </div>
+
+            <!-- Dual Sensor (design §5.3, T67's card brought forward): what CAM1 shares with CAM0, which cameras record,
+                 and the phase lock. Greyed while config.txt names no Camera 1 sensor; the stored values stay. -->
+            <div class="settings-card" id="settingsDualSensorCard" data-search="dual sensor two cameras cam1 camera 1 second sensor share shared follow iso shutter fps wb white balance resolution record both phase lock sync">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Dual Sensor</h3>
+                  <p class="settings-card-copy">Two cameras: what CAM1 shares with CAM0, and which cameras record.</p>
+                  <p class="settings-card-copy" id="dualSensorNote"></p>
+                </div>
+              </div>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Shared with CAM0</span>
+                </div>
+                <div class="pill-grid three-col" id="dualSensorSharedOptions"></div>
+                <span class="subtle-note" id="dualSensorSharedNote">On: CAM1 follows CAM0's value. Off: CAM1 keeps its own.</span>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>CAM1 mode</span>
+                </div>
+                <div class="pill-grid ladder-pair" id="dualSensorCam1ModeOptions"></div>
+                <span class="subtle-note">With its own resolution: Closest to Cam 0 picks the CAM1 mode nearest CAM0's from CAM1's activated modes (its ladder wins when the ladder is on); Set on Cam 1 keeps the one you choose.</span>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Record</span>
+                </div>
+                <div class="pill-grid" id="dualSensorRecordOptions"></div>
+                <span class="subtle-note">Follow preview records the cameras the HDMI view shows.</span>
+              </section>
+              <section class="select-block dual-keep">
+                <div class="select-topline">
+                  <span>Frame-rate phase lock</span>
+                </div>
+                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock. With two sensors it keeps them on one grid. Works with one sensor too.</span>
+                <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsPowerActionsCard">
@@ -6794,6 +6832,7 @@ std::string_view webControlPageHtml()
       batteryInfo: { title: "Battery Info", section: "System" },
       autoPowerOff: { title: "Auto Power Off", section: "System" },
       thermal: { title: "Thermal", section: "System" },
+      dualSensor: { title: "Dual Sensor", section: "System" },
       powerActions: { title: "Power Actions", section: "System" },
       media: { title: "Media", section: "Media" },
       mediaSpeed: { title: "Media Speed", section: "Media" },
@@ -16474,6 +16513,7 @@ std::string_view webControlPageHtml()
       }, 3);
 
       renderSpeedRamp(snapshot);
+      renderDualSensorCard(snapshot);
       renderValueListsEditor(snapshot);
       renderModeLadder(snapshot);
       pbSnapshotChanged(snapshot);
@@ -20655,7 +20695,85 @@ std::string_view webControlPageHtml()
         linkNote.textContent = "CSI-2 lane rate: sets the frame-rate ceiling.";
     }
 
+    // The Dual Sensor card. Until the primary reports cam1 (T61) "configured" is config.txt's Camera 1 sensor, as the
+    // Boot Config card reads it. Shared controls: v2.4's cam1Settings, a comma list in a fixed order ("" = none).
+    const dualSharedControls = [["resolution", "Resolution and format"], ["iso", "ISO"], ["shutter", "Shutter"],
+      ["fps", "FPS"], ["wb", "WB"]];
+    const dualRecordOptions = ["Both", "Cam 0", "Cam 1", "Follow preview"];
+    const dualCam1Modes = ["Closest to Cam 0", "Set on Cam 1"];
+
+    function dualSensorPorts() {
+      const cameras = bootConfig.payload && bootConfig.payload.state && bootConfig.payload.state.cameras;
+      if (!cameras)
+        return null;   // config.txt not read yet
+      const sensor = (port) => String((cameras[port] && cameras[port].sensor) || "none").toLowerCase();
+      return { cam0: sensor("cam0"), cam1: sensor("cam1") };
+    }
+
+    function dualSharedList(uiState) {
+      const text = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings : "resolution,iso,shutter,fps,wb";
+      return text.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+    }
+
+    function renderDualSensorCard(snapshot) {
+      const card = document.getElementById("settingsDualSensorCard");
+      if (!card || !snapshot)
+        return;
+      const uiState = snapshot.ui || {};
+      const ports = dualSensorPorts();
+      const configured = !!ports && ports.cam1 !== "none" && ports.cam0 !== "none";
+      const sameType = configured && ports.cam0 === ports.cam1;
+      const note = !ports ? "Reading config.txt..."
+        : !configured ? (ports.cam1 === "none" ? "One sensor configured. Set Camera 1 in Boot Config, then reboot."
+          : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
+        : "CAM0: " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase()
+          + (sameType ? "" : ". Different sensors: CAM1 picks its own resolution.");
+      setText("dualSensorNote", note);
+      card.classList.toggle("locked", !configured);
+
+      const shared = dualSharedList(uiState);
+      const resolutionShared = sameType && shared.includes("resolution");
+      const sharedGrid = document.getElementById("dualSensorSharedOptions");
+      buildOptionButtonsInto(sharedGrid, dualSharedControls.map(([value, label]) => ({
+        value, label, enabled: configured && (value !== "resolution" || sameType),
+      })), "", async (value) => {
+        const next = shared.includes(value) ? shared.filter((token) => token !== value) : shared.concat([value]);
+        const ordered = dualSharedControls.map(([token]) => token).filter((token) => next.includes(token));
+        try {
+          await sendCommand({ cmd: "set_cam1_settings", value: ordered.join(",") });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 3);
+      Array.from(sharedGrid.children).forEach((button, index) => {
+        const token = dualSharedControls[index][0];
+        button.classList.toggle("active", token === "resolution" ? resolutionShared : shared.includes(token));
+      });
+
+      buildOptionButtons("dualSensorCam1ModeOptions", dualCam1Modes.map((value) => ({
+        value, label: value, enabled: configured && !resolutionShared,
+      })), uiState.cam1_mode || dualCam1Modes[0], async (value) => {
+        try {
+          await sendCommand({ cmd: "set_cam1_mode", value });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      buildOptionButtons("dualSensorRecordOptions", dualRecordOptions.map((value) => ({
+        value, label: value, enabled: configured,
+      })), uiState.record_cameras || "Both", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_record_cameras", value });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+    }
+
     function renderBootConfig() {
+      if (state.snapshot)
+        renderDualSensorCard(state.snapshot);   // its "configured" comes from config.txt
       const card = document.getElementById("settingsBootConfigCard");
       if (!card)
         return;
