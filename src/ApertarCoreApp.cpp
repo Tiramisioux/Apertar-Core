@@ -5717,7 +5717,7 @@ uint64_t estimatedRawBytesPerSecond(const CaptureSettings &settings)
 }
 
 // What the time-left figure assumes, for the WebUI's sub-label.
-std::string timeLeftEstimateLabel(const CaptureSettings &settings)
+std::string timeLeftEstimateLabel(const CaptureSettings &settings, std::optional<double> cardMinutes)
 {
     std::string format;
     const std::string bits = std::to_string(settings.rawBitDepth ? settings.rawBitDepth : 12) + "-bit";
@@ -5739,7 +5739,14 @@ std::string timeLeftEstimateLabel(const CaptureSettings &settings)
         format = "cDNG " + bits + (settings.cdngCompression == CdngCompression::LosslessJpeg ? " lossless" : "");
         break;
     }
-    return format + " estimate (bar: 2 h)";
+    // The bar is time left out of the whole card's recording time in this mode; the label names that total.
+    if (!cardMinutes.has_value() || cardMinutes.value() <= 0.0)
+        return format + " estimate";
+    const long total = static_cast<long>(std::floor(cardMinutes.value()));
+    const std::string card = total >= 60
+        ? std::to_string(total / 60) + " h" + (total % 60 ? " " + std::to_string(total % 60) + " min" : "")
+        : std::to_string(total) + " min";
+    return format + " estimate (card: " + card + ")";
 }
 
 double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::string &sensorName)
@@ -9621,9 +9628,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
             recordStillsLeft = std::floor(static_cast<double>(mediaFreeBytes) / estimatedStillFrameBytes);
     }
 
+    // The whole card's recording time in the current mode; the bar is time left out of it.
+    std::optional<double> cardRecordMinutes;
+    if (estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
+        cardRecordMinutes = static_cast<double>(mediaTotalBytes) / static_cast<double>(estimatedBytesPerSecond) / 60.0;
     std::optional<double> timeLeftPercent;
-    if (recordTimeLeftMinutes.has_value())
-        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / 120.0) * 100.0, 0.0, 100.0);
+    if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
+        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / cardRecordMinutes.value()) * 100.0, 0.0, 100.0);
 
     std::optional<double> batteryPercent;
     if (power.capacityPercent.has_value()) {
@@ -9799,7 +9810,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"record_time_left_minutes\":" << jsonNumberOrNull(recordTimeLeftMinutes, 1)
         << ",\"record_stills_left\":" << jsonNumberOrNull(recordStillsLeft, 0)
         << ",\"time_left_percent\":" << jsonNumberOrNull(timeLeftPercent, 1)
-        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings)) << "\""
+        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings, cardRecordMinutes)) << "\""
         << ",\"time_zone\":\"" << escapeJson(currentTimeZone) << "\""
         << ",\"time_zone_options\":" << jsonStringArray(timeZones)
         << ",\"local_time_input\":\"" << escapeJson(localDateTimeValue) << "\""
