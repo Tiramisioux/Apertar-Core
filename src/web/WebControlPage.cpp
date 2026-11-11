@@ -5525,6 +5525,7 @@ std::string_view webControlPageHtml()
           </section>
 
           <section class="settings-panel" data-panel="modes">
+            <div class="settings-card dual-settings-for-card" id="dualModesFor" hidden></div>
             <div class="settings-card" id="settingsSensorModesCard">
               <div class="settings-card-head">
                 <div>
@@ -7147,6 +7148,8 @@ std::string_view webControlPageHtml()
       snapshot: null,
       valueListsSignature: "",
       fpsSwitchingTo: 0,       // the resolution a set_fps in flight switches to
+      modesCam: "cam0",        // the camera the Modes cards edit; the other camera's ladder state waits in ladderStash
+      ladderStash: null,
       ladderServer: null,      // Core's last mode_ladder reply
       ladderError: "",
       ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
@@ -8120,7 +8123,138 @@ std::string_view webControlPageHtml()
     const ladderMaxResolutions = 8;
     const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
+    // The readout area a crop is measured against: the IMX283's is its 5472-wide active area.
+    function ladderCropAreaFor() {
+      return sensorNameLower(modesSnapshot()).indexOf("imx283") !== -1 ? { width: 5472, height: 3648 } : ladderCropArea;
+    }
     const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K SDR"], ["crop", "4K SDR crops"], ["2k", "2K SDR binned"]];
+    // The IMX283's groups (design §5.3): by binning, the 1x1 readout split into the full frame and its windows.
+    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K SDR 2×2 binned"],
+      ["bin3", "1.8K SDR 3×3 binned"]];
+
+    // The Modes cards edit one camera. state.ladder* holds that camera's ladder; the other's waits in state.ladderStash.
+    // modesSnapshot() is the snapshot whose sensor names the modes: cam0's (never the CAM1 projection), or cam1's.
+    function modesIsCam1() {
+      return state.modesCam === "cam1";
+    }
+
+    function modesSnapshot() {
+      const base = dualBaseSnapshot(state.snapshot);
+      return modesIsCam1() && dualCam1(base) ? dualProjectSnapshot(base) : base;
+    }
+
+    function ladderServerFor(cam) {
+      return cam === state.modesCam ? state.ladderServer : (state.ladderStash ? state.ladderStash.server : null);
+    }
+
+    // IMX283 binning: the pool entry's, else the table the size belongs to.
+    function imx283Binning(mode, info) {
+      if (info && Number(info.binning) >= 2)
+        return Number(info.binning);
+      const size = mode.width + "x" + mode.height;
+      const base = (imx283Bases[mode.bits === 10 ? 10 : 12] || []).find((item) => imx283Sizes(item).indexOf(size) !== -1);
+      return base && base.value === "2736x1824" ? 2 : (base && base.value === "1824x1216" ? 3 : 1);
+    }
+
+    function imx283LadderGroup(mode) {
+      const binning = imx283Binning(mode, ladderModeInfo(mode));
+      if (binning >= 3)
+        return "bin3";
+      if (binning === 2)
+        return "bin2";
+      return mode.width === 5472 && mode.height === 3648 ? "full" : "win";
+    }
+
+    function imx283LadderModeName(mode) {
+      const info = ladderModeInfo(mode);
+      const binning = imx283Binning(mode, info);
+      const aspect = ladderAspectText(mode);
+      return ladderSizeText(mode) + " SDR" + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
+        + (ladderCropIn(info) ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + mode.bits + "-bit";
+    }
+
+    function ladderBlankBank() {
+      return { server: null, draft: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
+    }
+
+    function switchModesCamera(cam) {
+      const target = cam === "cam1" ? "cam1" : "cam0";
+      if (target === state.modesCam)
+        return;
+      if (state.ladderSaving || state.ladderAspectsSaving || ladderDirty()) {
+        showToast("Wait for the modes to be saved.", true);
+        return;
+      }
+      clearTimeout(state.ladderCheckTimer);
+      clearTimeout(state.ladderAspectsTimer);
+      const out = { server: state.ladderServer, draft: state.ladderDraft, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
+        error: state.ladderError, fetchedMs: state.ladderFetchedMs, open: state.ladderOpen };
+      const incoming = state.ladderStash || ladderBlankBank();
+      state.ladderStash = out;
+      state.modesCam = target;
+      state.ladderServer = incoming.server;
+      state.ladderAspects = incoming.aspects;
+      state.ladderAspectsPending = incoming.aspectsPending;
+      state.ladderError = incoming.error;
+      state.ladderFetchedMs = incoming.fetchedMs;
+      state.ladderOpen = incoming.open;
+      state.ladderDraft = incoming.draft || (incoming.server ? ladderDraftFromServer(incoming.server) : []);
+      renderLadderEditor();
+      renderModesSwitch();
+      if (!state.ladderServer && !state.ladderFetching)
+        void fetchModeLadder(true);
+    }
+
+    // CAM0 | CAM1 on the Activated sensor modes card: shown when the sensors are of different kinds, or CAM1's resolution is untied.
+    function modesSwitchVisible(snapshot) {
+      const cam1 = dualCam1(snapshot);
+      if (!cam1 || !dualActive(snapshot))
+        return false;
+      const kind0 = String(snapshot.capture && snapshot.capture.sensor || snapshot.sensor || "").toLowerCase();
+      const kind1 = String(cam1.sensor || "").toLowerCase();
+      return (kind0 !== "" && kind1 !== "" && kind0 !== kind1) || !dualTiedControls(snapshot).includes("resolution");
+    }
+
+    function renderModesSwitch() {
+      const host = document.getElementById("dualModesFor");
+      if (!host)
+        return;
+      const base = dualBaseSnapshot(state.snapshot);
+      const visible = !!base && modesSwitchVisible(base);
+      if (!visible && modesIsCam1())
+        switchModesCamera("cam0");
+      host.hidden = !visible;
+      if (!visible)
+        return;
+      const cam1 = dualCam1(base);
+      const key = state.modesCam + "|" + String(cam1.sensor || "");
+      if (host.dataset.built === key)
+        return;
+      host.dataset.built = key;
+      host.innerHTML = "";
+      host.appendChild(createDomElement("span", "dual-settings-for-label", "Modes for"));
+      const grid = createDomElement("div", "pill-grid two-col");
+      host.appendChild(grid);
+      buildOptionButtonsInto(grid, [{ value: "cam0", label: "CAM0", enabled: true }, { value: "cam1", label: "CAM1", enabled: true }],
+        state.modesCam, switchModesCamera, 2);
+    }
+
+    // The Mode Ladder card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
+    function renderLadderCardGrey() {
+      const card = document.getElementById("settingsModeLadderCard");
+      if (!card)
+        return;
+      const grey = modesIsCam1();
+      card.classList.toggle("dual-tied", grey);
+      card.inert = grey;
+      let note = card.querySelector(":scope > .dual-shared-note");
+      if (grey && !note) {
+        note = createDomElement("span", "dual-shared-note");
+        card.insertBefore(note, card.firstChild);
+      }
+      if (note)
+        note.textContent = "CAM1's ladder is off: the Mode Ladder runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
+    }
     const ladderIcons = {
       handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
       up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
@@ -8142,10 +8276,11 @@ std::string_view webControlPageHtml()
     }
 
     function ladderAspectText(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585RatioLabel(mode.width, mode.height);
       // An IMX283 size is named as the Record pane names it ("3:2", "1.37:1"); a size outside its tables keeps the decimal.
-      if (sensorNameLower(state.snapshot).indexOf("imx283") !== -1) {
+      if (sensorNameLower(shown).indexOf("imx283") !== -1) {
         const imx283Label = imx283CropRatioLabel(mode.width + "x" + mode.height);
         if (imx283Label)
           return imx283Label;
@@ -8169,19 +8304,22 @@ std::string_view webControlPageHtml()
 
     // The sensor window narrower than the readout area: a real crop-in.
     function ladderCropIn(info) {
-      return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropArea.width;
+      return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropAreaFor().width;
     }
 
     function ladderClassName(mode) {  // "Clear HDR", "SDR", "SDR 2×2 binned"
       const info = ladderModeInfo(mode);
-      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR 2×2 binned" : "SDR");
+      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR " + Number(info.binning) + "×" + Number(info.binning) + " binned" : "SDR");
     }
 
     // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
     // "4K SDR 12-bit", "4K SDR 2.39:1 12-bit", "2K SDR binned 12-bit", "2K SDR binned 2.39:1 12-bit".
     function ladderModeName(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585LadderModeName(mode);
+      if (sensorNameLower(shown).indexOf("imx283") !== -1)
+        return imx283LadderModeName(mode);
       const info = ladderModeInfo(mode);
       const bits = mode.bits + "-bit";
       const aspect = ladderAspectText(mode);
@@ -8196,8 +8334,11 @@ std::string_view webControlPageHtml()
     }
 
     function ladderModeGroup(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585LadderGroup(mode);
+      if (sensorNameLower(shown).indexOf("imx283") !== -1)
+        return imx283LadderGroup(mode);
       const info = ladderModeInfo(mode);
       if (mode.clear_hdr)
         return "chdr";
@@ -8296,8 +8437,18 @@ std::string_view webControlPageHtml()
         + (rung.comp ? ":" + rung.comp : "")).join(",");
     }
 
+    // CAM1 keeps mode keys only (no max, no compression: its ladder is off, the activated modes are closest()'s candidates).
+    function ladderDraftTextFor(list) {
+      return modesIsCam1() ? list.map(ladderKey).join(",") : ladderDraftText(list);
+    }
+
     function ladderDirty() {
-      return !!state.ladderServer && ladderDraftText(state.ladderDraft) !== ladderDraftText(ladderDraftFromServer(state.ladderServer));
+      return !!state.ladderServer && ladderDraftTextFor(state.ladderDraft) !== ladderDraftTextFor(ladderDraftFromServer(state.ladderServer));
+    }
+
+    // The camera field of get_mode_ladder / set_mode_ladder: cam1 only on the CAM1 side.
+    function ladderCameraFields() {
+      return modesIsCam1() ? { camera: "cam1" } : {};
     }
 
     // Each resolution serves (from, top]: from = where the ones above stop. An empty max at a
@@ -8388,7 +8539,7 @@ std::string_view webControlPageHtml()
     // reads 3840×2200 but is the same 3840×2160 picture: the window is cut to the area.
     function ladderCrop(mode) {
       const info = ladderModeInfo(mode) || {};
-      const area = ladderCropArea;
+      const area = ladderCropAreaFor();
       const binning = Math.max(1, Number(info.binning) || 1);
       const known = Number(info.window_w) > 0 && Number(info.window_h) > 0;
       const width = Math.min(area.width, known ? Number(info.window_w) : mode.width * binning);
@@ -8506,12 +8657,15 @@ std::string_view webControlPageHtml()
         return;
       state.ladderFetching = true;
       state.ladderFetchedMs = performance.now();
+      const cam = state.modesCam;
       try {
-        const result = await ladderRequest({ cmd: "get_mode_ladder" });
-        applyModeLadder(result.mode_ladder, resetDraft);
+        const result = await ladderRequest(Object.assign({ cmd: "get_mode_ladder" }, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, resetDraft, cam);
       } catch (error) {
-        state.ladderError = "Mode Ladder unavailable: " + error.message;
-        renderLadderEditor();
+        if (cam === state.modesCam) {
+          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Mode Ladder unavailable: ") + error.message;
+          renderLadderEditor();
+        }
       } finally {
         state.ladderFetching = false;
       }
@@ -8525,9 +8679,15 @@ std::string_view webControlPageHtml()
     // A draft not yet saved survives a refetch; a refetch after a failed save replaces it. The aspect
     // filter follows Core, except while a click on it waits to be saved, and only from a reply that has it:
     // an older Core's reply has no aspects field and leaves the screen-only filter as it is.
-    function applyModeLadder(modeLadder, resetDraft) {
+    function applyModeLadder(modeLadder, resetDraft, cam) {
       if (!modeLadder || typeof modeLadder !== "object")
         return;
+      if (cam && cam !== state.modesCam) {
+        // A reply for the camera whose ladder is stashed: keep its server copy; its draft is rebuilt when it comes back.
+        if (state.ladderStash)
+          Object.assign(state.ladderStash, { server: modeLadder, draft: null, error: "" });
+        return;
+      }
       const keepDraft = !resetDraft && ladderDirty();
       state.ladderServer = modeLadder;
       state.ladderError = "";
@@ -8568,6 +8728,16 @@ std::string_view webControlPageHtml()
     // refused: it makes no rung unreachable, and a saved ladder that already breaks a rule (Core keeps one
     // the page would refuse, e.g. Full HD rungs after a 4K one that reaches 60 fps) must be able to shrink.
     function commitLadderDraft(next, notice, removal) {
+      if (modesIsCam1()) {
+        // No ladder rules on CAM1: mode keys, best first, at most 8.
+        state.ladderDraft = next.slice().sort(ladderQualityCompare);
+        if (notice)
+          showToast(notice, false);
+        clearTimeout(state.ladderCheckTimer);
+        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
+        renderLadderEditor();
+        return;
+      }
       const arranged = ladderArranged(next);
       const normalized = normalizeLadderDraft(arranged);
       const problem = removal ? "" : (ladderOrderProblem(arranged) || ladderDraftProblem(normalized));
@@ -8756,11 +8926,15 @@ std::string_view webControlPageHtml()
       const server = state.ladderServer;
       const pool = server && Array.isArray(server.pool) ? server.pool : [];
       const draft = state.ladderDraft;
-      const sensor = (sensorNameLower(state.snapshot) || "sensor").toUpperCase();
+      const shown = modesSnapshot();
+      const sensor = (sensorNameLower(shown) || "sensor").toUpperCase();
       setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
-        : (pool.length === 0 ? "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…)."
-          : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
-            + ". Activate the ones you want on the ladder. Ceilings are Core's."));
+        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…).")
+          : (modesIsCam1()
+            ? "From CAM1's sensor probe at start: " + pool.length + " modes on CAM1's " + sensor
+              + ". CAM1 takes the activated mode closest to CAM0's. Ceilings are Core's."
+            : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
+              + ". Activate the ones you want on the ladder. Ceilings are Core's.")));
       // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
       const aspects = [];
       pool.forEach((entry) => {
@@ -8794,7 +8968,7 @@ std::string_view webControlPageHtml()
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
-      (imx585Selected(state.snapshot) ? imx585LadderGroups : ladderGroups).forEach(([groupKey, title]) => {
+      (imx585Selected(shown) ? imx585LadderGroups : (sensorNameLower(shown).indexOf("imx283") !== -1 ? imx283LadderGroups : ladderGroups)).forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
           && (shownAspects.length === 0 || shownAspects.includes(ladderAspectText(entry))))
           .sort(ladderQualityCompare);
@@ -8809,7 +8983,7 @@ std::string_view webControlPageHtml()
         head.innerHTML = ladderIcons.chevron;
         head.appendChild(createDomElement("span", "", title));
         head.appendChild(createDomElement("span", "ladder-group-count",
-          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + " on the ladder"));
+          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + (modesIsCam1() ? " activated" : " on the ladder")));
         head.addEventListener("click", () => {
           state.ladderOpen[groupKey] = !open;
           renderSensorModes();
@@ -8828,6 +9002,8 @@ std::string_view webControlPageHtml()
     function ladderWithMode(draft, candidate) {
       if (draft.length >= ladderMaxResolutions)
         return { problem: "At most " + ladderMaxResolutions + " resolutions." };
+      if (modesIsCam1())
+        return { list: draft.concat([candidate]) };
       const arranged = ladderArranged(draft.concat([candidate]));
       const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalizeLadderDraft(arranged));
       return problem ? { problem: problem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") } : { list: arranged };
@@ -8880,7 +9056,9 @@ std::string_view webControlPageHtml()
     }
 
     function renderLadderEditor() {
-      renderLadderRows();
+      renderLadderCardGrey();
+      if (!modesIsCam1())
+        renderLadderRows();
       renderSensorModes();
       if (state.snapshot)
         renderModeLadder(state.snapshot);
@@ -8888,6 +9066,12 @@ std::string_view webControlPageHtml()
 
     // Every snapshot (the 1 s poll too): the buttons, Running now, the draft line and the coverage.
     function renderModeLadder(snapshot) {
+      if (modesIsCam1()) {
+        // CAM1's modes: only the first fetch; the ladder card is CAM0's and greyed.
+        if (!state.ladderServer && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
+          void fetchModeLadder(false);
+        return;
+      }
       const server = state.ladderServer;
       const enabled = typeof snapshot.ladder_enabled === "boolean" ? snapshot.ladder_enabled : !!(server && server.enabled);
       const active = snapshot.ladder_active === true;
@@ -8972,8 +9156,9 @@ std::string_view webControlPageHtml()
       }
       state.ladderSaving = true;
       try {
-        const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
-        applyModeLadder(result.mode_ladder, false);
+        const cam = state.modesCam;
+        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder", resolutions: ladderDraftTextFor(state.ladderDraft) }, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, false, cam);
         showLadderWriteWarning(result.mode_ladder);
       } catch (error) {
         showToast(error.message, true);
@@ -9015,7 +9200,7 @@ std::string_view webControlPageHtml()
       state.ladderAspectsSaving = true;
       const sent = state.ladderAspects.join(",");
       try {
-        const result = await ladderRequest({ cmd: "set_mode_ladder", aspects: sent });
+        const result = await ladderRequest(Object.assign({ cmd: "set_mode_ladder", aspects: sent }, ladderCameraFields()));
         if (!state.ladderAspectsSaveAgain && state.ladderAspects.join(",") === sent)
           state.ladderAspectsPending = false;   // no newer click: Core's filter is the one on screen
         // Core changed only the filter: take just that from its reply and redraw only this card, so the
@@ -9533,7 +9718,9 @@ std::string_view webControlPageHtml()
     // The sizes of a class as {width, height, binned}: the probed pool, else the table above. A mono sensor
     // offers less than the table, so without a pool it shows only the size it has.
     function imx585ClassRows(snapshot, classKey) {
-      const pool = state.ladderServer && Array.isArray(state.ladderServer.pool) ? state.ladderServer.pool : [];
+      // CAM1's panels (the projection) read cam1's pool, never cam0's.
+      const poolServer = ladderServerFor(snapshot && snapshot.dual_projected ? "cam1" : "cam0");
+      const pool = poolServer && Array.isArray(poolServer.pool) ? poolServer.pool : [];
       if (pool.length > 0) {
         return pool.filter((entry) => imx585ClassKeyFor(Number(entry.bits), entry.clear_hdr === true) === classKey)
           .map((entry) => ({ width: Number(entry.width), height: Number(entry.height), binned: Number(entry.binning) >= 2 }));
@@ -9676,7 +9863,7 @@ std::string_view webControlPageHtml()
       const info = ladderModeInfo(mode);
       // A pool entry without a probe mode has binning 0: then the class table says if the size is binned.
       const row = info && Number(info.binning) >= 2 ? { width: mode.width, height: mode.height, binned: true }
-        : imx585ClassRows(state.snapshot, imx585ClassKeyFor(mode.bits, mode.clear_hdr))
+        : imx585ClassRows(modesSnapshot(), imx585ClassKeyFor(mode.bits, mode.clear_hdr))
           .find((other) => other.width === mode.width && other.height === mode.height) || { width: mode.width, height: mode.height, binned: false };
       return imx585Families.find((family) => family.key === imx585FamilyKey(row));
     }
@@ -16198,6 +16385,7 @@ std::string_view webControlPageHtml()
       setPreviewAspectForSnapshot(snapshot);
       updateDualPreview(dualBaseSnapshot(snapshot));
       renderDualSettingsFor(snapshot);
+      renderModesSwitch();
       applyDualTies(snapshot);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
@@ -16825,7 +17013,8 @@ std::string_view webControlPageHtml()
           const resolution = fpsResolution(fpsEntries[index].value);
           button.classList.toggle("ladder-switch", !button.classList.contains("active") && resolution !== ladderCurrent);
           button.appendChild(createDomElement("span", "pill-sub", "Resolution " + resolution));
-          const mode = state.ladderServer && Array.isArray(state.ladderServer.resolutions) ? state.ladderServer.resolutions[resolution - 1] : null;
+          const ladder0 = ladderServerFor("cam0");
+          const mode = ladder0 && Array.isArray(ladder0.resolutions) ? ladder0.resolutions[resolution - 1] : null;
           if (mode)
             button.appendChild(createDomElement("span", "pill-sub", ladderSizeText(mode) + " · " + ladderClassText(mode)));
         });
