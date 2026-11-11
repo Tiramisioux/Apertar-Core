@@ -8273,11 +8273,13 @@ std::string_view webControlPageHtml()
     }
 
     // Every local edit goes through here: refused (with the reason) when the result is illegal, else
-    // saved on the camera a moment later. The ladder on screen is always the saved one.
-    function commitLadderDraft(next, notice) {
+    // saved on the camera a moment later. The ladder on screen is always the saved one. A removal is never
+    // refused: it makes no rung unreachable, and a saved ladder that already breaks a rule (Core keeps one
+    // the page would refuse, e.g. Full HD rungs after a 4K one that reaches 60 fps) must be able to shrink.
+    function commitLadderDraft(next, notice, removal) {
       const arranged = ladderArranged(next);
       const normalized = normalizeLadderDraft(arranged);
-      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalized);
+      const problem = removal ? "" : (ladderOrderProblem(arranged) || ladderDraftProblem(normalized));
       if (problem) {
         showToast(problem, true);
       } else {
@@ -8571,7 +8573,7 @@ std::string_view webControlPageHtml()
         remove.type = "button";
         remove.disabled = locked;
         remove.setAttribute("aria-label", "Deactivate " + name);
-        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), ""));
+        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), "", true));
         actions.appendChild(remove);
         item.appendChild(actions);
         return item;
