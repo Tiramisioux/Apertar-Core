@@ -33,6 +33,7 @@ struct PrimaryView {
     std::string ladderResolutions;      // the ladder's `resolutions_text`
     bool ladderEnabled = false;
     bool ladderRampReady = false;
+    std::string sensor;                 // the primary's sensor name, for commandclasses::effectiveTies
 };
 
 // ---- a preset as the primary saves it ------------------------------------------------------------------------------------

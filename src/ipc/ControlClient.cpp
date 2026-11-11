@@ -391,7 +391,14 @@ void ControlClient::watchTies()
 {
     if (!options_.ties)
         return;
-    const commandclasses::Ties now = options_.ties();
+    // cam1's last known sensor (kept across a relink, so the tie does not flip while cam1 has not answered yet).
+    std::string cam1Sensor;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cam1Sensor = state_.sensor;
+    }
+    const commandclasses::Ties now = commandclasses::effectiveTies(options_.ties(), options_.primaryView ? options_.primaryView().sensor : std::string(),
+                                                                   cam1Sensor);
     if (tiesKnown_ && now != ties_) {
         std::lock_guard<std::mutex> lock(mutex_);
         tracker_.onTieChange(ties_, now);

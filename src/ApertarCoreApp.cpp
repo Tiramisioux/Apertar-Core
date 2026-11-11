@@ -8374,6 +8374,7 @@ void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
     std::lock_guard<std::mutex> lock(relayViewMutex_);
     relayView_.valid = true;
     relayView_.settings = std::move(body);
+    relayView_.sensor = camera_.sensorName();
     if (rebuild) {
         relayView_.preset = std::move(preset);
         const auto text = jsonkeys::stringOf(ladderJson, "resolutions_text");
@@ -13289,7 +13290,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // The ties (amendment A2) matter only to a command with a `camera` field or one that is forwarded.
     commandclasses::Ties ties;
     if (cam1Configured && (command.fields.count("camera") || commandclasses::classOf(command.name) == commandclasses::Class::Both))
-        ties = commandclasses::parseTies(readSharedUiSettings().cam1Settings);
+        ties = commandclasses::effectiveTies(commandclasses::parseTies(readSharedUiSettings().cam1Settings), camera_.sensorName(),
+                                             cam1Client_.snapshot().sensor);
     const auto cameraField = command.fields.find("camera");
     if (cameraField != command.fields.end()) {
         if (const auto refusal = commandclasses::cameraFieldRefusal(command.name, cameraField->second, cam1Configured, ties, command.fields))
@@ -13310,7 +13312,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         primaryStandby_.store(false, std::memory_order_release);
     if (cam1Configured) {
         cam1ForwardAfter(command, reply, ties);
-        if (command.name != "ping")
+        if (command.name != "ping" && command.name != "get_state")   // the polls change nothing the relay reads
             publishRelayView(command.name);
     }
     return reply;

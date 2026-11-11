@@ -141,6 +141,26 @@ struct Ties {
     bool operator!=(const Ties &other) const { return !(*this == other); }
 };
 
+// Until T61b's closest() exists, a tied resolution means "cam0's own mode" and holds only between two sensors of one kind.
+// With different kinds (an IMX585 and an IMX283), or while either sensor is not known yet, the Recording group is left to
+// each camera: nothing of it is forwarded, resynced or compared, so cam1 never gets cam0's mode, Clear HDR, ladder or
+// tuning file (a tuning file is used as given, with no sensor check; design T68 step 1). The other ties stand.
+inline Ties effectiveTies(Ties ties, std::string_view primarySensor, std::string_view cam1Sensor)
+{
+    const auto key = [](std::string_view text) {
+        std::string out;
+        for (const char c : text) {
+            if (c >= 'A' && c <= 'Z') out.push_back(static_cast<char>(c - 'A' + 'a'));
+            else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out.push_back(c);
+        }
+        return out;
+    };
+    const std::string a = key(primarySensor);
+    if (a.empty() || a != key(cam1Sensor))
+        ties.resolution = false;
+    return ties;
+}
+
 // Reads UI.conf's cam1Settings in its normalised form: "unison" (or anything unreadable) ties all five, "" none, and a
 // list names the tied ones.
 inline Ties parseTies(std::string_view canonical)
