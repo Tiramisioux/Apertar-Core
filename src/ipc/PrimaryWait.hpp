@@ -53,10 +53,20 @@ inline bool stateIsIdle(std::string_view reply)
         return false;
     if (detail::valueOf(reply, "state") != "ready")
         return false;
+    // A take only cam1 records does not count (design 3.4): a secondary still waiting to start cannot be in it, and on its
+    // link the primary ends it ("cam1 back without its take", 4.6). The take's word is the last record_cameras of the body
+    // (the one beside `cam1`; the `ui` object's comes first and holds the setting's label).
+    std::string takeWord;
+    if (const size_t at = reply.rfind("\"record_cameras\":"); at != std::string_view::npos)
+        takeWord = detail::valueOf(reply.substr(at), "record_cameras");
+    const bool cam1OnlyTake = takeWord == "cam1";
     for (const char *busy : {"recording", "storage_preroll_active", "timelapse_active", "still_exposure_active",
-                             "media_writes_pending", "photo_mode_enabled"})
+                             "media_writes_pending", "photo_mode_enabled"}) {
+        if (cam1OnlyTake && std::string_view(busy) == "recording")
+            continue;
         if (detail::valueOf(reply, busy) == "true")
             return false;
+    }
     return true;
 }
 
