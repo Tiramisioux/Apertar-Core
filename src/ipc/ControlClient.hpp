@@ -20,6 +20,9 @@
 
 namespace apertar {
 
+// cam1's control socket (design 3.4). The secondary's unit sets APERTAR_SOCKET_PATH to it.
+inline constexpr const char *kCam1SocketPath = "/tmp/apertar-core-cam1.sock";
+
 class ControlClient {
 public:
     struct Options {

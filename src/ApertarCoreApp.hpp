@@ -10,6 +10,7 @@
 #include "hardware/Pcf8574Input.hpp"
 #include "hardware/RecordingIndicatorOutput.hpp"
 #include "hardware/TriggerOutput.hpp"
+#include "ipc/ControlClient.hpp"
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
@@ -80,7 +81,15 @@ private:
 
     std::string handleRequest(const std::string &line);
     std::string handleWebCommand(const std::string &payload);
+    // The wrapper (design 4.1 The hook): the pre-steps, commandMutex_, handleCommandLocal, then the relay's forward.
     std::string handleCommand(const ControlCommand &command);
+    // Today's handleCommand body, called with commandMutex_ held.
+    std::string handleCommandLocal(const ControlCommand &command);
+    // The relay (design 4.1). All of it is inert while cam1Client_ is not configured.
+    void startCam1Client();
+    std::optional<std::string> cam1RefusalBefore(const ControlCommand &command);
+    void cam1ForwardAfter(const ControlCommand &command, const std::string &reply);
+    bool cam1HoldsMedium() const;
     // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
     bool secondaryRole() const;
     std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
@@ -161,6 +170,8 @@ private:
     Options options_;
     CameraController camera_;
     ControlServer controlServer_;
+    ControlClient cam1Client_;                       // the relay thread; started in the primary role only
+    std::atomic<bool> primaryStandby_{false};        // published by the command thread for the relay
     WebServer webServer_;
     GpioInput gpioInput_;
     StandbyPowerButtonInput standbyPowerButton_;

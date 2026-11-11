@@ -8,6 +8,7 @@
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/CameraPort.hpp"
 #include "camera/ExposureMetering.hpp"
+#include "ipc/Cam1State.hpp"
 #include "ipc/CommandClasses.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
@@ -8100,9 +8101,67 @@ ApertarCoreApp::~ApertarCoreApp()
     stop();
 }
 
+namespace {
+// The Dual sensor switch (UI.conf dualSensorEnabled) as the relay thread reads it once a second: the file is parsed
+// again only when its size or modification time changed, so an idle rig costs one stat() a second.
+bool dualSensorSwitchOn()
+{
+    static std::mutex mutex;
+    static std::filesystem::file_time_type seenTime{};
+    static std::uintmax_t seenSize = static_cast<std::uintmax_t>(-1);
+    static bool value = false;
+    std::error_code error;
+    const std::filesystem::path path = sharedUiSettingsPath();
+    const auto time = std::filesystem::last_write_time(path, error);
+    const std::uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+    std::lock_guard<std::mutex> lock(mutex);
+    if (error) {
+        seenSize = static_cast<std::uintmax_t>(-1);
+        return value = false;
+    }
+    if (time != seenTime || size != seenSize) {
+        seenTime = time;
+        seenSize = size;
+        value = readSharedUiSettings().dualSensorEnabled;
+    }
+    return value;
+}
+} // namespace
+
 bool ApertarCoreApp::secondaryRole() const
 {
     return cameraport::isSecondary(options_.camera);
+}
+
+// The relay (design 4.1). Primary role only; the secondary never links to anything. It runs before the media trim and
+// watcher threads, so a restarted primary knows about a cam1 take before it touches the card (3.4).
+void ApertarCoreApp::startCam1Client()
+{
+    if (secondaryRole())
+        return;
+    ControlClient::Options options;
+    options.socketPath = kCam1SocketPath;
+    options.ownSocketPath = options_.socketPath;
+    options.switchOn = [] { return dualSensorSwitchOn(); };
+    options.configNames = [](const std::string &port) { return cameraport::configNamesPort({}, port); };
+    options.sensorPresent = [] {
+        const cameraport::Node node = cameraport::resolve({}, "cam1");
+        return node.valid && cameraport::sensorSubdevUnder({}, node.path);
+    };
+    options.primaryInStandby = [this] { return primaryStandby_.load(std::memory_order_acquire); };
+    cam1Client_.start(std::move(options));
+}
+
+// True while cam1's take or its writes may still be using the card, or cam1 is not known yet: the trim and the clip
+// merge wait (design 3.4, 4.3 Writes pending). False at once, with no lock, when there is no cam1.
+bool ApertarCoreApp::cam1HoldsMedium() const
+{
+    if (cam1Client_.unknown())
+        return true;
+    if (!cam1Client_.configured())
+        return false;
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    return cam1.recording || cam1.writing;
 }
 
 bool ApertarCoreApp::start()
@@ -8137,6 +8196,7 @@ bool ApertarCoreApp::start()
         previewPublisherRunning_ = true;
     }
     previewThread_ = std::thread(&ApertarCoreApp::runPreviewPublisher, this);
+    startCam1Client();   // before the trim and watcher threads (design 3.4)
     if (!mediaTrimWorkerRunning_.load() && !mediaTrimThread_.joinable()) {
         mediaTrimWorkerRunning_.store(true);
         mediaTrimThread_ = std::thread(&ApertarCoreApp::runMediaTrim, this);
@@ -8291,6 +8351,7 @@ void ApertarCoreApp::stop()
     }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"stopping\"}");
+    cam1Client_.stop();   // ends a busy wait on the command thread, too
     controlsWorkerRunning_ = false;            // T39: before the drivers, so it cannot start one again
     wakeControlsWorker();
     if (controlsThread_.joinable())
@@ -11354,6 +11415,8 @@ void ApertarCoreApp::runBufferSafetyStop()
 // The guard of storagepreroll::decideGuard, filled from the live state. Takes no lock the command path holds.
 storagepreroll::GuardDecision ApertarCoreApp::storagePrerollGuard(storagepreroll::Trigger trigger) const
 {
+    if (cam1Client_.unknown())   // design 3.4: skip until cam1 answers, or 2 s of failed connects
+        return storagepreroll::GuardDecision{false, "CAM1 not known yet"};
     storagepreroll::GuardInputs in;
     const CaptureSettings settings = camera_.settings();
     const CameraState state = camera_.state();
@@ -11707,6 +11770,8 @@ bool ApertarCoreApp::mediaTrimMayRun() const
     if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.mediaWritesPending() ||
         mediaDeleteActive_.load() || storagepreroll::prerollActive() || camera_.state() == CameraState::Standby)
         return false;
+    if (cam1HoldsMedium())   // cam1 unknown, recording or writing: both Cores write one card
+        return false;
     if (trimNowMs() < mediaTrimBlockUntilMs_.load())
         return false;
     std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
@@ -11981,6 +12046,7 @@ bool ApertarCoreApp::clipMergeMayRun(std::string *why) const
     if (soundRecordingActive()) return no("sound recording");
     if (camera_.timelapseActive()) return no("timelapse");
     if (camera_.mediaWritesPending()) return no("writes pending");
+    if (cam1HoldsMedium()) return no("CAM1");
     if (mediaDeleteActive_.load()) return no("media delete");
     if (camera_.state() == CameraState::Standby) return no("standby");
     if (clipMergeNowMs() < clipMergeBlockUntilMs_.load()) return no("recording");   // a take or media action is starting
@@ -12945,6 +13011,67 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // drain ends as soon as the writers have finished the frames they already hold, and the lock below frees up.
     abortSafetyStopFlushForRecord(command.name);
     std::lock_guard<std::mutex> commandLock(commandMutex_);
+    // The relay's hook (design 4.1). With no cam1 (not configured, or the Dual sensor switch off) the only work added to
+    // today's path is one map lookup for a `camera` field. With cam1 configured: the camera field and the busy window
+    // are checked first, then handleCommandLocal runs, and a "both" command that got an ok reply is queued for cam1
+    // before the lock goes, so a REC press that waited on the lock sees cam1 busy.
+    if (secondaryRole())
+        return handleCommandLocal(command);   // the secondary never relays and ignores the camera field (design 4.2)
+    const bool cam1Configured = cam1Client_.configured();
+    const auto cameraField = command.fields.find("camera");
+    if (cameraField != command.fields.end()) {
+        if (const auto refusal = commandclasses::cameraFieldRefusal(command.name, cameraField->second, cam1Configured))
+            return errorReply(command.id, *refusal);
+    }
+    if (cam1Configured) {
+        if (const auto refusal = cam1RefusalBefore(command))
+            return errorReply(command.id, *refusal);
+    }
+    const std::string reply = handleCommandLocal(command);
+    // Standby is the primary's own flag for the relay thread, which must not ask the controller (its mutex_).
+    if (command.name == "enter_standby" && reply.find("\"standby\":true") != std::string::npos)
+        primaryStandby_.store(true, std::memory_order_release);
+    else if (command.name == "wake" && reply.rfind("{\"ok\":true", 0) == 0)
+        primaryStandby_.store(false, std::memory_order_release);
+    if (cam1Configured)
+        cam1ForwardAfter(command, reply);
+    return reply;
+}
+
+// What the relay refuses before the local command runs: a Dual sensor switch while cam1 records (amendment A1), the
+// commands cam1's own take excludes (design 4.3), and the busy window's wait for a record_start (1 s, then "One
+// moment."). Part 1 has no take with cam1, so a record_start only ever waits here; the 10 s drop has nothing to drop yet.
+std::optional<std::string> ApertarCoreApp::cam1RefusalBefore(const ControlCommand &command)
+{
+    ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    if (command.name == "set_dual_sensor_enabled" && cam1.recording)
+        return std::string("Stop recording first.");
+    if (cam1.recording && !camera_.isRecording() && commandclasses::refusedWhileCam1Records(command.name))
+        return std::string(cam1state::kCam1RecordingRefusal);
+    if (command.name == "record_start") {
+        cam1state::BusyVerdict verdict = cam1state::busyVerdict(cam1.pending, cam1.busyForMs, false);
+        if (verdict == cam1state::BusyVerdict::Wait) {
+            cam1Client_.waitForIdle(cam1state::kBusyWaitMs);
+            cam1 = cam1Client_.snapshot();
+            verdict = cam1state::busyVerdict(cam1.pending, cam1.busyForMs, true);
+        }
+        if (verdict == cam1state::BusyVerdict::Refuse)
+            return std::string(cam1state::kBusyRefusal);
+    }
+    return std::nullopt;
+}
+
+// After the local ok: the one place a command goes to cam1. The seam for part 2's tie filter is
+// commandclasses::planForward. A forward that cannot be sent (no link) is dropped; the resync on relink catches up.
+void ApertarCoreApp::cam1ForwardAfter(const ControlCommand &command, const std::string &reply)
+{
+    const commandclasses::ForwardPlan plan = commandclasses::planForward(command.name, command.fields, reply);
+    if (plan.send)
+        cam1Client_.enqueue(command.name, plan.fields);
+}
+
+std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
+{
     // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
     // first, so a playback decode in flight stops before the take's first frame is written (design §2.7).
     {
