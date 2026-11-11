@@ -520,6 +520,10 @@ std::string_view webControlPageHtml()
     .preview-stage.dual.view-cam0.under.stacked .preview-processed-canvas,
     .preview-stage.dual.view-cam1.under.stacked .preview-stream-cam1 { opacity: var(--opacity, 0.5); }
 
+    /* Drag on the picture to wipe (or, stacked, to set the opacity): the cursor and touch-action say which way. */
+    .preview-stage.dual.view-cam0, .preview-stage.dual.view-cam1 { cursor: ew-resize; touch-action: pan-y; user-select: none; }
+    .preview-stage.dual.view-cam0.wipe-v:not(.stacked),
+    .preview-stage.dual.view-cam1.wipe-v:not(.stacked) { cursor: ns-resize; touch-action: pan-x; }
     .wipe-line, .wipe-under { display: none; }
     .preview-stage.dual.under.wipe-edge .wipe-line {
       display: block;
@@ -15187,9 +15191,11 @@ std::string_view webControlPageHtml()
         wipeUi.dir = ui.preview_wipe_direction;
     }
 
+    // At most one send per 120 ms, the latest values merged, so the HDMI follows a drag while it moves.
     function wipeSend(fields) {
       Object.assign(wipeUi.pending, fields);
-      clearTimeout(wipeUi.timer);
+      if (wipeUi.timer)
+        return;
       wipeUi.timer = window.setTimeout(async () => {
         const body = Object.assign({ cmd: "set_preview_source" }, wipeUi.pending);
         wipeUi.pending = {};
@@ -15262,6 +15268,57 @@ std::string_view webControlPageHtml()
         ["pointerup", "pointercancel", "blur", "change"].forEach((type) => range.addEventListener(type, () => { wipeUi.dragging = false; }));
         range.addEventListener("input", () => wipeSet({ [field]: Number(range.value) }));
       });
+    })();
+
+    // Drag on the picture to wipe (the User, 2026-11-11): in a Cam 0 / Cam 1 view the edge follows the pointer along the
+    // wipe direction, across the stage as the clip-path is; while stacked, a sideways drag sets the opacity instead.
+    // A tap does nothing (the drag starts after 6 px), and buttons or inputs over the picture keep their own clicks.
+    (function wireWipeDrag() {
+      const stage = document.getElementById("previewStage");
+      if (!stage)
+        return;
+      let drag = null;
+      const percentAt = (event) => {
+        const rect = stage.getBoundingClientRect();
+        const across = wipeUi.stack || wipeUi.dir !== "vertical";
+        const f = across ? (event.clientX - rect.left) / rect.width : (event.clientY - rect.top) / rect.height;
+        return Math.round(Math.max(0, Math.min(1, f)) * 100);
+      };
+      stage.addEventListener("dragstart", (event) => {
+        if (wipeSingleView())
+          event.preventDefault();
+      });
+      stage.addEventListener("pointerdown", (event) => {
+        if (!wipeSingleView() || event.button > 0 || event.target.closest("button, input, select, a, label, [role='button']"))
+          return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, on: false };
+      });
+      stage.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id)
+          return;
+        if (!drag.on) {
+          if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6)
+            return;
+          drag.on = true;
+          wipeUi.dragging = true;
+          try { stage.setPointerCapture(event.pointerId); } catch (_) {}
+        }
+        const value = percentAt(event);
+        if (wipeUi.stack) {
+          if (value !== wipeUi.opacity)
+            wipeSet({ opacity: value });
+        } else if (value !== wipeUi.wipe) {
+          wipeSet({ wipe: value });
+        }
+      });
+      const end = (event) => {
+        if (!drag || event.pointerId !== drag.id)
+          return;
+        if (drag.on)
+          wipeUi.dragging = false;
+        drag = null;
+      };
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((type) => stage.addEventListener(type, end));
     })();
 
     function updateDualPreview(snapshot) {
