@@ -861,7 +861,10 @@ std::string_view webControlPageHtml()
     .preview-card:has(.preview-stage.dual.view-both) #recordButton,
     .preview-card:has(.preview-stage.dual.view-bothleft) #recordButton,
     .preview-card:has(.preview-stage.dual.view-both) #recordLabel,
-    .preview-card:has(.preview-stage.dual.view-bothleft) #recordLabel {
+    .preview-card:has(.preview-stage.dual.view-bothleft) #recordLabel,
+    /* each pane carries its own timecode in the Both views; the VU meter stays */
+    .preview-card:has(.preview-stage.dual.view-both) #timecodeBlock,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #timecodeBlock {
       display: none;
     }
 
