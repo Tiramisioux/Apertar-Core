@@ -787,6 +787,8 @@ std::string_view webControlPageHtml()
     .preview-stage.dual.view-pip0 .pane-tc.p1,
     .preview-stage.dual.view-pip1 .pane-tc.p0 { font-size: 11px; padding: 1px 6px; }
     .preview-stage.dual.photo .pane-tc { display: none; }
+    /* One picture on the stage (Cam 0, Cam 1, PiP): the card's own timecode is the one; pane timecodes are for Both. */
+    .preview-stage.dual:not(.view-both):not(.view-bothleft) .pane-tc { display: none; }
 
     /* Both views: a REC button on each pane. While the take (or the next one) is both cameras, the two are linked: one
        press starts or stops both, and a LINKED tag joins them; otherwise each records its own camera. The card's
