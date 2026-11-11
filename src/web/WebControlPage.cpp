@@ -953,7 +953,20 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
-    /* Speed Ramp (Settings > Record), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
+    /* Speed Ramp (Camera settings, under Frame rate), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
+    /* Speed Ramp in the controls card, under the frame rates: its options below its On/Off. */
+    .speed-ramp-option {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .speed-ramp-block > .subtle-note {
+      display: block;
+      margin-top: 8px;
+    }
+
     .switch-field {
       display: flex;
       align-items: center;
@@ -4637,6 +4650,31 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
 
+              <!-- Speed Ramp sits under the frame rates it moves (it was a card in Settings > Record). -->
+              <section class="select-block speed-ramp-block" id="settingsSpeedRampCard">
+                <div class="select-topline">
+                  <span>Speed Ramp</span>
+                  <span class="select-note hidden" id="settingsSpeedRampNote"></span>
+                </div>
+                <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
+                <span class="subtle-note">Change the frame rate during a take. The clip keeps the rate it started at, so the faster parts play back as slow motion.</span>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Shutter sync</span>
+                  <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
+                  <span class="subtle-note">Angle keeps the motion blur. Exposure keeps the brightness.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Audio (experimental)</span>
+                  <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
+                  <span class="subtle-note">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">After the take</span>
+                  <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
+                  <span class="subtle-note">Stay: the ramped FPS stays when you stop. Return: back to the FPS you pressed record at (or the start FPS when that one is not available in the mode).</span>
+                </div>
+              </section>
+
               <section class="select-block">
                 <div class="select-topline">
                   <span>ISO</span>
@@ -5123,35 +5161,6 @@ std::string_view webControlPageHtml()
                 <select class="settings-select" id="settingsExposureMeteringSelect"></select>
               </label>
               <p class="settings-card-copy" id="settingsExposureCompensationNote">Enable Auto ISO or Auto Shutter to adjust exposure.</p>
-            </div>
-
-            <div class="settings-card" id="settingsSpeedRampCard">
-              <div class="settings-card-head wrap-head">
-                <div>
-                  <h3 class="settings-card-title">Speed Ramp</h3>
-                  <p class="settings-card-copy">Change the frame rate during recording. The clip keeps the rate it started at, so the faster parts play back as slow motion.</p>
-                  <p class="settings-card-copy hidden" id="settingsSpeedRampNote"></p>
-                </div>
-                <div class="switch-field">
-                  <span>Allow speed ramping</span>
-                  <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
-                </div>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Shutter Sync</span>
-                <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
-                <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Audio (experimental)</span>
-                <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
-                <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">After the take</span>
-                <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
-                <p class="settings-card-copy">Stay: the FPS you ramped to stays when you stop. Return: the FPS goes back to what it was when you pressed record. If that FPS is not available in the current mode, it returns to the start FPS.</p>
-              </div>
             </div>
 
             <div class="settings-card">
