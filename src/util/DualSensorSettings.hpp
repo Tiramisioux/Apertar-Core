@@ -1,0 +1,141 @@
+#pragma once
+// The four dual-sensor UI.conf settings (design §5.1, §6.1, §4.4; T63). Pure: std only, host-tested.
+//
+// previewSource, recordCameras and cam1Mode copy the externalMonitorMode quartet's normaliser: lower-case match on the
+// trimmed text, any other value gives the default. The command's strict check is then "trimmed text equals the
+// normalised label", so "pip_cam0", "both" and "Cam0" are refused. cam1Settings is a list of shared controls.
+#include <array>
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace apertar::dualsettings {
+
+namespace detail {
+inline std::string trim(std::string_view text)
+{
+    size_t begin = 0;
+    size_t end = text.size();
+    while (begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\r' || text[begin] == '\n'))
+        ++begin;
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\r' || text[end - 1] == '\n'))
+        --end;
+    return std::string(text.substr(begin, end - begin));
+}
+
+inline std::string lower(std::string text)
+{
+    for (char &c : text)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    return text;
+}
+
+template <size_t N>
+inline std::string normalizeLabel(std::string_view value, const std::array<const char *, N> &labels)
+{
+    const std::string key = lower(trim(value));
+    for (const char *label : labels)
+        if (key == lower(label))
+            return label;
+    return labels[0];   // the default is the first label
+}
+} // namespace detail
+
+inline constexpr std::array<const char *, 6> kPreviewSources = {
+    "Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"};
+inline constexpr std::array<const char *, 4> kRecordCameras = {"Both", "Cam 0", "Cam 1", "Follow preview"};
+inline constexpr std::array<const char *, 2> kCam1Modes = {"Closest to Cam 0", "Set on Cam 1"};
+inline constexpr const char *kCam1SettingsDefault = "resolution,iso,shutter,fps,wb";
+
+inline std::string normalizePreviewSource(std::string_view value)
+{
+    return detail::normalizeLabel(value, kPreviewSources);
+}
+
+inline std::string normalizeRecordCameras(std::string_view value)
+{
+    return detail::normalizeLabel(value, kRecordCameras);
+}
+
+inline std::string normalizeCam1Mode(std::string_view value)
+{
+    return detail::normalizeLabel(value, kCam1Modes);
+}
+
+// `set_preview_source swap=true` on HDMI 0's view: Cam 0 <-> Cam 1, PiP Cam 0 <-> PiP Cam 1,
+// Both <-> Both (Cam 1 left). Takes a normalised label.
+inline std::string swapPreviewSource(const std::string &label)
+{
+    static const char *const pairs[][2] = {
+        {"Cam 0", "Cam 1"}, {"PiP Cam 0", "PiP Cam 1"}, {"Both", "Both (Cam 1 left)"}};
+    for (const auto &pair : pairs) {
+        if (label == pair[0])
+            return pair[1];
+        if (label == pair[1])
+            return pair[0];
+    }
+    return label;
+}
+
+// cam1Settings: the shared controls as a comma list. Tokens are exact lower case, in any order, no repeats; spaces
+// around a token are trimmed. Returns the list in the fixed order, "" for none, nullopt for anything else
+// (an unknown token, a repeat, an empty token such as "iso,,fps" or a trailing comma).
+inline std::optional<std::string> canonicalCam1Settings(std::string_view value)
+{
+    static const char *const order[] = {"resolution", "iso", "shutter", "fps", "wb"};
+    constexpr size_t count = sizeof(order) / sizeof(order[0]);
+    const std::string text = detail::trim(value);
+    if (text.empty())
+        return std::string();
+
+    bool seen[count] = {false, false, false, false, false};
+    size_t start = 0;
+    while (true) {
+        const size_t comma = text.find(',', start);
+        const std::string token =
+            detail::trim(std::string_view(text).substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        size_t index = count;
+        for (size_t i = 0; i < count; ++i)
+            if (token == order[i])
+                index = i;
+        if (index == count || seen[index])
+            return std::nullopt;
+        seen[index] = true;
+        if (comma == std::string::npos)
+            break;
+        start = comma + 1;
+    }
+
+    std::string out;
+    for (size_t i = 0; i < count; ++i) {
+        if (!seen[i])
+            continue;
+        if (!out.empty())
+            out += ',';
+        out += order[i];
+    }
+    return out;
+}
+
+// The reader's form: an unreadable list gives the default. UI.conf is also written by Qt's QSettings, which rewrites a
+// comma value as a list ("resolution, iso") or as a quoted string ("\"resolution,iso\""), and an empty list as
+// @Invalid(): all three read back as written by Core.
+inline std::string normalizeCam1Settings(std::string_view value)
+{
+    std::string text = detail::trim(value);
+    if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+        text = text.substr(1, text.size() - 2);
+    if (text == "@Invalid()")
+        text.clear();
+    const auto canonical = canonicalCam1Settings(text);
+    return canonical ? *canonical : std::string(kCam1SettingsDefault);
+}
+
+inline bool cam1SettingsHasResolution(const std::string &canonical)
+{
+    return canonical.rfind("resolution", 0) == 0;   // the fixed order puts it first
+}
+
+} // namespace apertar::dualsettings

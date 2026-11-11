@@ -3,6 +3,7 @@
 #include "util/MediaIntent.hpp"
 #include "util/StoragePreroll.hpp"
 #include "util/ClipName.hpp"
+#include "util/DualSensorSettings.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
 #include "camera/CameraPort.hpp"
@@ -1889,6 +1890,10 @@ struct SharedUiSettingsSnapshot
     bool smpteEnabled = false;
     bool externalMonitorEnabled = false;
     std::string externalMonitorMode = "Clean Feed";
+    std::string previewSource = "Both";
+    std::string recordCameras = "Both";
+    std::string cam1Settings = apertar::dualsettings::kCam1SettingsDefault;
+    std::string cam1Mode = "Closest to Cam 0";
     std::string externalMonitorInfoOverlay = "On";
     std::string externalMonitorOrientation = "Landscape";
     std::string timecodeMode = "Free Run";
@@ -2061,6 +2066,14 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.externalMonitorEnabled = parseUiSettingsBool(value, snapshot.externalMonitorEnabled);
         else if (key == "externalMonitorMode")
             snapshot.externalMonitorMode = normalizeExternalMonitorModeValue(value);
+        else if (key == "previewSource")
+            snapshot.previewSource = apertar::dualsettings::normalizePreviewSource(value);
+        else if (key == "recordCameras")
+            snapshot.recordCameras = apertar::dualsettings::normalizeRecordCameras(value);
+        else if (key == "cam1Settings")
+            snapshot.cam1Settings = apertar::dualsettings::normalizeCam1Settings(value);
+        else if (key == "cam1Mode")
+            snapshot.cam1Mode = apertar::dualsettings::normalizeCam1Mode(value);
         else if (key == "externalMonitorInfoOverlay")
             snapshot.externalMonitorInfoOverlay = normalizeExternalMonitorInfoOverlayValue(value);
         else if (key == "externalMonitorOrientation")
@@ -2197,6 +2210,15 @@ SharedUiSettingsSnapshot readSharedUiSettings()
     }
 
     return snapshot;
+}
+
+// The dual-sensor settings as the `ui` object of /api/state and of the socket's get_state carries them (no braces).
+std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
+{
+    return "\"preview_source\":\"" + escapeJson(ui.previewSource) + "\""
+           + ",\"record_cameras\":\"" + escapeJson(ui.recordCameras) + "\""
+           + ",\"cam1_settings\":\"" + escapeJson(ui.cam1Settings) + "\""
+           + ",\"cam1_mode\":\"" + escapeJson(ui.cam1Mode) + "\"";
 }
 
 std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
@@ -7852,6 +7874,8 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addBoolFromMap("externalMonitorEnabled", false);
     if (const auto it = uiValues.find("externalMonitorMode"); it != uiValues.end())
         addString("externalMonitorMode", it->second);
+    if (const auto it = uiValues.find("recordCameras"); it != uiValues.end())
+        addString("recordCameras", apertar::dualsettings::normalizeRecordCameras(it->second));
     if (const auto it = uiValues.find("externalMonitorInfoOverlay"); it != uiValues.end())
         addString("externalMonitorInfoOverlay", it->second);
     if (const auto it = uiValues.find("externalMonitorOrientation"); it != uiValues.end())
@@ -9821,6 +9845,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"smpte_enabled\":" << (uiSettings.smpteEnabled ? "true" : "false")
         << ",\"external_monitor_enabled\":" << (uiSettings.externalMonitorEnabled ? "true" : "false")
         << ",\"external_monitor_mode\":\"" << escapeJson(uiSettings.externalMonitorMode) << "\""
+        << "," << dualSensorUiStateJson(uiSettings)
         << ",\"external_monitor_info_overlay\":\"" << escapeJson(uiSettings.externalMonitorInfoOverlay) << "\""
         << ",\"external_monitor_orientation\":\"" << escapeJson(uiSettings.externalMonitorOrientation) << "\""
         << ",\"ui_orientation\":\"" << escapeJson(uiSettings.uiOrientation) << "\""
@@ -13250,7 +13275,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_preview_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -13293,7 +13318,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
-             << clipMergeStateJson();
+             << clipMergeStateJson()
+             << ",\"ui\":{" << dualSensorUiStateJson(readSharedUiSettings()) << "}";
         return okReply(command.id, body.str());
     }
 
@@ -14064,6 +14090,71 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, "\"external_monitor_mode\":\"" + escapeJson(normalized) + "\"");
     }
 
+    if (command.name == "set_preview_source") {
+        // swap=true (no value) swaps HDMI 0's view only; HDMI 1's half is T71's.
+        if (const auto swap = command.string("swap"); swap && (*swap == "true" || *swap == "1")) {
+            const std::string swapped = apertar::dualsettings::swapPreviewSource(readSharedUiSettings().previewSource);
+            if (!updateSharedUiGeneralSettings({ { "previewSource", swapped } }))
+                return errorReply(command.id, "Could not update shared UI settings.");
+            return okReply(command.id, "\"preview_source\":\"" + escapeJson(swapped) + "\"");
+        }
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_preview_source requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizePreviewSource(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported preview source.");
+        if (!updateSharedUiGeneralSettings({ { "previewSource", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"preview_source\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_record_cameras") {
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_record_cameras requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizeRecordCameras(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported shooting mode.");
+        if (!updateSharedUiGeneralSettings({ { "recordCameras", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"record_cameras\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_cam1_settings") {
+        // The shared controls as a comma list; stored in the fixed order (tokens trimmed, "" = none shared).
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_cam1_settings requires value.");
+
+        const auto canonical = apertar::dualsettings::canonicalCam1Settings(*value);
+        if (!canonical)
+            return errorReply(command.id, "Unsupported CAM1 settings mode.");
+        std::vector<std::pair<std::string, std::string>> updates = { { "cam1Settings", *canonical } };
+        // Resolution going from not shared to shared puts cam1's mode back on "Closest to Cam 0".
+        if (apertar::dualsettings::cam1SettingsHasResolution(*canonical)
+            && !apertar::dualsettings::cam1SettingsHasResolution(readSharedUiSettings().cam1Settings))
+            updates.emplace_back("cam1Mode", apertar::dualsettings::kCam1Modes[0]);
+        if (!updateSharedUiGeneralSettings(updates))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"cam1_settings\":\"" + escapeJson(*canonical) + "\"");
+    }
+
+    if (command.name == "set_cam1_mode") {
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_cam1_mode requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizeCam1Mode(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported CAM1 mode.");
+        if (!updateSharedUiGeneralSettings({ { "cam1Mode", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"cam1_mode\":\"" + escapeJson(normalized) + "\"");
+    }
+
     if (command.name == "set_external_monitor_info_overlay") {
         const auto value = command.string("value");
         if (!value)
@@ -14816,6 +14907,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (const auto cameraControlsMode = command.string("cameraControlsMode"))
             uiUpdates.emplace_back("cameraControlsMode", normalizeCameraControlsModeValue(*cameraControlsMode));
         addStringUpdate("externalMonitorMode");
+        addStringUpdate("recordCameras");
         addStringUpdate("externalMonitorInfoOverlay");
         if (const auto externalMonitorOrientation = command.string("externalMonitorOrientation")) {
             uiUpdates.emplace_back("externalMonitorOrientation",

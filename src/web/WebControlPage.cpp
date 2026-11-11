@@ -5395,6 +5395,11 @@ std::string_view webControlPageHtml()
                   <label class="input-label" for="settingsExternalMonitorModeSelect">Mode</label>
                   <select class="settings-select" id="settingsExternalMonitorModeSelect"></select>
                 </div>
+                <!-- Hidden until a cam1 is configured (design 5.1); T63 has no way to know, so it stays hidden. -->
+                <div class="field-stack" id="settingsPreviewSourceField" style="display: none">
+                  <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
+                  <select class="settings-select" id="settingsPreviewSourceSelect"></select>
+                </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
                   <select class="settings-select" id="settingsExternalMonitorInfoOverlaySelect"></select>
@@ -6638,6 +6643,7 @@ std::string_view webControlPageHtml()
     const stillTimelapseIntervalOptions = ["1s", "2s", "3s", "5s", "10s", "15s", "30s", "60s", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "10m"];
     const stillTimelapseOptions = ["Off", ...stillTimelapseIntervalOptions];
     const externalMonitorModeOptions = ["Clean Feed", "Assist Feed"];
+    const previewSourceOptions = ["Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"];
     const externalMonitorInfoOverlayOptions = ["On", "Off"];
     const externalMonitorOrientationOptions = ["Landscape", "Upside Down"];
     const focusPeakingThresholdOptions = ["Low", "Medium", "High"];
@@ -14444,6 +14450,19 @@ std::string_view webControlPageHtml()
         case "set_external_monitor_mode":
           uiState.external_monitor_mode = String(payload.value || "Clean Feed");
           break;
+        case "set_preview_source":
+          if (payload.value)
+            uiState.preview_source = String(payload.value);
+          break;
+        case "set_record_cameras":
+          uiState.record_cameras = String(payload.value || "Both");
+          break;
+        case "set_cam1_settings":
+          uiState.cam1_settings = String(payload.value || "");
+          break;
+        case "set_cam1_mode":
+          uiState.cam1_mode = String(payload.value || "Closest to Cam 0");
+          break;
         case "set_external_monitor_info_overlay":
           uiState.external_monitor_info_overlay = String(payload.value || "On");
           break;
@@ -15569,6 +15588,7 @@ std::string_view webControlPageHtml()
       const grayscaleEnabled = !!uiState.grayscale_enabled;
       const externalMonitorEnabled = !!uiState.external_monitor_enabled;
       const externalMonitorMode = uiState.external_monitor_mode || "Clean Feed";
+      const previewSource = uiState.preview_source || "Both";
       const externalMonitorInfoOverlay = uiState.external_monitor_info_overlay || "On";
       const externalMonitorOrientation = uiState.external_monitor_orientation || "Landscape";
       const uiOrientation = uiState.ui_orientation || "Landscape";
@@ -15861,6 +15881,7 @@ std::string_view webControlPageHtml()
       ensureSelectOptions("settingsImuDriverSelect", imuDriverOptions);
       ensureSelectOptions("settingsImuOrientationSelect", imuOrientationOptions);
       ensureSelectOptions("settingsExternalMonitorModeSelect", externalMonitorModeOptions);
+      ensureSelectOptions("settingsPreviewSourceSelect", previewSourceOptions);
       ensureSelectOptions("settingsExternalMonitorInfoOverlaySelect", externalMonitorInfoOverlayOptions);
       ensureSelectOptions("settingsExternalMonitorOrientationSelect", externalMonitorOrientationOptions);
       ensureSelectOptions("settingsFocusPeakingThresholdSelect", focusPeakingThresholdOptions);
@@ -15919,6 +15940,7 @@ std::string_view webControlPageHtml()
       setFormValue("settingsImuDriverSelect", imuDriverText);
       setFormValue("settingsImuOrientationSelect", imuOrientation);
       setFormValue("settingsExternalMonitorModeSelect", externalMonitorMode);
+      setFormValue("settingsPreviewSourceSelect", previewSource);
       setFormValue("settingsExternalMonitorInfoOverlaySelect", externalMonitorInfoOverlay);
       setFormValue("settingsExternalMonitorOrientationSelect", externalMonitorOrientation);
       setFormValue("settingsFocusPeakingThresholdSelect", focusPeakingThreshold);
@@ -19436,6 +19458,7 @@ std::string_view webControlPageHtml()
         "uiOrientation",
         "externalMonitorEnabled",
         "externalMonitorMode",
+        "recordCameras",
         "externalMonitorInfoOverlay",
         "externalMonitorOrientation",
         "timecodeMode",
@@ -21130,6 +21153,9 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsImuCalibrateButton").addEventListener("click", calibrateImuBias);
       document.getElementById("settingsExternalMonitorModeSelect").addEventListener("change", () => {
         void applySelectCommand("settingsExternalMonitorModeSelect", "set_external_monitor_mode");
+      });
+      document.getElementById("settingsPreviewSourceSelect").addEventListener("change", () => {
+        void applySelectCommand("settingsPreviewSourceSelect", "set_preview_source");
       });
       document.getElementById("settingsExternalMonitorInfoOverlaySelect").addEventListener("change", () => {
         void applySelectCommand("settingsExternalMonitorInfoOverlaySelect", "set_external_monitor_info_overlay");
