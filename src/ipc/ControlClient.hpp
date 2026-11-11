@@ -8,15 +8,20 @@
 //
 // With the Dual sensor switch off (UI.conf dualSensorEnabled, amendment A1) the thread does one stat() of UI.conf per
 // second and nothing else: no socket, no log line, configured() stays false.
+#include "ipc/CommandClasses.hpp"
+#include "ipc/Resync.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace apertar {
 
@@ -32,6 +37,29 @@ public:
         std::function<bool(const std::string &)> configNames;  // config.txt names a sensor on this port ("cam0", "cam1")
         std::function<bool()> sensorPresent;                   // sysfs shows a sensor on cam1's port
         std::function<bool()> primaryInStandby;                // published by the command thread
+        // The primary's side of the resync and the compare (design 4.4). All of them are read on the relay thread and
+        // must not take commandMutex_ or the controller's mutex_: the command thread publishes what they return.
+        std::function<commandclasses::Ties()> ties;            // UI.conf cam1Settings, parsed
+        std::function<resync::PrimaryView()> primaryView;      // settingsBody, preset and ladder, as last published
+        std::function<bool()> primaryIdle;                     // the 4.3 idle test on cam0, from published flags
+        std::function<bool()> primaryTakeActive;               // a take (or pre-roll) runs on cam0
+        std::function<bool()> primaryTakeStarting;             // a record_start is publishing its take (T62)
+    };
+
+    // Where a queued command came from: a "both" command forwarded after the primary's ok, a camera=cam1 setter, or one of
+    // the relay's own steps. A non-ok reply to the first schedules a resync; the others only set cam1.message.
+    enum class Origin { Forward, Camera, Relay };
+
+    // A reply the command thread waits for (the ladder pair with camera=cam1, 1 s).
+    struct Reply {
+        int id = 0;
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+        bool failed = false;   // the link dropped first
+        std::string line;
+        // True with `line` set when the reply came.
+        bool wait(int ms, std::string *out);
     };
 
     // What the command thread and the state builders read. A copy, taken under the client's own mutex.
@@ -78,12 +106,19 @@ public:
 
     // Queues a forward and counts it (the pending count of §4.3). False when there is no link: the forward is dropped,
     // and the resync on relink catches up (§4.1).
-    bool enqueue(const std::string &name, const std::map<std::string, std::string> &fields);
+    bool enqueue(const std::string &name, const std::map<std::string, std::string> &fields, Origin origin = Origin::Forward);
+    // The same for a command whose reply the caller reads (set_mode_ladder camera=cam1). Null when there is no link.
+    std::shared_ptr<Reply> enqueueWithReply(const std::string &name, const std::map<std::string, std::string> &fields);
+    // A relayed read (get_mode_ladder camera=cam1): sent at once, outside the FIFO and the pending count. Null when there
+    // is no link. Call forget() after a timeout.
+    std::shared_ptr<Reply> readNow(const std::string &name, const std::map<std::string, std::string> &fields);
+    void forget(const std::shared_ptr<Reply> &reply);
 
     // The busy wait: blocks up to `ms` until the pending count is 0. True when it is.
     bool waitForIdle(int ms);
 
-    // The next two are for part 2's resync: cam1.message and the `refused` input of the state word.
+    // cam1.message, and the `refused` input of the state word for a refused REC (until the stop, T62). The resync's own
+    // `refused` (three resyncs that did not converge) is kept apart and ORed in.
     void setMessage(const std::string &message);
     void setRefused(bool refused, const std::string &message);
 
@@ -92,6 +127,10 @@ private:
         int id = 0;
         std::string name;
         std::map<std::string, std::string> fields;
+        Origin origin = Origin::Forward;
+        int step = 0;                       // a resync step: 1 ladder, 2 preset, 3 Clear HDR, 11 the ladder again
+        double fpsSent = 0;                 // for the clamp rule
+        std::shared_ptr<Reply> reply;       // someone waits for it
     };
 
     void run();
@@ -109,7 +148,14 @@ private:
     void dropLink(const char *why);
     void wake();
     bool idleToUnlink() const;
-    bool enqueueLocked(const std::string &name, const std::map<std::string, std::string> &fields);
+    bool enqueueLocked(const std::string &name, const std::map<std::string, std::string> &fields, Origin origin = Origin::Forward,
+                       int step = 0, std::shared_ptr<Reply> reply = nullptr);
+    void watchTake();
+    void watchTies();
+    void serviceResync();
+    void compareWith(const resync::PrimaryView &view, int64_t sentMs);
+    void updateRefusedLocked();
+    void failReplies();
 
     Options options_;
     std::thread thread_;
@@ -124,6 +170,12 @@ private:
     int pollId_ = 0;                // the get_state in flight, 0 = none
     int nextId_ = 1 << 20;          // ids for what the relay sends; cam1 echoes them
     int64_t startMs_ = 0;
+    int64_t pollSentMs_ = 0;        // when the get_state in flight was sent
+    commandclasses::Ties ties_;
+    bool tiesKnown_ = false;
+    bool prevTakeActive_ = false;
+    bool cam1RecordedThisTake_ = false;
+    std::vector<std::string> lastDiffs_;   // the fields the last differing compare found
     int64_t nextTickMs_ = 0;
     bool settled_ = false;          // the relink actions (standby, wake) have run for this link
 
@@ -139,6 +191,13 @@ private:
     int pending_ = 0;
     int64_t busySinceMs_ = 0;
     Snapshot state_;                // everything but configured, linked, pending, busyForMs, which are derived
+    resync::Tracker tracker_;       // under mutex_
+    bool takeRefused_ = false;      // setRefused(), for a refused REC
+    int64_t lastForwardReplyMs_ = 0;
+    bool step1Failed_ = false;      // resync step 1 was refused: it is sent once more after step 2
+    std::map<std::string, std::string> step1Fields_;
+    std::deque<Forward> reads_;     // relayed reads waiting to be sent
+    std::map<int, std::shared_ptr<Reply>> readsInFlight_;
 };
 
 } // namespace apertar

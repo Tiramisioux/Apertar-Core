@@ -23,6 +23,18 @@ using commandclasses::Control;
 using commandclasses::Fields;
 using commandclasses::Ties;
 
+// What the primary's command thread publishes for the relay (design 4.1 Locks): its settingsBody after each command, the
+// preset built from the same settings, and its ladder definition (at start and after each ok set_mode_ladder).
+struct PrimaryView {
+    bool valid = false;                 // published at least once
+    std::string settings = "{}";        // settingsBody as an object
+    Fields preset;                      // the preset of those settings, flattened
+    bool ladderKnown = false;
+    std::string ladderResolutions;      // the ladder's `resolutions_text`
+    bool ladderEnabled = false;
+    bool ladderRampReady = false;
+};
+
 // ---- a preset as the primary saves it ------------------------------------------------------------------------------------
 
 // `{"type":"apertar-preset",...,"settings":{...}}` flattened to its settings: strings unquoted, numbers and booleans as
@@ -207,7 +219,8 @@ inline std::vector<Step> planResync(const PlanInputs &in)
     // 1. The ladder. Resolution untied: cam1's own ladder stays off (it would refuse set_resolution camera=cam1 and rewrite
     // the mode at every fps change). Tied: it follows the primary's, unless that one is on but inactive in a processed format.
     if (!in.ties.resolution) {
-        if (jsonkeys::boolOf(in.cam1, "ladder_enabled").value_or(false))
+        // A switch away from tied resolution always sends it, whatever the last poll said: that poll can be a second old.
+        if (in.kind == Kind::LadderOff || jsonkeys::boolOf(in.cam1, "ladder_enabled").value_or(false))
             steps.push_back({"set_mode_ladder", {{"enabled", "false"}}});
     } else if (in.ladderKnown && !detail::ladderInactiveHere(in.primary) && ladderDiffers(in.primary, in.cam1)) {
         Fields fields = {{"enabled", boolText(in.ladderEnabled)}, {"ramp_ready", boolText(in.ladderRampReady)}};

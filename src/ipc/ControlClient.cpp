@@ -3,6 +3,7 @@
 #include "ipc/Cam1State.hpp"
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/JsonKeys.hpp"
+#include "ipc/Resync.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -25,6 +26,7 @@ constexpr int kUnknownGraceMs = 2000;                // §3.4: 2 s of failed con
 constexpr int kIoStepMs = 100;
 constexpr int kForwardIdBase = 1 << 20;
 constexpr int kPollIdBase = 1 << 21;
+constexpr int kReadIdBase = 1 << 22;
 
 int64_t nowMs()
 {
@@ -95,6 +97,7 @@ void ControlClient::stop()
     configured_.store(false, std::memory_order_release);
     unknown_.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lock(mutex_);
+    failReplies();
     queue_.clear();
     inFlight_ = false;
     pending_ = 0;
@@ -121,13 +124,63 @@ ControlClient::Snapshot ControlClient::snapshot() const
     return copy;
 }
 
-bool ControlClient::enqueue(const std::string &name, const std::map<std::string, std::string> &fields)
+bool ControlClient::Reply::wait(int ms, std::string *out)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return enqueueLocked(name, fields);
+    std::unique_lock<std::mutex> lock(mutex);
+    if (!cv.wait_for(lock, std::chrono::milliseconds(ms), [this] { return done; }) || failed)
+        return false;
+    if (out)
+        *out = line;
+    return true;
 }
 
-bool ControlClient::enqueueLocked(const std::string &name, const std::map<std::string, std::string> &fields)
+bool ControlClient::enqueue(const std::string &name, const std::map<std::string, std::string> &fields, Origin origin)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return enqueueLocked(name, fields, origin);
+}
+
+std::shared_ptr<ControlClient::Reply> ControlClient::enqueueWithReply(const std::string &name,
+                                                                      const std::map<std::string, std::string> &fields)
+{
+    auto reply = std::make_shared<Reply>();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return enqueueLocked(name, fields, Origin::Camera, 0, reply) ? reply : nullptr;
+}
+
+std::shared_ptr<ControlClient::Reply> ControlClient::readNow(const std::string &name, const std::map<std::string, std::string> &fields)
+{
+    auto reply = std::make_shared<Reply>();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!linked_.load(std::memory_order_acquire))
+        return nullptr;
+    static int nextReadId = kReadIdBase;
+    Forward read;
+    read.id = reply->id = nextReadId++;
+    read.name = name;
+    read.fields = fields;
+    read.reply = reply;
+    reads_.push_back(std::move(read));   // not counted: a read never makes cam1 busy
+    wake();
+    return reply;
+}
+
+void ControlClient::forget(const std::shared_ptr<Reply> &reply)
+{
+    if (!reply)
+        return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    readsInFlight_.erase(reply->id);
+    for (auto it = reads_.begin(); it != reads_.end(); ++it) {
+        if (it->id == reply->id) {
+            reads_.erase(it);
+            break;
+        }
+    }
+}
+
+bool ControlClient::enqueueLocked(const std::string &name, const std::map<std::string, std::string> &fields, Origin origin, int step,
+                                  std::shared_ptr<Reply> reply)
 {
     if (!linked_.load(std::memory_order_acquire))
         return false;   // dropped: the resync on relink catches up
@@ -136,9 +189,18 @@ bool ControlClient::enqueueLocked(const std::string &name, const std::map<std::s
     forward.id = nextForwardId++;
     forward.name = name;
     forward.fields = fields;
+    forward.origin = origin;
+    forward.step = step;
+    forward.fpsSent = resync::sentFps(name, fields);
+    forward.reply = std::move(reply);
+    if (forward.reply)
+        forward.reply->id = forward.id;
     queue_.push_back(std::move(forward));
     if (pending_++ == 0)
         busySinceMs_ = nowMs();
+    // A forwarded record format or preset makes each Core restore its own per-format profile (CC:11213-11239): a resync owed.
+    if (origin == Origin::Forward && (name == "set_record_format" || name == "apply_preset"))
+        tracker_.onForwardedReconfigure();
     wake();
     return true;
 }
@@ -158,8 +220,15 @@ void ControlClient::setMessage(const std::string &message)
 void ControlClient::setRefused(bool refused, const std::string &message)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    state_.refused = refused;
+    takeRefused_ = refused;
     state_.message = message;
+    updateRefusedLocked();
+}
+
+// The state word's `refused` input: a refused REC, or three resyncs that did not converge (design 4.4, 4.5).
+void ControlClient::updateRefusedLocked()
+{
+    state_.refused = takeRefused_ || tracker_.refused();
 }
 
 bool ControlClient::idleToUnlink() const
@@ -179,6 +248,7 @@ void ControlClient::run()
             tick();
         }
         ioStep(kIoStepMs);
+        watchTake();
     }
 }
 
@@ -248,6 +318,12 @@ void ControlClient::tick()
                 state_.answered = false;
                 state_.sensorMissing = false;
             }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                tracker_.onLink();   // a (re)link owes one resync (design 4.4)
+                step1Failed_ = false;
+                updateRefusedLocked();
+            }
             linked_.store(true, std::memory_order_release);
             std::cerr << "ApertarCore cam1 " << (everLinked_ ? "relinked" : "linked") << " (" << options_.socketPath << ")\n";
             everLinked_ = true;
@@ -270,11 +346,47 @@ void ControlClient::tick()
         state_.sensorMissing = missing;
         return;
     }
+    watchTies();
     if (pollId_ == 0) {
         pollId_ = kPollIdBase + (nextId_++ & 0xFFFFF);
+        pollSentMs_ = nowMs();
         if (!sendLine("{\"cmd\":\"get_state\",\"id\":" + std::to_string(pollId_) + "}"))
             dropLink("send failed");
     }
+    serviceResync();
+}
+
+// A change of cam1Settings runs the transition resync (design 4.4): untying resolution alone sends cam1 the ladder off,
+// tying anything back resyncs it. The first reading is the baseline.
+void ControlClient::watchTies()
+{
+    if (!options_.ties)
+        return;
+    const commandclasses::Ties now = options_.ties();
+    if (tiesKnown_ && now != ties_) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        tracker_.onTieChange(ties_, now);
+    }
+    ties_ = now;
+    tiesKnown_ = true;
+}
+
+// A take that ran on cam0 while cam1 did not record owes cam1 a resync after it (design 4.4, "a take cam1 sat out").
+void ControlClient::watchTake()
+{
+    if (!options_.primaryTakeActive || fd_ < 0)
+        return;
+    const bool active = options_.primaryTakeActive();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active) {
+        if (!prevTakeActive_)
+            cam1RecordedThisTake_ = false;
+        if (state_.recording)
+            cam1RecordedThisTake_ = true;
+    } else if (prevTakeActive_ && !cam1RecordedThisTake_) {
+        tracker_.onSatOutTake();
+    }
+    prevTakeActive_ = active;
 }
 
 void ControlClient::ioStep(int timeoutMs)
@@ -374,15 +486,56 @@ void ControlClient::handleReply(const std::string &line)
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
+    // A relayed read: hand the line to whoever waits, outside the FIFO and the count.
+    if (const auto read = readsInFlight_.find(id); read != readsInFlight_.end()) {
+        {
+            std::lock_guard<std::mutex> replyLock(read->second->mutex);
+            read->second->line = line;
+            read->second->done = true;
+        }
+        read->second->cv.notify_all();
+        readsInFlight_.erase(read);
+        return;
+    }
     if (!inFlight_ || id != flight_.id)
         return;
-    if (jsonkeys::boolOf(line, "ok").value_or(false)) {
-        if (state_.message.rfind("CAM1: ", 0) == 0)
+    const bool ok = jsonkeys::boolOf(line, "ok").value_or(false);
+    const Forward done = flight_;
+    lastForwardReplyMs_ = nowMs();
+    if (ok) {
+        // cam1 clamps an fps above its mode's ceiling and answers ok: say so, and schedule nothing (design 4.4). The compare
+        // finds the difference and the 3-resync cap ends the loop.
+        std::optional<std::string> clamp;
+        if (done.fpsSent > 0) {
+            const std::string_view settings = done.name == "apply_preset" ? jsonkeys::rawOf(line, "state").value_or("{}") : std::string_view(line);
+            clamp = resync::clampMessage(done.fpsSent, settings);
+        }
+        if (clamp)
+            state_.message = *clamp;
+        else if (state_.message.rfind("CAM1: ", 0) == 0 || state_.message.rfind("CAM1 runs ", 0) == 0)
             state_.message.clear();
     } else {
         state_.message = "CAM1: " + jsonkeys::stringOf(line, "error").value_or("refused");
+        // A refusal of a forwarded command owes a resync; one inside the resync, or of a camera=cam1 setter, only says why.
+        if (done.origin == Origin::Forward)
+            tracker_.onNonOkReply();
+        if (done.step == 1)
+            step1Failed_ = true;
+    }
+    if (done.reply) {
+        {
+            std::lock_guard<std::mutex> replyLock(done.reply->mutex);
+            done.reply->line = line;
+            done.reply->done = true;
+        }
+        done.reply->cv.notify_all();
     }
     inFlight_ = false;
+    // Step 1 refused for another reason than the processed-format skip: it is sent once more after step 2 (design 4.4).
+    if (done.step == 2 && step1Failed_) {
+        step1Failed_ = false;
+        enqueueLocked("set_mode_ladder", step1Fields_, Origin::Relay, 11);
+    }
     if (--pending_ <= 0) {
         pending_ = 0;
         busySinceMs_ = 0;
@@ -429,6 +582,7 @@ void ControlClient::handleGetState(const std::string &line)
     // cam1's settingsBody sits in the top level of the reply, from "resolution" to "clip_merge_env_off".
     const std::string run = jsonkeys::run(line, "resolution", "clip_merge_env_off");
     bool doSettle = false;
+    const int64_t sentMs = pollSentMs_;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.standby = standby || camera == "standby";
@@ -443,8 +597,14 @@ void ControlClient::handleGetState(const std::string &line)
             state_.settings = "{" + run + "}";
         doSettle = !settled_;
     }
-    if (!doSettle)
+    if (options_.primaryView) {
+        const resync::PrimaryView view = options_.primaryView();
+        compareWith(view, sentMs);
+    }
+    if (!doSettle) {
+        serviceResync();
         return;
+    }
     settled_ = true;
     unknown_.store(false, std::memory_order_release);
     // §4.6 Standby: on link or relink the primary's standby goes to cam1, and a cam1 left in standby while the primary is
@@ -452,13 +612,117 @@ void ControlClient::handleGetState(const std::string &line)
     const bool primaryStandby = options_.primaryInStandby && options_.primaryInStandby();
     std::lock_guard<std::mutex> lock(mutex_);
     if (!primaryStandby && state_.standby)
-        enqueueLocked("wake", {});
+        enqueueLocked("wake", {}, Origin::Relay);
     else if (primaryStandby && !state_.standby)
-        enqueueLocked("enter_standby", {});
+        enqueueLocked("enter_standby", {}, Origin::Relay);
+}
+
+// The compare (design 4.4): cam1's settingsBody against the primary's as last published, on the tied fields only. It runs
+// only while both Cores are idle and only against a get_state sent after the last forward's reply, and a resync follows
+// two differing compares in a row.
+void ControlClient::compareWith(const resync::PrimaryView &view, int64_t sentMs)
+{
+    const bool primaryIdle = !options_.primaryIdle || options_.primaryIdle();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!view.valid || !state_.answered || !state_.idle || pending_ > 0 || !primaryIdle || state_.settings.size() <= 2 ||
+        !resync::compareEligible(sentMs, lastForwardReplyMs_))
+        return;
+    const std::vector<std::string> diffs = resync::differences(view.settings, state_.settings, ties_);
+    if (!diffs.empty())
+        lastDiffs_ = diffs;
+    if (tracker_.onCompare(!diffs.empty())) {
+        // A compare passed: cam1 follows again.
+        if (state_.message.rfind("CAM1 did not follow", 0) == 0)
+            state_.message.clear();
+    }
+    updateRefusedLocked();
+}
+
+// One resync at the next moment both Cores are idle (design 4.4). Its steps join the FIFO and the pending count; the
+// count goes up first, then the published take is read again, and a take that is starting takes the steps back.
+void ControlClient::serviceResync()
+{
+    if (!linked_.load(std::memory_order_acquire))
+        return;
+    const bool primaryIdle = !options_.primaryIdle || options_.primaryIdle();
+    resync::Kind kind = resync::Kind::None;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!state_.answered)
+            return;
+        const bool bothIdle = primaryIdle && state_.idle && pending_ == 0;
+        kind = tracker_.take(bothIdle);
+        if (tracker_.refused() && !state_.refused) {
+            std::string why = "CAM1 did not follow CAM0";
+            for (size_t i = 0; i < lastDiffs_.size(); ++i)
+                why += (i ? ", " : ": ") + lastDiffs_[i];
+            state_.message = why + ".";
+            std::cerr << "ApertarCore cam1 refused: " << state_.message << "\n";
+        }
+        updateRefusedLocked();
+        if (kind == resync::Kind::None)
+            return;
+    }
+    const resync::PrimaryView view = options_.primaryView ? options_.primaryView() : resync::PrimaryView{};
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!view.valid) {   // the primary has published nothing yet: the resync stays owed
+        tracker_.giveBack(kind);
+        return;
+    }
+    resync::PlanInputs plan;
+    plan.ties = ties_;
+    plan.kind = kind;
+    plan.primary = view.settings;
+    plan.cam1 = state_.settings;
+    plan.primaryPreset = view.preset;
+    plan.ladderResolutions = view.ladderResolutions;
+    plan.ladderKnown = view.ladderKnown;
+    plan.ladderEnabled = view.ladderEnabled;
+    plan.ladderRampReady = view.ladderRampReady;
+    const std::vector<resync::Step> steps = resync::planResync(plan);
+    std::cerr << "ApertarCore cam1 resync (" << (kind == resync::Kind::Full ? "full" : "ladder off") << ":";
+    for (const resync::Step &step : steps)
+        std::cerr << ' ' << step.name;
+    std::cerr << ")\n";
+    const size_t before = queue_.size();
+    const int pendingBefore = pending_;
+    const int64_t busyBefore = busySinceMs_;
+    step1Fields_.clear();
+    for (const resync::Step &step : steps) {
+        const int tag = step.name == "set_mode_ladder" ? 1 : step.name == "apply_preset" ? 2 : 3;
+        if (tag == 1)
+            step1Fields_ = step.fields;
+        enqueueLocked(step.name, step.fields, Origin::Relay, tag);
+    }
+    // The count is up; read the published take once more. A record_start that published its take first wins (design 4.1).
+    if (options_.primaryTakeStarting && options_.primaryTakeStarting()) {
+        queue_.resize(before);
+        pending_ = pendingBefore;
+        busySinceMs_ = busyBefore;
+        tracker_.giveBack(kind);
+        updateRefusedLocked();
+    }
 }
 
 void ControlClient::sendNextForward()
 {
+    // Relayed reads go out at once, whatever is in flight.
+    while (true) {
+        std::string readLine;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (reads_.empty())
+                break;
+            Forward read = std::move(reads_.front());
+            reads_.pop_front();
+            readLine = forwardLine(read.id, read.name, read.fields);
+            readsInFlight_[read.id] = read.reply;
+        }
+        if (!sendLine(readLine)) {
+            dropLink("send failed");
+            return;
+        }
+    }
     std::string line;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -471,6 +735,31 @@ void ControlClient::sendNextForward()
     }
     if (!sendLine(line))
         dropLink("send failed");
+}
+
+// Everyone waiting for a reply gives up: the link is gone. Called under mutex_.
+void ControlClient::failReplies()
+{
+    const auto fail = [](const std::shared_ptr<Reply> &reply) {
+        if (!reply)
+            return;
+        {
+            std::lock_guard<std::mutex> lock(reply->mutex);
+            reply->failed = true;
+            reply->done = true;
+        }
+        reply->cv.notify_all();
+    };
+    for (const Forward &forward : queue_)
+        fail(forward.reply);
+    if (inFlight_)
+        fail(flight_.reply);
+    for (const Forward &read : reads_)
+        fail(read.reply);
+    reads_.clear();
+    for (auto &entry : readsInFlight_)
+        fail(entry.second);
+    readsInFlight_.clear();
 }
 
 // EOF or a failed send. Setters queued or unanswered are dropped, so the pending count returns to 0 (§4.1); a take the
@@ -487,10 +776,12 @@ void ControlClient::dropLink(const char *why)
     linked_.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        failReplies();
         queue_.clear();
         inFlight_ = false;
         pending_ = 0;
         busySinceMs_ = 0;
+        step1Failed_ = false;
         state_.answered = false;
         state_.idle = false;
         state_.standby = false;
