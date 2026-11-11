@@ -365,6 +365,74 @@ std::string_view webControlPageHtml()
       background: #000000;
     }
 
+    /* Dual sensor on: two panes of the stage's own shape in its middle half, CAM0 left, CAM1 right; the badges keep the
+       band above, the timecode and REC the band below. Aids stay on CAM0 (design §5.3). */
+    .preview-stream-cam1,
+    .preview-cam-tag,
+    .preview-no-signal {
+      display: none;
+    }
+
+    .preview-stage.dual .preview-stream,
+    .preview-stage.dual .preview-processed-canvas {
+      top: 25%;
+      bottom: auto;
+      height: 50%;
+      width: 50%;
+    }
+
+    .preview-stage.dual .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual .preview-processed-canvas {
+      left: 0;
+      right: auto;
+    }
+
+    .preview-stage.dual .preview-stream-cam1 {
+      display: block;
+      left: 50%;
+      right: auto;
+    }
+
+    .preview-stage.dual .preview-cam-tag {
+      display: block;
+      position: absolute;
+      top: calc(25% + 8px);
+      z-index: 2;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #f4f4f5;
+      font-size: 12px;
+      font-weight: 700;
+      pointer-events: none;
+    }
+
+    .preview-stage.dual .preview-cam-tag.cam0 {
+      left: 8px;
+    }
+
+    .preview-stage.dual .preview-cam-tag.cam1 {
+      left: calc(50% + 8px);
+    }
+
+    .preview-stage.dual .preview-no-signal.shown {
+      display: flex;
+      position: absolute;
+      top: 25%;
+      left: 50%;
+      width: 50%;
+      height: 50%;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      color: #a1a1aa;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      background: #000000;
+      pointer-events: none;
+    }
+
     .preview-processed-canvas {
       position: absolute;
       inset: 0;
@@ -4589,6 +4657,11 @@ std::string_view webControlPageHtml()
           <div class="preview-stage" id="previewStage">
             <img class="preview-stream" id="previewStream" alt="Live preview">
             <canvas class="preview-processed-canvas" id="previewProcessedCanvas"></canvas>
+            <!-- Dual sensor on: CAM1's picture from its own Core (:8001), beside CAM0's (design §5.3). -->
+            <img class="preview-stream preview-stream-cam1" id="previewStream1" alt="CAM1 live preview">
+            <span class="preview-cam-tag cam0" id="previewCamTag0">CAM0</span>
+            <span class="preview-cam-tag cam1" id="previewCamTag1">CAM1</span>
+            <span class="preview-no-signal" id="previewNoSignal1">NO SIGNAL · CAM1</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -12509,6 +12582,7 @@ std::string_view webControlPageHtml()
       const preview = document.getElementById("previewStream");
       if (preview)
         preview.removeAttribute("src");
+      stopCam1Preview();
     }
 
     function pbResumeLive() {
@@ -13978,8 +14052,9 @@ std::string_view webControlPageHtml()
         return;
       }
 
-      const rawWidth = Math.max(1, Math.round(stage.clientWidth || preview.clientWidth || 1));
-      const rawHeight = Math.max(1, Math.round(stage.clientHeight || preview.clientHeight || 1));
+      const box = stage.classList.contains("dual") ? preview : stage;   // dual: CAM0's pane, not the whole stage
+      const rawWidth = Math.max(1, Math.round(box.clientWidth || preview.clientWidth || 1));
+      const rawHeight = Math.max(1, Math.round(box.clientHeight || preview.clientHeight || 1));
       const processScale = Math.min(1, 1280 / rawWidth, 720 / rawHeight);
       const targetWidth = Math.max(1, Math.round(rawWidth * processScale));
       const targetHeight = Math.max(1, Math.round(rawHeight * processScale));
@@ -14110,6 +14185,52 @@ std::string_view webControlPageHtml()
 
       ctx.putImageData(imageData, 0, 0);
       state.previewProcessingLastFrameMs = now;
+    }
+
+    // CAM1's picture: an <img> on cam1's own Core (:8001). An image request sends no Origin, so it passes Core's
+    // check; its src is dropped while not shown (MJPEG encodes only while viewed) and while playback is open.
+    const cam1Preview = { on: false, nonce: 0, retryTimer: 0 };
+
+    function stopCam1Preview() {
+      clearTimeout(cam1Preview.retryTimer);
+      const img = document.getElementById("previewStream1");
+      if (img)
+        img.removeAttribute("src");
+      cam1Preview.on = false;
+    }
+
+    function startCam1Preview() {
+      const img = document.getElementById("previewStream1");
+      if (!img)
+        return;
+      clearTimeout(cam1Preview.retryTimer);
+      cam1Preview.nonce += 1;
+      img.src = window.location.protocol + "//" + window.location.hostname + ":8001/preview.mjpeg?stream=" + cam1Preview.nonce;
+      cam1Preview.on = true;
+    }
+
+    function updateDualPreview(snapshot) {
+      const stage = document.getElementById("previewStage");
+      const img = document.getElementById("previewStream1");
+      if (!stage || !img)
+        return;
+      const dual = !!(snapshot && snapshot.ui && snapshot.ui.dual_sensor_enabled === true);
+      stage.classList.toggle("dual", dual);
+      if (!img.dataset.wired) {
+        img.dataset.wired = "1";
+        img.addEventListener("load", () => document.getElementById("previewNoSignal1").classList.remove("shown"));
+        img.addEventListener("error", () => {
+          document.getElementById("previewNoSignal1").classList.add("shown");
+          clearTimeout(cam1Preview.retryTimer);
+          if (cam1Preview.on)
+            cam1Preview.retryTimer = window.setTimeout(startCam1Preview, 3000);
+        });
+      }
+      const wanted = dual && !state.previewPausedForPlayback;
+      if (wanted && !cam1Preview.on)
+        startCam1Preview();
+      else if (!wanted && cam1Preview.on)
+        stopCam1Preview();
     }
 
     function loadPreviewStream() {
@@ -15822,6 +15943,7 @@ std::string_view webControlPageHtml()
       setPreviewSmpteEnabled(smpteEnabled);
       setFalseColorLegend(falseColorMode, falseColorEnabled && !smpteEnabled);
       setPreviewAspectForSnapshot(snapshot);
+      updateDualPreview(snapshot);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
 
