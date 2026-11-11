@@ -11115,6 +11115,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
     , session_(std::make_unique<CameraSession>(
           previewCallback_,
           [this](int level) {
+              audioInputLevel_.store(std::clamp(level, 0, 100), std::memory_order_relaxed);
               if (!eventCallback_)
                   return;
 

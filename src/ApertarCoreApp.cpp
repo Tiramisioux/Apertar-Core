@@ -8541,7 +8541,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.contentType = "application/json; charset=utf-8";
         const auto buffer = camera_.frameBufferStatus();
         response.body = "{" + bufferMembers(buffer.used, buffer.capacity, buffer.mode) +
-            ",\"recording\":" + (buffer.recording && !bufferbudget::safetyStopState().active.load(std::memory_order_acquire) ? "true" : "false") + "}";
+            ",\"recording\":" + (buffer.recording && !bufferbudget::safetyStopState().active.load(std::memory_order_acquire) ? "true" : "false") +
+            ",\"audio_input_level\":" + std::to_string(webAudioInputLevel()) + "}";
         return response;
     }
 
@@ -9415,6 +9416,12 @@ std::string ApertarCoreApp::buildMediaLibraryJson() const
     return out.str();
 }
 
+int ApertarCoreApp::webAudioInputLevel() const
+{
+    return soundRecordingActive_.load(std::memory_order_relaxed) ? soundInputLevel_.load(std::memory_order_relaxed)
+                                                                 : camera_.audioInputLevel();
+}
+
 std::string ApertarCoreApp::buildWebStateJson() const
 {
     const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
@@ -9645,6 +9652,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_phase_lock_saturated\":" << (phaseLockStatus.saturated ? "true" : "false")
         << ",\"fps_phase_lock_locked\":" << (phaseLockStatus.locked ? "true" : "false")
         << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
+        << ",\"audio_input_level\":" << webAudioInputLevel()
         << ",\"timelapse_active\":" << (timelapseActive ? "true" : "false")
         << ",\"timelapse_interval_seconds\":" << timelapseIntervalSeconds
         << ",\"timelapse_shot_count\":" << camera_.timelapseShotCount()
@@ -10250,6 +10258,7 @@ bool ApertarCoreApp::startSoundRecording(AudioRecordingOptions audioOptions, std
             audioOptions,
             [this](int level) {
                 const int clamped = std::clamp(level, 0, 100);
+                soundInputLevel_.store(clamped, std::memory_order_relaxed);
                 publishEvent("{\"event\":\"audio_level\",\"input_level\":" + std::to_string(clamped) + "}");
             },
             &audioError)) {

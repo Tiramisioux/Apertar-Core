@@ -179,6 +179,8 @@ public:
     PhaseLockStatus phaseLockStatus() const;
     bool recordingHasDroppedFrames() const { return recordingDropWarning_.dropped(); }
     uint64_t recordingDroppedFrames() const { return recordingDropWarning_.droppedFrames(); }
+    // The take's audio input level, 0-100, as the last audio_level event gave it (0 when no take records sound).
+    int audioInputLevel() const { return audioInputLevel_.load(std::memory_order_relaxed); }
 
 private:
     class CameraSession;
@@ -236,6 +238,7 @@ private:
     bool recording_ = false;
     std::optional<bool> lastEmittedLogApplied_;             // cdng_log_applied as the last settings event carried it (mutex_)
     std::atomic<bool> prerollTake_{false};                  // a storage pre-roll's take runs (recording_ stays false)
+    std::atomic<int> audioInputLevel_{0};                   // the last audio_level of a take, for the WebUI's meter
     std::optional<CaptureSettings> prerollSaved_;
     std::string prerollFolder_;
     double prerollFps_ = 0;

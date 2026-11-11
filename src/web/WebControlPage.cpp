@@ -604,6 +604,61 @@ std::string_view webControlPageHtml()
       display: none;
     }
 
+    /* The audio meter left of the timecode (as the touch UI's AudioMeterOverlay, standing): shown while sound is
+       recorded with the clips or the Sound Recorder runs; its segments fill the card's height. A faint red outline
+       while it records sound (Settings > Live preview > Audio recording outline). */
+    .footer-left {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .vu-meter {
+      display: flex;
+      padding: 9px 9px;
+      border-radius: 18px;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid transparent;
+      transition: border-color 0.18s ease;
+    }
+
+    .vu-meter.hidden {
+      display: none;
+    }
+
+    .vu-meter.recording {
+      border-color: rgba(251, 44, 54, 0.45);
+    }
+
+    .vu-bars {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 2px;
+      width: 14px;
+    }
+
+    .vu-bars span {
+      flex: 1 1 0;
+      min-height: 2px;
+      border-radius: 1px;
+      background: rgba(255, 255, 255, 0.14);
+      transition: background 0.11s ease-out;
+    }
+
+    .vu-bars span.on {
+      background: #42df86;
+    }
+
+    .vu-bars span.mid.on {
+      background: #ffd55a;
+    }
+
+    .vu-bars span.high.on {
+      background: #ff6262;
+    }
+
     .time-card.recording {
       background: rgba(255, 68, 68, 0.1);
       border-color: rgba(255, 68, 68, 0.3);
@@ -4177,6 +4232,10 @@ std::string_view webControlPageHtml()
         gap: 12px;
       }
 
+      .footer-left {
+        flex: 1;
+      }
+
       .time-card {
         flex: 1;
         min-width: 0;
@@ -4544,8 +4603,12 @@ std::string_view webControlPageHtml()
             </div>
 
             <div class="preview-footer">
-              <div class="time-card" id="timecodeBlock">
-                <div class="timecode-value" id="timecodeValue">00:00:00:00</div>
+              <div class="footer-left">
+                <div class="vu-meter hidden" id="vuMeter" role="meter" aria-label="Audio input level"
+                     aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="vu-bars" id="vuBars"></div></div>
+                <div class="time-card" id="timecodeBlock">
+                  <div class="timecode-value" id="timecodeValue">00:00:00:00</div>
+                </div>
               </div>
 
               <button class="record-button" id="recordButton" aria-label="Toggle record">
@@ -15682,6 +15745,7 @@ std::string_view webControlPageHtml()
         dropBadge.title = dropCount > 0 ? dropCount + " dropped frames in the take" : "Dropped frames in the take";
         dropBadge.setAttribute("aria-label", dropBadge.title);
       }
+      updateVuMeter(snapshot);
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
@@ -16900,6 +16964,50 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // The audio meter beside the timecode: its level comes with /api/state, and with the 250 ms /api/buffer poll
+    // while a take records sound (the poll keeps running for it with the bar option off).
+    const vuMeter = { segments: 10, wanted: false };
+
+    function vuPollWanted() {
+      return vuMeter.wanted;
+    }
+
+    function setVuLevel(level) {
+      const meter = document.getElementById("vuMeter");
+      const bars = document.getElementById("vuBars");
+      if (!meter || !bars)
+        return;
+      if (bars.children.length !== vuMeter.segments) {
+        bars.innerHTML = "";
+        for (let index = 0; index < vuMeter.segments; index++) {
+          const threshold = (index + 1) / vuMeter.segments;   // the touch UI's colours: red above 0.8, yellow above 0.55
+          const segment = document.createElement("span");
+          segment.className = threshold > 0.8 ? "high" : (threshold > 0.55 ? "mid" : "");
+          bars.appendChild(segment);
+        }
+      }
+      const normalized = Math.max(0, Math.min(100, Number(level) || 0)) / 100;
+      Array.from(bars.children).forEach((segment, index) =>
+        segment.classList.toggle("on", normalized >= (index + 1) / vuMeter.segments));
+      meter.setAttribute("aria-valuenow", String(Math.round(normalized * 100)));
+    }
+
+    function updateVuMeter(snapshot) {
+      const meter = document.getElementById("vuMeter");
+      if (!meter)
+        return;
+      const uiState = snapshot.ui || {};
+      const recordAudio = uiState.record_audio_enabled === true && uiState.photo_mode_enabled !== true;
+      const soundTake = snapshot.sound_recording === true || (snapshot.recording === true && recordAudio);
+      meter.classList.toggle("hidden", !(recordAudio || soundTake));
+      meter.classList.toggle("recording", soundTake && uiState.audio_recorded_outline_enabled !== false);
+      meter.title = soundTake ? "Recording sound" : "Audio input (moves while sound is recorded)";
+      vuMeter.wanted = soundTake;
+      setVuLevel(soundTake ? snapshot.audio_input_level : 0);
+      if (soundTake)
+        startFrameBufferTimer();
+    }
+
     function pollFrameBufferBar() {
       if (frameBufferBar.inFlight)
         return;
@@ -16909,6 +17017,8 @@ std::string_view webControlPageHtml()
       fetch("/api/buffer", { cache: "no-store", signal: controller.signal })
         .then((response) => response.json())
         .then((payload) => {
+          if (vuMeter.wanted && payload && typeof payload.audio_input_level === "number")
+            setVuLevel(payload.audio_input_level);
           if (payload && typeof payload.storage_preroll_active === "boolean") {
             frameBufferBar.preroll = payload.storage_preroll_active;
             frameBufferBar.prerollAtMs = performance.now();
@@ -16945,7 +17055,7 @@ std::string_view webControlPageHtml()
           window.clearTimeout(timeout);
           frameBufferBar.inFlight = false;
           if (frameBufferBar.timer && !frameBufferBar.recording && !frameBufferBar.safetyStop && frameBufferBar.fill <= 0
-              && !prerollPollWanted())
+              && !prerollPollWanted() && !vuPollWanted())
             stopFrameBufferPolling();
         });
     }
@@ -16978,7 +17088,7 @@ std::string_view webControlPageHtml()
         const watchStop = (mode === "frames" || mode === "ram") && (snapshot.recording === true || frameBufferBar.safetyStop);
         if (watchStop)
           startFrameBufferTimer();
-        else if (!prerollPollWanted())
+        else if (!prerollPollWanted() && !vuPollWanted())
           stopFrameBufferPolling();
         if (!watchStop)
           frameBufferBar.fill = 0;

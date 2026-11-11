@@ -172,6 +172,8 @@ private:
     TriggerOutput triggerOutput_;
     AudioRecordingSession soundRecorder_;
     std::atomic<bool> soundRecordingActive_{false};
+    std::atomic<int> soundInputLevel_{0};                    // the Sound Recorder's last audio_level, for the WebUI's meter
+    int webAudioInputLevel() const;                          // the level the WebUI's meter shows: the Sound Recorder's or the take's
     std::atomic<bool> storagePrerollFormatRunning_{false};   // a format runs; the watcher's mount change is not an insert
     std::atomic<int64_t> storagePrerollFormatDoneMs_{0};     // trimNowMs() when the last format ended (0 = none)
     std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
