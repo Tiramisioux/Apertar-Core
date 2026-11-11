@@ -760,6 +760,27 @@ std::string_view webControlPageHtml()
     .preview-stage.dual .pane-frame.p0 { left: var(--p0-l); top: var(--p0-t); width: var(--p0-w); height: var(--p0-h); }
     .preview-stage.dual .pane-frame.p1 { left: var(--p1-l); top: var(--p1-t); width: var(--p1-w); height: var(--p1-h); }
 
+    /* A pane frame follows the card's rounded top corners where its pane meets them (the card frame's radius). */
+    .preview-stage.dual .pane-frame { --frame-r: calc(var(--radius-xl) - 1px); }
+    .preview-stage.dual.view-both .pane-frame.p0,
+    .preview-stage.dual.view-bothleft .pane-frame.p1 { border-top-left-radius: var(--frame-r); }
+    .preview-stage.dual.view-both .pane-frame.p1,
+    .preview-stage.dual.view-bothleft .pane-frame.p0 { border-top-right-radius: var(--frame-r); }
+    .preview-stage.dual.view-cam0 .pane-frame.p0, .preview-stage.dual.view-pip0 .pane-frame.p0,
+    .preview-stage.dual.view-cam1 .pane-frame.p1, .preview-stage.dual.view-pip1 .pane-frame.p1 {
+      border-top-left-radius: var(--frame-r);
+      border-top-right-radius: var(--frame-r);
+    }
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both .pane-frame.p0,
+      .preview-stage.dual.view-bothleft .pane-frame.p1 {
+        border-top-left-radius: var(--frame-r);
+        border-top-right-radius: var(--frame-r);
+      }
+      .preview-stage.dual.view-both .pane-frame.p1,
+      .preview-stage.dual.view-bothleft .pane-frame.p0 { border-radius: 0; }
+    }
+
     .preview-stage.dual.rec0 .pane-rec.p0,
     .preview-stage.dual.rec1 .pane-rec.p1 {
       display: block;
