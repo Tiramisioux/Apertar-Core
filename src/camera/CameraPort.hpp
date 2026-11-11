@@ -60,6 +60,12 @@ inline bool startsWith(const std::string &text, const std::string &head)
     return text.compare(0, head.size(), head) == 0;
 }
 
+// --camera "" or cam0 is the primary; any other value names a secondary (the one rule, CameraController and the role gate).
+inline bool isSecondary(const std::string &value)
+{
+    return !value.empty() && value != "cam0";
+}
+
 inline const char *portSymbol(const std::string &port)
 {
     if (port == "cam0") return "i2c_csi_dsi0";

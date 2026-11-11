@@ -1147,7 +1147,7 @@ CameraSelectionState &cameraSelection()
 
 bool cameraIsSecondary(const std::string &value)
 {
-    return !value.empty() && value != "cam0";
+    return cameraport::isSecondary(value);
 }
 
 void resolveCameraSelectionLocked(CameraSelectionState &state)
@@ -4924,10 +4924,52 @@ public:
         if (fd < 0)
             return;
         const auto started = std::chrono::steady_clock::now();
-        const int result = ::syncfs(fd);
+        // The secondary shares the medium with the primary's take: syncfs would wait for the primary's pages too
+        // (design 3.3, C-new3). It fsyncs its own files instead: those the sync loop has not reached, the part
+        // folders and the clip folder. The primary's behaviour is unchanged.
+        bool secondary = false;
+        {
+            auto &selection = cameraSelection();
+            std::lock_guard<std::mutex> selectionLock(selection.mutex);
+            secondary = cameraIsSecondary(selection.value);
+        }
+        int result = 0;
+        if (secondary) {
+            std::vector<std::string> files;
+            {
+                std::lock_guard<std::mutex> filesLock(writtenFilesMutex_);
+                files.swap(writtenFiles_);
+            }
+            if (recordingFormat_ == RecordingFormat::Mlv)
+                files.push_back(mlvPathString_);
+            std::vector<std::string> dirs;
+            for (const std::string &path : files) {
+                const int fileFd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+                if (fileFd >= 0) {
+                    if (::fsync(fileFd) != 0)
+                        result = -1;
+                    ::close(fileFd);
+                }
+                const std::string parent = path.substr(0, path.rfind('/'));
+                if (framesPerFolder_ > 0 && parent != folderPathString_ &&
+                    std::find(dirs.begin(), dirs.end(), parent) == dirs.end())
+                    dirs.push_back(parent);
+            }
+            for (const std::string &dir : dirs) {
+                const int dirFd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                if (dirFd >= 0) {
+                    ::fsync(dirFd);
+                    ::close(dirFd);
+                }
+            }
+            if (::fsync(fd) != 0)
+                result = -1;
+        } else {
+            result = ::syncfs(fd);
+        }
         const int savedErrno = errno;
         ::close(fd);
-        std::cerr << "ApertarCore recording stop: synced to the medium in "
+        std::cerr << "ApertarCore recording stop: " << (secondary ? "fsynced the take's files in " : "synced to the medium in ")
                   << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
                   << " ms" << (result != 0 ? std::string(" (failed: ") + std::strerror(savedErrno) + ")" : std::string()) << "\n";
     }

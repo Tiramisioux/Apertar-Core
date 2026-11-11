@@ -81,6 +81,8 @@ private:
     std::string handleRequest(const std::string &line);
     std::string handleWebCommand(const std::string &payload);
     std::string handleCommand(const ControlCommand &command);
+    // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
+    bool secondaryRole() const;
     std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
     std::string testInputReply(const ControlCommand &command);
     std::string gpioPeripheralJson(const hwconf::Document &doc);

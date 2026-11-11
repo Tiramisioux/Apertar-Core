@@ -1,10 +1,12 @@
 #include "ApertarCoreApp.hpp"
 #include "camera/CameraPort.hpp"
+#include "ipc/PrimaryWait.hpp"
 
 #include <csignal>
 #include <cerrno>
 #include <fcntl.h>
 #include <iostream>
+#include <poll.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -121,6 +123,31 @@ int main(int argc, char **argv)
             std::cerr << why << "\n";
             return 0;
         }
+    }
+
+    // Start order (design 3.4, P10): a secondary waits for the primary's socket to answer (30 s), then for the primary
+    // to be idle, before its first camera start; a signal ends the wait. Without the primary's socket it starts after
+    // 30 s without the idle wait. The primary does not wait.
+    if (!options.simulateCamera && apertar::cameraport::isSecondary(options.camera)) {
+        std::cerr << "ApertarCore secondary wait: up to " << apertar::primarywait::kSocketTimeoutMs / 1000
+                  << " s for the primary's socket " << apertar::primarywait::kPrimarySocket
+                  << ", then until the primary is idle\n";
+        long waitedMs = 0;
+        const auto outcome = apertar::primarywait::waitForPrimaryIdle(
+            apertar::primarywait::kPrimarySocket, apertar::primarywait::kSocketTimeoutMs, apertar::primarywait::kPollMs,
+            [&](int ms) {
+                pollfd stop{signalPipe[0], POLLIN, 0};
+                return ::poll(&stop, 1, ms) > 0;
+            }, &waitedMs);
+        if (outcome == apertar::primarywait::Outcome::Cancelled) {
+            std::cerr << "ApertarCore secondary wait: stopped by a signal\n";
+            return 0;
+        }
+        if (outcome == apertar::primarywait::Outcome::TimedOut)
+            std::cerr << "ApertarCore secondary wait: the primary's socket did not answer within "
+                      << apertar::primarywait::kSocketTimeoutMs / 1000 << " s; starting without the idle wait\n";
+        else
+            std::cerr << "ApertarCore secondary wait: the primary is idle after " << waitedMs << " ms; starting\n";
     }
 
     apertar::ApertarCoreApp app(options);

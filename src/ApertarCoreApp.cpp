@@ -5,7 +5,9 @@
 #include "util/ClipName.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
+#include "camera/CameraPort.hpp"
 #include "camera/ExposureMetering.hpp"
+#include "ipc/CommandClasses.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
 #include "hardware/GpioChipInfo.hpp"
@@ -2232,9 +2234,17 @@ std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
     return values;
 }
 
+// The secondary writes no UI.conf of any kind (design 3.3): set once in start(), before any command can run. A blocked
+// write reports success, as a write that changed nothing does.
+std::atomic<bool> &uiConfWritesBlocked()
+{
+    static std::atomic<bool> blocked{false};
+    return blocked;
+}
+
 bool updateSharedUiGeneralSettings(const std::vector<std::pair<std::string, std::string>> &updates)
 {
-    if (updates.empty())
+    if (updates.empty() || uiConfWritesBlocked().load(std::memory_order_relaxed))
         return true;
 
     const std::filesystem::path path = sharedUiSettingsPath();
@@ -8051,13 +8061,25 @@ ApertarCoreApp::~ApertarCoreApp()
     stop();
 }
 
+bool ApertarCoreApp::secondaryRole() const
+{
+    return cameraport::isSecondary(options_.camera);
+}
+
 bool ApertarCoreApp::start()
 {
     if (running_.exchange(true))
         return true;
 
     shutdownRequested_ = false;
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+    // The secondary's role gate (design 3.3): the machine-wide standby steps, the inputs, the controls worker, UI.conf
+    // writes and the audio and gyro of a take are the primary's alone.
+    if (secondaryRole()) {
+        uiConfWritesBlocked().store(true, std::memory_order_relaxed);
+        std::cerr << "ApertarCore role secondary: standby restores off, inputs off, audio off, idle standby off, "
+                     "photo mode off, UI.conf writes off\n";
+    }
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
         const auto result = standbyLowPower("restore");
         if (result.exitCode != 0) {
             std::cerr << "Apertar low-power startup recovery failed: " << result.output << '\n';
@@ -8065,7 +8087,7 @@ bool ApertarCoreApp::start()
             return false;
         }
     }
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
         const auto result = standbyUsbPower("on");
         if (result.exitCode != 0)
             std::cerr << "Apertar standby USB recovery: " << result.output << '\n';
@@ -8124,7 +8146,11 @@ bool ApertarCoreApp::start()
     }
 
     mediaTrimSetting_.store(camera_.settings().mediaTrimEnabled);
-    const auto stillSettings = readSharedUiSettings();
+    // The secondary does not read UI.conf here: it forces photo mode, long exposure and bracketing off, so a stale
+    // camera_settings.conf in .config-cam1 cannot leave cam1 in photo mode (design 3.3).
+    SharedUiSettingsSnapshot stillSettings = secondaryRole() ? SharedUiSettingsSnapshot() : readSharedUiSettings();
+    if (secondaryRole())
+        stillSettings.photoBracketingEv = camera_.settings().bracketingEv;   // the EV step is not part of "off"
     if (camera_.settings().photoModeEnabled != stillSettings.photoModeEnabled ||
         camera_.settings().longExposureEnabled != stillSettings.photoLongExposureEnabled ||
         (stillSettings.photoModeEnabled && photoTimelapseSecondsFromValue(stillSettings.photoTimelapse) > 0))
@@ -8162,7 +8188,7 @@ bool ApertarCoreApp::start()
         return false;
     }
 
-    if (!triggerOutput_.start() && !triggerOutput_.lastError().empty()) {
+    if (!secondaryRole() && !triggerOutput_.start() && !triggerOutput_.lastError().empty()) {
         std::cerr << "ApertarCore trigger output disabled: "
                   << triggerOutput_.lastError() << "\n";
     }
@@ -8171,14 +8197,16 @@ bool ApertarCoreApp::start()
     gpioInput_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });          // T42 Listen
     neoRotary4Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
     pcf8574Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
-    pcf8574Input_.start();
-    neoRotary4Input_.start();
-    gpioInput_.start();
-    if (!options_.simulateCamera)
-        standbyPowerButton_.start();
-    groveAnalogInput_.start();
+    if (!secondaryRole()) {   // the secondary has no inputs, no power button and no tally (design 3.3)
+        pcf8574Input_.start();
+        neoRotary4Input_.start();
+        gpioInput_.start();
+        if (!options_.simulateCamera)
+            standbyPowerButton_.start();
+        groveAnalogInput_.start();
+    }
 
-    if (!recordingIndicatorOutput_.start() && !recordingIndicatorOutput_.lastError().empty()) {
+    if (!secondaryRole() && !recordingIndicatorOutput_.start() && !recordingIndicatorOutput_.lastError().empty()) {
         std::cerr << "ApertarCore recording indicator LED disabled: "
                   << recordingIndicatorOutput_.lastError() << "\n";
     }
@@ -8206,8 +8234,10 @@ bool ApertarCoreApp::start()
             std::cerr << "ApertarCore controls: " << (issues[i].error ? "error: " : "warning: ") << issues[i].message << "\n";
     }
 
-    controlsWorkerRunning_ = true;
-    controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+    if (!secondaryRole()) {   // the controls worker restarts the drivers a controls change touches: none on the secondary
+        controlsWorkerRunning_ = true;
+        controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+    }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"ready\"}");
     return true;
@@ -8245,12 +8275,12 @@ void ApertarCoreApp::stop()
     syncRecordingTracking(false);
     joinMediaSpeedTest();
     waitCv_.notify_all();
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
         const auto result = standbyLowPower("restore");
         if (result.exitCode != 0)
             std::cerr << "Apertar low-power shutdown recovery: " << result.output << '\n';
     }
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
         const auto result = standbyUsbPower("on");
         if (result.exitCode != 0)
             std::cerr << "Apertar standby USB shutdown recovery: " << result.output << '\n';
@@ -8349,6 +8379,10 @@ void ApertarCoreApp::wait()
             std::lock_guard commandLock(commandMutex_);
             if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
         }
+        if (secondaryRole()) {   // no idle-standby timer on the secondary (design 3.3); the loop and the check above stay
+            lock.lock();
+            continue;
+        }
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const int timeout = readSharedUiSettings().standbyTimeoutSeconds;
@@ -8409,6 +8443,15 @@ std::string ApertarCoreApp::handleWebCommand(const std::string &payload)
 
 WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &request)
 {
+    // Every POST on the secondary's port is refused before any route logic (design 3.3, P12): GETs stay.
+    if (secondaryRole() && request.method == "POST") {
+        WebServer::Response response;
+        response.status = 403;
+        response.contentType = "text/plain; charset=utf-8";
+        response.body = commandclasses::kSecondaryRefusal;
+        return response;
+    }
+
     if (request.method == "OPTIONS") {
         WebServer::Response response;
         response.status = 204;
@@ -9386,7 +9429,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         resolveAudioDeviceSelection(uiSettings.audioOutputDevice, audioDevices.outputOptions, true);
     const NetworkSnapshot network = readNetworkSnapshot(options_.webPort);
     const DeviceSnapshot device = readDeviceSnapshot();
-    const PowerSupplySnapshot power = readPowerSupplySnapshot();
+    const PowerSupplySnapshot power = secondaryRole() ? PowerSupplySnapshot() : readPowerSupplySnapshot();   // no INA219 read on the secondary
     const std::optional<double> cpuTempC = readCpuTemperatureC();
     const std::string currentTimeZone = currentTimeZoneId();
     const std::vector<std::string> &timeZones = availableTimeZones();
@@ -9823,7 +9866,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"has_input_devices\":" << (!audioDevices.inputOptions.empty() ? "true" : "false")
         << ",\"has_output_devices\":" << (!audioDevices.outputOptions.empty() ? "true" : "false")
         << "}"
-        << "," << imuStatusBody(true)
+        << "," << imuStatusBody(!secondaryRole())   // no live IMU sample on the secondary
         << ",\"device\":{"
         << "\"pi_model\":\"" << escapeJson(device.piModel) << "\""
         << ",\"serial_number\":\"" << escapeJson(device.serialNumber) << "\""
@@ -12835,6 +12878,9 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
 
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
+    // The secondary takes the allowlist's commands only (design 4.2); the rest is the primary's.
+    if (secondaryRole() && !commandclasses::allowedOnSecondary(command.name))
+        return errorReply(command.id, commandclasses::kSecondaryRefusal);
     // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
     if (const auto reply = handleReadOnlyHardwareCommand(command))
         return *reply;
@@ -12935,7 +12981,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         stopPreviewPublisher();
         stopMjpegEncoder();
         std::string warning;
-        if (!options_.simulateCamera && std::filesystem::exists("/usr/local/libexec/apertar-standby-low-power")) {
+        if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/usr/local/libexec/apertar-standby-low-power")) {
             const auto result = standbyLowPower("all");
             if (result.exitCode != 0) {
                 warning = "Extra power saving skipped: " + result.output;
@@ -12943,7 +12989,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 standbyLowPower("restore");
             }
         }
-        if (!options_.simulateCamera && readSharedUiSettings().standbyUsbPowerOff) {
+        if (!options_.simulateCamera && !secondaryRole() && readSharedUiSettings().standbyUsbPowerOff) {
             const auto result = standbyUsbPower("off");
             standbyUsbPoweredOff_.store(result.exitCode == 0);
             if (result.exitCode != 0) {
@@ -12959,12 +13005,12 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
     if (command.name == "wake") {
         if (camera_.state() == CameraState::Standby) {
-            if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+            if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
                 const auto result = standbyLowPower("restore");
                 if (result.exitCode != 0)
                     return errorReply(command.id, "Could not restore normal performance: " + result.output);
             }
-            if (!options_.simulateCamera &&
+            if (!options_.simulateCamera && !secondaryRole() &&
                 std::filesystem::exists("/run/apertar-standby-usb/ports")) {
                 const auto result = standbyUsbPower("on");
                 if (result.exitCode != 0)
@@ -14511,16 +14557,19 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 return errorReply(command.id, "Invalid preset exposure compensation.");
             presetSettings.exposureCompensation = std::round(*ev * 3.0) / 3.0;
         }
-        if (const auto value = command.string("photoModeEnabled"))
+        // The secondary ignores the preset's photo keys completely (design 3.3): no presetSettings change, no UI update.
+        const bool photoKeys = !secondaryRole();
+        if (const auto value = command.string("photoModeEnabled"); value && photoKeys)
             presetSettings.photoModeEnabled = parseUiSettingsBool(*value, false);
-        if (const auto value = command.string("photoLongExposureEnabled"))
+        if (const auto value = command.string("photoLongExposureEnabled"); value && photoKeys)
             presetSettings.longExposureEnabled = parseUiSettingsBool(*value, false);
-        addBoolUpdate("photoLongExposureEnabled");
-        if (const auto value = command.string("photoBracketingEnabled"))
+        if (photoKeys)
+            addBoolUpdate("photoLongExposureEnabled");
+        if (const auto value = command.string("photoBracketingEnabled"); value && photoKeys)
             presetSettings.bracketingEnabled = parseUiSettingsBool(*value, false);
-        if (!addBoolUpdate("photoBracketingEnabled"))
+        if (photoKeys && !addBoolUpdate("photoBracketingEnabled"))
             return errorReply(command.id, "Invalid preset bracketing toggle.");
-        if (const auto value = command.string("photoBracketingEv")) {
+        if (const auto value = command.string("photoBracketingEv"); value && photoKeys) {
             const auto ev = parseDoubleValue(*value);
             if (!ev || !std::isfinite(*ev) || *ev < 1.0 / 3.0 - 0.0001 || *ev > 3.0)
                 return errorReply(command.id, "Invalid preset bracket EV offset.");
@@ -14964,7 +15013,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 return fallback;
             return *value == "true" || *value == "1";
         };
-        const bool soundOnly = boolField(command.string("sound_only"), uiSettings.soundRecorderEnabled);
+        const bool soundOnly = !secondaryRole() && boolField(command.string("sound_only"), uiSettings.soundRecorderEnabled);
         GyroRecordingOptions gyroOptions;
         gyroOptions.enabled = soundOnly ? false : uiSettings.recordGyroEnabled;
         if (const auto gyroEnabled = command.string("gyro_enabled")) {
@@ -14972,6 +15021,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         }
         if (const auto audioEnabled = command.string("audio_enabled")) {
             audioOptions.enabled = (*audioEnabled == "true" || *audioEnabled == "1");
+        }
+        if (secondaryRole()) {   // no audio, gyro or sound-only on the secondary (design 3.3)
+            audioOptions.enabled = false;
+            gyroOptions.enabled = false;
         }
         if (const auto monitoringEnabled = command.string("audio_monitoring_enabled")) {
             audioOptions.liveMonitoringEnabled = (*monitoringEnabled == "true" || *monitoringEnabled == "1");
