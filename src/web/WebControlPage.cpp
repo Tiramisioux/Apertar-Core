@@ -3486,8 +3486,9 @@ std::string_view webControlPageHtml()
     }
 
     .controls-row.new .controls-row-head,
-    .controls-row[data-output] .controls-row-head {
-      padding-top: 0;
+    .controls-row[data-output] .controls-row-head,
+    .controls-row-head:has(> .controls-pin-select:first-child) {
+      padding-top: 0;   /* a head that starts with a pin dropdown lines up with the first line's dropdown */
     }
 
     .controls-row-title {
