@@ -57,6 +57,17 @@ inline std::string normalizePreviewSource(std::string_view value)
     return detail::normalizeLabel(value, kPreviewSources);
 }
 
+// HDMI 1's view while dual sensor is on (design §5.4's hdmi1Source): the same six labels; its default is Cam 1.
+// With one sensor, or dual sensor off, both ports show CAM0's preview and this is kept for later.
+inline constexpr const char *kHdmi1SourceDefault = "Cam 1";
+
+inline std::string normalizeHdmi1Source(std::string_view value)
+{
+    const std::string label = normalizePreviewSource(value);
+    return detail::trim(value).empty() || (label == kPreviewSources[0] && detail::lower(detail::trim(value)) != "both")
+        ? std::string(kHdmi1SourceDefault) : label;
+}
+
 inline std::string normalizeRecordCameras(std::string_view value)
 {
     return detail::normalizeLabel(value, kRecordCameras);

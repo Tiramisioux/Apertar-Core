@@ -5476,11 +5476,9 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="settingsExternalMonitorModeSelect"></select>
                 </div>
                 <!-- Hidden until a cam1 is configured (design 5.1); T63 has no way to know, so it stays hidden. -->
-                <!-- Shown when config.txt names a Camera 1 sensor (renderDualSensorCard). -->
-                <div class="field-stack" id="settingsPreviewSourceField" style="display: none">
-                  <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
-                  <select class="settings-select" id="settingsPreviewSourceSelect"></select>
-                  <span class="subtle-note" id="settingsPreviewSourceNote">Which camera the HDMI monitor shows: one, both side by side, or one inside the other (PiP).</span>
+                <div class="field-stack">
+                  <span class="input-label">Outputs</span>
+                  <span class="subtle-note" id="settingsHdmiOutputsNote">The preview goes out on both HDMI ports. With Dual sensor on, each port's view is set in System &gt; Dual Sensor.</span>
                 </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
@@ -6169,10 +6167,26 @@ std::string_view webControlPageHtml()
               </section>
               <section class="select-block">
                 <div class="select-topline">
+                  <span>Output</span>
+                </div>
+                <div class="settings-field-grid">
+                  <div class="field-stack">
+                    <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
+                    <select class="settings-select" id="settingsPreviewSourceSelect"></select>
+                  </div>
+                  <div class="field-stack">
+                    <label class="input-label" for="settingsHdmi1SourceSelect">HDMI 1 view</label>
+                    <select class="settings-select" id="settingsHdmi1SourceSelect"></select>
+                  </div>
+                </div>
+                <span class="subtle-note">Each port: one camera, both side by side, or one inside the other (PiP). HDMI 1 is the board's FFC connector. Saved now; the monitors follow it once the dual HDMI view is built (until then both show CAM0).</span>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
                   <span>Record</span>
                 </div>
                 <div class="pill-grid" id="dualSensorRecordOptions"></div>
-                <span class="subtle-note">Follow preview records the cameras the HDMI view shows.</span>
+                <span class="subtle-note">Follow preview records the cameras the HDMI views show.</span>
               </section>
             </div>
 
@@ -10518,8 +10532,6 @@ std::string_view webControlPageHtml()
         fetchPresetLibrary(true);
       if (normalized === "system" && !bootConfigDirty() && !bootConfigBusy())
         void loadBootConfig(true);
-      if (normalized === "monitoring" && !bootConfig.payload && !bootConfigBusy())
-        void loadBootConfig(true);   // the HDMI view shows when config.txt names a Camera 1 sensor
       if (normalized === "controls" && !controlsDirty())
         void loadControls(true);
       if (normalized === "config" && !state.configDirty)
@@ -14605,6 +14617,9 @@ std::string_view webControlPageHtml()
           break;
         case "set_dual_sensor_enabled":
           uiState.dual_sensor_enabled = boolValue;
+          break;
+        case "set_hdmi1_source":
+          uiState.hdmi1_source = String(payload.value || "Cam 1");
           break;
         case "set_cam1_settings":
           uiState.cam1_settings = String(payload.value || "");
@@ -20780,17 +20795,17 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       }, 2);
-      // Monitoring > External monitor: the HDMI view, while dual sensor is on. Saved now; the HDMI shows it once the
-      // dual HDMI view is built (T64-T65, design §5.2), so the select is greyed with a note until then.
-      const viewField = document.getElementById("settingsPreviewSourceField");
-      if (viewField)
-        viewField.style.display = configured && switchedOn ? "" : "none";
-      const viewSelect = document.getElementById("settingsPreviewSourceSelect");
-      if (viewSelect)
-        viewSelect.disabled = true;
-      setText("settingsPreviewSourceNote", "Which camera the HDMI monitor shows. Not yet: the HDMI shows CAM0 until "
-        + "its dual view is built; your choice is kept for then.");
       const active = configured && switchedOn;
+      // Output: each HDMI port's view (previewSource, hdmi1Source). With one sensor or dual off both ports show CAM0.
+      ensureSelectOptions("settingsPreviewSourceSelect", previewSourceOptions);
+      setFormValue("settingsPreviewSourceSelect", uiState.preview_source || "Both");
+      ensureSelectOptions("settingsHdmi1SourceSelect", previewSourceOptions);
+      setFormValue("settingsHdmi1SourceSelect", uiState.hdmi1_source || "Cam 1");
+      ["settingsPreviewSourceSelect", "settingsHdmi1SourceSelect"].forEach((selectId) => {
+        const select = document.getElementById(selectId);
+        if (select)
+          select.disabled = !active;
+      });
 
       const raw = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings.trim() : "unison";
       const unison = raw === "unison";
@@ -21449,6 +21464,9 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsImuCalibrateButton").addEventListener("click", calibrateImuBias);
       document.getElementById("settingsExternalMonitorModeSelect").addEventListener("change", () => {
         void applySelectCommand("settingsExternalMonitorModeSelect", "set_external_monitor_mode");
+      });
+      document.getElementById("settingsHdmi1SourceSelect").addEventListener("change", () => {
+        void applySelectCommand("settingsHdmi1SourceSelect", "set_hdmi1_source");
       });
       document.getElementById("settingsPreviewSourceSelect").addEventListener("change", () => {
         void applySelectCommand("settingsPreviewSourceSelect", "set_preview_source");
