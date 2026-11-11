@@ -953,18 +953,13 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
-    /* Speed Ramp (Camera settings, under Frame rate), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
-    /* Speed Ramp in the controls card, under the frame rates: its options below its On/Off. */
+    /* Speed Ramp (Settings > Controls, under Frame Rate), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
+    /* Speed Ramp in Settings > Controls, a row of the Value Lists under Frame Rate: its options below its On/Off. */
     .speed-ramp-option {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      margin-top: 14px;
-    }
-
-    .speed-ramp-block > .subtle-note {
-      display: block;
-      margin-top: 8px;
+      margin-top: 6px;
     }
 
     .switch-field {
@@ -1685,8 +1680,38 @@ std::string_view webControlPageHtml()
     }
 
     /* The Dual Sensor card with one sensor: its own options greyed (phase lock stays usable). */
-    #settingsDualSensorCard.locked .select-block:not(.dual-keep) {
+    #settingsDualSensorCard.locked .select-block {
       opacity: 0.6;
+    }
+
+    /* Its Controls: Unison, then one tie switch per control (greyed while Unison is on). */
+    .dual-tie-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .dual-tie-label {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .dual-ties {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+      padding-left: 14px;
+      border-left: 1px solid #3f3f46;
+    }
+
+    .dual-ties .dual-tie-label {
+      font-weight: 500;
+    }
+
+    .dual-tie-note {
+      margin-top: -4px;
     }
 
     .clip-example {
@@ -4656,31 +4681,6 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
 
-              <!-- Speed Ramp sits under the frame rates it moves (it was a card in Settings > Record). -->
-              <section class="select-block speed-ramp-block" id="settingsSpeedRampCard">
-                <div class="select-topline">
-                  <span>Speed Ramp</span>
-                  <span class="select-note hidden" id="settingsSpeedRampNote"></span>
-                </div>
-                <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
-                <span class="subtle-note">Change the frame rate during a take. The clip keeps the rate it started at, so the faster parts play back as slow motion.</span>
-                <div class="speed-ramp-option">
-                  <span class="input-label">Shutter sync</span>
-                  <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
-                  <span class="subtle-note">Angle keeps the motion blur. Exposure keeps the brightness.</span>
-                </div>
-                <div class="speed-ramp-option">
-                  <span class="input-label">Audio (experimental)</span>
-                  <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
-                  <span class="subtle-note">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</span>
-                </div>
-                <div class="speed-ramp-option">
-                  <span class="input-label">After the take</span>
-                  <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
-                  <span class="subtle-note">Stay: the ramped FPS stays when you stop. Return: back to the FPS you pressed record at (or the start FPS when that one is not available in the mode).</span>
-                </div>
-              </section>
-
               <section class="select-block">
                 <div class="select-topline">
                   <span>ISO</span>
@@ -5475,9 +5475,11 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="settingsExternalMonitorModeSelect"></select>
                 </div>
                 <!-- Hidden until a cam1 is configured (design 5.1); T63 has no way to know, so it stays hidden. -->
+                <!-- Shown when config.txt names a Camera 1 sensor (renderDualSensorCard). -->
                 <div class="field-stack" id="settingsPreviewSourceField" style="display: none">
                   <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
                   <select class="settings-select" id="settingsPreviewSourceSelect"></select>
+                  <span class="subtle-note">Which camera the HDMI monitor shows: one, both side by side, or one inside the other (PiP).</span>
                 </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
@@ -5989,6 +5991,13 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
                 <div class="pill-grid" id="settingsMediaTrimOptions"></div>
               </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Frame-rate phase lock</span>
+                </div>
+                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
+                <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
+              </section>
               <section class="select-block" data-search="frames per folder part split clip folder dng take long">
                 <div class="select-topline">
                   <span>Frames per folder</span>
@@ -6138,23 +6147,20 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Dual Sensor</h3>
-                  <p class="settings-card-copy">Two cameras: what CAM1 shares with CAM0, and which cameras record.</p>
+                  <p class="settings-card-copy">CAM0 is the main camera: CAM1 follows its controls where they are tied, and records with it as set below.</p>
                   <p class="settings-card-copy" id="dualSensorNote"></p>
                 </div>
               </div>
               <section class="select-block">
                 <div class="select-topline">
-                  <span>Shared with CAM0</span>
+                  <span>Controls</span>
                 </div>
-                <div class="pill-grid three-col" id="dualSensorSharedOptions"></div>
-                <span class="subtle-note" id="dualSensorSharedNote">On: CAM1 follows CAM0's value. Off: CAM1 keeps its own.</span>
-              </section>
-              <section class="select-block">
-                <div class="select-topline">
-                  <span>CAM1 mode</span>
+                <div class="dual-tie-row dual-unison">
+                  <span class="dual-tie-label">Unison</span>
+                  <div class="pill-grid ladder-pair" id="dualSensorUnisonOptions"></div>
                 </div>
-                <div class="pill-grid ladder-pair" id="dualSensorCam1ModeOptions"></div>
-                <span class="subtle-note">With its own resolution: Closest to Cam 0 picks the CAM1 mode nearest CAM0's from CAM1's activated modes (its ladder wins when the ladder is on); Set on Cam 1 keeps the one you choose.</span>
+                <span class="subtle-note">On: CAM1 follows CAM0 in every control. Off: tie each control below; an untied one is set on CAM1.</span>
+                <div class="dual-ties" id="dualSensorTies"></div>
               </section>
               <section class="select-block">
                 <div class="select-topline">
@@ -6162,13 +6168,6 @@ std::string_view webControlPageHtml()
                 </div>
                 <div class="pill-grid" id="dualSensorRecordOptions"></div>
                 <span class="subtle-note">Follow preview records the cameras the HDMI view shows.</span>
-              </section>
-              <section class="select-block dual-keep">
-                <div class="select-topline">
-                  <span>Frame-rate phase lock</span>
-                </div>
-                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock. With two sensors it keeps them on one grid. Works with one sensor too.</span>
-                <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
               </section>
             </div>
 
@@ -6389,6 +6388,28 @@ std::string_view webControlPageHtml()
                 </div>
               </div>
               <div class="field-stack" id="settingsValueLists"></div>
+              <!-- Speed Ramp, under the frame-rate list (renderValueListsEditor puts it after the Frame Rate row). -->
+              <div class="field-stack value-list-row speed-ramp-block" id="settingsSpeedRampCard">
+                <span class="input-label">Speed Ramp</span>
+                <span class="subtle-note hidden" id="settingsSpeedRampNote"></span>
+                <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
+                <span class="subtle-note">Change the frame rate during a take. The clip keeps the rate it started at, so the faster parts play back as slow motion.</span>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Shutter sync</span>
+                  <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
+                  <span class="subtle-note">Angle keeps the motion blur. Exposure keeps the brightness.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Audio (experimental)</span>
+                  <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
+                  <span class="subtle-note">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">After the take</span>
+                  <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
+                  <span class="subtle-note">Stay: the ramped FPS stays when you stop. Return: back to the FPS you pressed record at (or the start FPS when that one is not available in the mode).</span>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -8839,6 +8860,7 @@ std::string_view webControlPageHtml()
       if (signature === state.valueListsSignature || typing)
         return;
       state.valueListsSignature = signature;
+      const rampBlock = document.getElementById("settingsSpeedRampCard");   // held across the redraw, put back after Frame Rate
       container.innerHTML = "";
       for (const list of valueListDefinitions) {
         const steps = (ui[list.steps] || []).map(Number);
@@ -8980,6 +9002,8 @@ std::string_view webControlPageHtml()
           row.appendChild(flickerNote);
         }
         container.appendChild(row);
+        if (list.name === "fps" && rampBlock)
+          container.appendChild(rampBlock);
       }
     }
 
@@ -10489,6 +10513,8 @@ std::string_view webControlPageHtml()
         fetchPresetLibrary(true);
       if (normalized === "system" && !bootConfigDirty() && !bootConfigBusy())
         void loadBootConfig(true);
+      if (normalized === "monitoring" && !bootConfig.payload && !bootConfigBusy())
+        void loadBootConfig(true);   // the HDMI view shows when config.txt names a Camera 1 sensor
       if (normalized === "controls" && !controlsDirty())
         void loadControls(true);
       if (normalized === "config" && !state.configDirty)
@@ -20697,11 +20723,13 @@ std::string_view webControlPageHtml()
     }
 
     // The Dual Sensor card. Until the primary reports cam1 (T61) "configured" is config.txt's Camera 1 sensor, as the
-    // Boot Config card reads it. Shared controls: v2.4's cam1Settings, a comma list in a fixed order ("" = none).
-    const dualSharedControls = [["resolution", "Resolution and format"], ["iso", "ISO"], ["shutter", "Shutter"],
+    // Boot Config card reads it. Controls: cam1Settings, "unison" (CAM1 follows CAM0 in everything) or the controls
+    // tied one by one, a comma list in a fixed order ("" = none). A tied resolution between two sensor types is CAM1's
+    // closest matching mode (this replaces the CAM1 mode choice; Core keeps cam1Mode).
+    const dualTies = [["resolution", "Resolution and format"], ["iso", "ISO"], ["shutter", "Shutter"],
       ["fps", "FPS"], ["wb", "WB"]];
     const dualRecordOptions = ["Both", "Cam 0", "Cam 1", "Follow preview"];
-    const dualCam1Modes = ["Closest to Cam 0", "Set on Cam 1"];
+    const dualOnOff = (enabled) => [{ label: "Off", value: "Off", enabled }, { label: "On", value: "On", enabled }];
 
     function dualSensorPorts() {
       const cameras = bootConfig.payload && bootConfig.payload.state && bootConfig.payload.state.cameras;
@@ -20711,55 +20739,55 @@ std::string_view webControlPageHtml()
       return { cam0: sensor("cam0"), cam1: sensor("cam1") };
     }
 
-    function dualSharedList(uiState) {
-      const text = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings : "resolution,iso,shutter,fps,wb";
-      return text.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+    async function sendCam1Settings(value) {
+      try {
+        await sendCommand({ cmd: "set_cam1_settings", value });
+      } catch (error) {
+        showToast(error.message, true);
+      }
     }
 
     function renderDualSensorCard(snapshot) {
       const card = document.getElementById("settingsDualSensorCard");
-      if (!card || !snapshot)
+      const ties = document.getElementById("dualSensorTies");
+      if (!card || !ties || !snapshot)
         return;
       const uiState = snapshot.ui || {};
       const ports = dualSensorPorts();
       const configured = !!ports && ports.cam1 !== "none" && ports.cam0 !== "none";
-      const sameType = configured && ports.cam0 === ports.cam1;
-      const note = !ports ? "Reading config.txt..."
+      const differ = configured && ports.cam0 !== ports.cam1;
+      setText("dualSensorNote", !ports ? "Reading config.txt..."
         : !configured ? (ports.cam1 === "none" ? "One sensor configured. Set Camera 1 in Boot Config, then reboot."
           : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
-        : "CAM0: " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase()
-          + (sameType ? "" : ". Different sensors: CAM1 picks its own resolution.");
-      setText("dualSensorNote", note);
+        : "CAM0 (main): " + ports.cam0.toUpperCase() + " · CAM1: " + ports.cam1.toUpperCase());
       card.classList.toggle("locked", !configured);
+      const viewField = document.getElementById("settingsPreviewSourceField");   // Monitoring > External monitor
+      if (viewField)
+        viewField.style.display = configured ? "" : "none";
 
-      const shared = dualSharedList(uiState);
-      const resolutionShared = sameType && shared.includes("resolution");
-      const sharedGrid = document.getElementById("dualSensorSharedOptions");
-      buildOptionButtonsInto(sharedGrid, dualSharedControls.map(([value, label]) => ({
-        value, label, enabled: configured && (value !== "resolution" || sameType),
-      })), "", async (value) => {
-        const next = shared.includes(value) ? shared.filter((token) => token !== value) : shared.concat([value]);
-        const ordered = dualSharedControls.map(([token]) => token).filter((token) => next.includes(token));
-        try {
-          await sendCommand({ cmd: "set_cam1_settings", value: ordered.join(",") });
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      }, 3);
-      Array.from(sharedGrid.children).forEach((button, index) => {
-        const token = dualSharedControls[index][0];
-        button.classList.toggle("active", token === "resolution" ? resolutionShared : shared.includes(token));
+      const raw = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings.trim() : "unison";
+      const unison = raw === "unison";
+      const tied = unison ? dualTies.map(([token]) => token)
+        : raw.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+      buildOptionButtons("dualSensorUnisonOptions", dualOnOff(configured), unison ? "On" : "Off",
+        // Off keeps every control tied, so nothing changes until a tie is switched off.
+        (value) => sendCam1Settings(value === "On" ? "unison" : dualTies.map(([token]) => token).join(",")), 2);
+
+      ties.innerHTML = "";
+      dualTies.forEach(([token, label]) => {
+        const row = createDomElement("div", "dual-tie-row");
+        row.appendChild(createDomElement("span", "dual-tie-label", label));
+        const grid = createDomElement("div", "pill-grid ladder-pair");
+        row.appendChild(grid);
+        ties.appendChild(row);
+        buildOptionButtonsInto(grid, dualOnOff(configured && !unison), tied.includes(token) ? "On" : "Off", (value) => {
+          const next = value === "On" ? tied.concat([token]) : tied.filter((other) => other !== token);
+          sendCam1Settings(dualTies.map(([other]) => other).filter((other) => next.includes(other)).join(","));
+        }, 2);
+        if (token === "resolution" && differ && tied.includes("resolution"))
+          ties.appendChild(createDomElement("span", "subtle-note dual-tie-note", "The sensors differ ("
+            + ports.cam0.toUpperCase() + " · " + ports.cam1.toUpperCase() + "): CAM1 takes the closest matching resolution."));
       });
-
-      buildOptionButtons("dualSensorCam1ModeOptions", dualCam1Modes.map((value) => ({
-        value, label: value, enabled: configured && !resolutionShared,
-      })), uiState.cam1_mode || dualCam1Modes[0], async (value) => {
-        try {
-          await sendCommand({ cmd: "set_cam1_mode", value });
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      }, 2);
 
       buildOptionButtons("dualSensorRecordOptions", dualRecordOptions.map((value) => ({
         value, label: value, enabled: configured,

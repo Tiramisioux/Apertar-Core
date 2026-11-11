@@ -47,7 +47,10 @@ inline constexpr std::array<const char *, 6> kPreviewSources = {
     "Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"};
 inline constexpr std::array<const char *, 4> kRecordCameras = {"Both", "Cam 0", "Cam 1", "Follow preview"};
 inline constexpr std::array<const char *, 2> kCam1Modes = {"Closest to Cam 0", "Set on Cam 1"};
-inline constexpr const char *kCam1SettingsDefault = "resolution,iso,shutter,fps,wb";
+// "unison": CAM1 follows CAM0 in everything (the Dual Sensor card's Unison switch). A list names the controls tied
+// one by one with Unison off: all five listed is not Unison, so the card's switches stay as set.
+inline constexpr const char *kCam1SettingsUnison = "unison";
+inline constexpr const char *kCam1SettingsDefault = kCam1SettingsUnison;
 
 inline std::string normalizePreviewSource(std::string_view value)
 {
@@ -79,9 +82,10 @@ inline std::string swapPreviewSource(const std::string &label)
     return label;
 }
 
-// cam1Settings: the shared controls as a comma list. Tokens are exact lower case, in any order, no repeats; spaces
-// around a token are trimmed. Returns the list in the fixed order, "" for none, nullopt for anything else
-// (an unknown token, a repeat, an empty token such as "iso,,fps" or a trailing comma).
+// cam1Settings: "unison" alone, or the shared controls as a comma list. Tokens are exact lower case, in any order, no
+// repeats; spaces around a token are trimmed. Returns "unison", the list in the fixed order, "" for none, or nullopt
+// for anything else (an unknown token, a repeat, "unison" in a list, an empty token such as "iso,,fps" or a trailing
+// comma).
 inline std::optional<std::string> canonicalCam1Settings(std::string_view value)
 {
     static const char *const order[] = {"resolution", "iso", "shutter", "fps", "wb"};
@@ -89,6 +93,8 @@ inline std::optional<std::string> canonicalCam1Settings(std::string_view value)
     const std::string text = detail::trim(value);
     if (text.empty())
         return std::string();
+    if (text == kCam1SettingsUnison)
+        return std::string(kCam1SettingsUnison);
 
     bool seen[count] = {false, false, false, false, false};
     size_t start = 0;
@@ -135,7 +141,8 @@ inline std::string normalizeCam1Settings(std::string_view value)
 
 inline bool cam1SettingsHasResolution(const std::string &canonical)
 {
-    return canonical.rfind("resolution", 0) == 0;   // the fixed order puts it first
+    // Unison ties everything; else the fixed order puts resolution first.
+    return canonical == kCam1SettingsUnison || canonical.rfind("resolution", 0) == 0;
 }
 
 } // namespace apertar::dualsettings
