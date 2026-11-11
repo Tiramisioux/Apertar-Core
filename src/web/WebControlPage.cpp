@@ -687,8 +687,46 @@ std::string_view webControlPageHtml()
     .preview-stage.dual .pane-rec.p0 { left: calc(var(--p0-l) + var(--p0-w) - 8px); top: calc(var(--p0-t) + 8px); transform: translateX(-100%); }
     .preview-stage.dual .pane-rec.p1 { left: calc(var(--p1-l) + var(--p1-w) - 8px); top: calc(var(--p1-t) + 8px); transform: translateX(-100%); }
 
+    /* Each pane's own timecode, lower left: red while that camera is in the take, dimmed while it is not, so two
+       cameras recording read at a glance. Both read the one slot timecode (design 6.3). */
+    .pane-tc {
+      display: none;
+    }
+
+    .preview-stage.dual .pane-tc {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      padding: 2px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #e4e4e7;
+      font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      opacity: 0.55;
+      transform: translateY(-100%);
+    }
+
+    .preview-stage.dual.rec0 .pane-tc.p0,
+    .preview-stage.dual.rec1 .pane-tc.p1 {
+      background: #ff4d4d;
+      color: #ffffff;
+      opacity: 1;
+    }
+
+    .preview-stage.dual .pane-tc.p0 { left: calc(var(--p0-l) + 8px); top: calc(var(--p0-t) + var(--p0-h) - 8px); }
+    .preview-stage.dual .pane-tc.p1 { left: calc(var(--p1-l) + 8px); top: calc(var(--p1-t) + var(--p1-h) - 8px); }
+    .preview-stage.dual.view-pip0 .pane-tc.p1,
+    .preview-stage.dual.view-pip1 .pane-tc.p0 { font-size: 11px; padding: 1px 6px; }
+    .preview-stage.dual.photo .pane-tc { display: none; }
+
     .preview-stage.dual.view-cam0 .pane-frame.p1, .preview-stage.dual.view-cam0 .pane-rec.p1,
-    .preview-stage.dual.view-cam1 .pane-frame.p0, .preview-stage.dual.view-cam1 .pane-rec.p0 {
+    .preview-stage.dual.view-cam0 .pane-tc.p1,
+    .preview-stage.dual.view-cam1 .pane-frame.p0, .preview-stage.dual.view-cam1 .pane-rec.p0,
+    .preview-stage.dual.view-cam1 .pane-tc.p0 {
       display: none;
     }
 
@@ -5013,6 +5051,8 @@ std::string_view webControlPageHtml()
             <div class="pane-frame p1" id="paneFrame1"></div>
             <span class="pane-rec p0" id="paneRec0">REC</span>
             <span class="pane-rec p1" id="paneRec1">REC</span>
+            <span class="pane-tc p0" id="paneTc0">00:00:00:00</span>
+            <span class="pane-tc p1" id="paneTc1">00:00:00:00</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -16349,6 +16389,22 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // Dual sensor: each pane carries the card's timecode; renderPanes' rec0/rec1 classes colour the recording ones.
+    function updatePaneTimecodes() {
+      const stage = document.getElementById("previewStage");
+      if (!stage || !stage.classList.contains("dual"))
+        return;
+      const block = document.getElementById("timecodeBlock");
+      stage.classList.toggle("photo", !!(block && block.classList.contains("hidden")));
+      const value = document.getElementById("timecodeValue");
+      const text = value ? value.textContent : "";
+      for (const id of ["paneTc0", "paneTc1"]) {
+        const element = document.getElementById(id);
+        if (element && element.textContent !== text)
+          element.textContent = text;
+      }
+    }
+
     function updateTimecodeDisplay() {
       const block = document.getElementById("timecodeBlock");
       if (!block) {
@@ -16402,6 +16458,7 @@ std::string_view webControlPageHtml()
 
     function updateLiveReadouts() {
       updateTimecodeDisplay();
+      updatePaneTimecodes();
       renderProcessedPreviewFrame();
     }
 
