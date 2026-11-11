@@ -14,8 +14,13 @@
 // dropped together with the separator that would double up; a name never begins or ends with a separator.
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <ctime>
 #include <functional>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -384,6 +389,116 @@ inline int nextClipNumber(const Parsed &parsed, const Values &values,
         return clip;
     }
     return 0;
+}
+
+// ---- Name values shared by the primary's own name and cam1's (dual-sensor design §6.2) ------------------------------------
+// The helpers CameraController's clipNameValues() uses, in one place, so the name the primary builds for cam1 from
+// cam1.settings reads the same as the name cam0 builds from its own.
+
+// {res}: 8K, 4K, 2K, 1080p, otherwise "<height>p"; empty without a height.
+inline std::string resolutionLabel(int width, int height)
+{
+    if (width >= 7000) return "8K";
+    if (width >= 3500) return "4K";
+    if (width >= 1900 && width < 2000 && height <= 1100) return "1080p";
+    if (width >= 2000 && width < 3500) return "2K";
+    return height > 0 ? std::to_string(height) + "p" : std::string();
+}
+
+// {fps}: 25fps, 23.976fps.
+inline std::string fpsLabel(double fps)
+{
+    const double rounded = std::round(fps);
+    std::ostringstream f;
+    if (std::fabs(fps - rounded) < 0.001) f << static_cast<long>(rounded);
+    else f << std::fixed << std::setprecision(3) << fps;
+    std::string text = f.str();
+    if (text.find('.') != std::string::npos) {
+        while (!text.empty() && text.back() == '0') text.pop_back();
+        if (!text.empty() && text.back() == '.') text.pop_back();
+    }
+    return text + "fps";
+}
+
+// The date, the time and the timecode frame (at `fps`) of a wall-clock instant, in the local zone.
+inline void fillTimeValues(Values &v, int64_t micros, double fps)
+{
+    const std::time_t seconds = static_cast<std::time_t>(micros / 1000000);
+    std::tm localTime{};
+    localtime_r(&seconds, &localTime);
+    v.year = localTime.tm_year % 100;
+    v.month = localTime.tm_mon + 1;
+    v.day = localTime.tm_mday;
+    v.hour = localTime.tm_hour;
+    v.minute = localTime.tm_min;
+    v.second = localTime.tm_sec;
+    const double useFps = fps > 0.0 ? fps : 24.0;
+    const int nominalFps = std::max(1, static_cast<int>(std::llround(useFps)));
+    v.frame = std::min(nominalFps - 1, static_cast<int>(static_cast<double>(micros % 1000000) * useFps / 1000000.0));
+}
+
+// cam1's side of a two-camera name: everything but the date and the time, which are the take's.
+struct PartnerNaming {
+    bool present = false;
+    Values values;          // cam = "cam1"; date, time and frame are filled per take
+    double fps = 25.0;
+};
+
+struct TwoNames {
+    bool ok = false;
+    std::string error;
+    int clip = 0;
+    std::string cam0;
+    std::string cam1;
+};
+
+// The two names of a take (design 6.2 step 2): one clip number, the lowest free under both names, with `{cam}` in both. The
+// date, the time and {tc}'s second are the take's; {tc}'s frame is at each camera's own fps. A template parse() rejects
+// falls back to ensureCamToken(kDefaultTemplate); one that only fails the length once `_{cam}` is appended is refused.
+inline TwoNames nameTwoCameras(const std::string &templateText, Values v0, const PartnerNaming &partner, int64_t micros, double fps0,
+                               const std::function<bool(const std::string &)> &exists,
+                               const std::function<std::vector<std::string>()> &listNames)
+{
+    TwoNames out;
+    Parsed parsed = parseForTwoCameras(templateText);
+    if (!parsed.ok) {
+        if (parsed.error == kTwoCameraNameTooLong) {
+            out.error = parsed.error;
+            return out;
+        }
+        parsed = parse(ensureCamToken(kDefaultTemplate));
+    }
+    v0.cam = "cam0";
+    fillTimeValues(v0, micros, fps0);
+    Values v1 = partner.present ? partner.values : v0;
+    v1.cam = "cam1";
+    v1.year = v0.year; v1.month = v0.month; v1.day = v0.day; v1.hour = v0.hour; v1.minute = v0.minute; v1.second = v0.second;
+    {
+        Values frameOnly;
+        fillTimeValues(frameOnly, micros, partner.present ? partner.fps : fps0);
+        v1.frame = frameOnly.frame;
+    }
+    const bool timed = hasTimeToken(parsed);
+    std::vector<std::string> existing;
+    if (timed)
+        existing = listNames();
+    for (int clip = 1; clip <= 9999; ++clip) {
+        const std::string n0 = expand(parsed, v0, clip);
+        const std::string n1 = expand(parsed, v1, clip);
+        if (exists(n0) || exists(n1))
+            continue;
+        if (timed && std::any_of(existing.begin(), existing.end(), [&](const std::string &n) {
+                return sameClipAnyTime(parsed, v0, clip, n) || sameClipAnyTime(parsed, v1, clip, n);
+            }))
+            continue;
+        out.ok = true;
+        out.clip = clip;
+        out.cam0 = n0;
+        out.cam1 = n1;
+        return out;
+    }
+    out.error = "Could not allocate a unique clip folder.";
+    return out;
 }
 
 } // namespace apertar::clipname
