@@ -41,6 +41,17 @@ std::map<std::string, std::string> scriptPaths(const hwconf::Document &doc)
     return out;
 }
 
+// True when a version Core kept (the history, the last text it wrote) has exactly these script paths. Putting a
+// saved version back is not typing a path in the browser: its paths were set over ssh once.
+bool keptScriptPaths(const std::filesystem::path &notes, const std::map<std::string, std::string> &paths)
+{
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator(notes / "hardware-history", error))
+        if (scriptPaths(hwconf::parse(readTextFile(entry.path()))) == paths)
+            return true;
+    return scriptPaths(hwconf::parse(readTextFile(notes / "hardware-last-written.conf"))) == paths;
+}
+
 std::string timestamp(const char *format, std::time_t when)
 {
     std::tm local {};
@@ -336,8 +347,8 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         return result;
     }
 
-    const hwconf::Document nextDoc = hwconf::parse(next);
-    if (scriptPaths(nextDoc) != scriptPaths(currentDoc)) {
+    const auto nextPaths = scriptPaths(hwconf::parse(next));
+    if (nextPaths != scriptPaths(currentDoc) && !keptScriptPaths(notes_, nextPaths)) {
         result.code = "script_paths";
         result.error = "Script paths are changed over ssh, not here.";
         return result;
