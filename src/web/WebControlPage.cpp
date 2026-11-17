@@ -16645,6 +16645,7 @@ std::string_view webControlPageHtml()
       buses: [],             // the Pi's I2C buses: { bus, name }
       scans: {},             // bus -> { loading } or { found } or { error }: the Hardware card's Scan
       dpiLines: [],          // config.txt lines that load a DPI display
+      gpioChips: [],         // the GPIO chips there are: { path, label, lines, header }; header = the one chip=auto means
       apply: null,           // get_controls apply: { state, detail, pending }
       history: [],           // saved versions, newest first
       listening: false,
@@ -17188,6 +17189,42 @@ std::string_view webControlPageHtml()
       return null;
     }
 
+    // The GPIO chip a section's pins are on, as the page has it now (an unsaved edit first). "auto" is the Pi's
+    // own header; anything else is the path of another chip (an expander, a microcontroller).
+    function controlsGpioChipSetting(section) {
+      const edit = controlsState.settingEdits.get(section + "|chip");
+      if (edit)
+        return String(edit.value || "").trim() || "auto";
+      const peripheral = controlsState.peripherals.find((candidate) => candidate.section === section);
+      const setting = peripheral && (peripheral.settings || []).find((candidate) => candidate.key === "chip");
+      return (setting && String(setting.value).trim()) || "auto";
+    }
+    function controlsGpioChipInfo(chip) {
+      return controlsState.gpioChips.find((candidate) => chip === "auto" ? candidate.header : candidate.path === chip) || null;
+    }
+    function controlsGpioChipOnHeader(chip) {
+      const info = controlsGpioChipInfo(chip);
+      return chip === "auto" || (!!info && info.header);
+    }
+    // Buttons, encoders and switches share one chip: the GPIO input's, [gpio_buttons] chip=.
+    function controlsInputGpioChip() {
+      return controlsGpioChipSetting("gpio_buttons");
+    }
+    // The lines of a chip a control can sit on: on the Pi's header the model's list (it leaves out the I2C, power
+    // and reserved pins), on another chip every line it has.
+    function controlsGpioLines(chipSetting) {
+      if (controlsGpioChipOnHeader(chipSetting))
+        return (controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [];
+      const chip = controlsGpioChipInfo(chipSetting);
+      return Array.from({ length: chip ? chip.lines : 0 }, (unused, line) => line);
+    }
+    // Is the tally's GPIO line on the chip the buttons are on? Only then can the two collide.
+    function controlsTallyOnInputChip() {
+      const input = controlsInputGpioChip();
+      const tally = controlsGpioChipSetting(controlsTallySection);
+      return input === tally || (controlsGpioChipOnHeader(input) && controlsGpioChipOnHeader(tally));
+    }
+
     // Pins something else holds: held outside Core, picked by another row (new or moved here), or the tally's
     // GPIO. skipRow / skipTally leave out the row asking.
     function controlsPinsTaken(skipRow, skipTally) {
@@ -17195,16 +17232,16 @@ std::string_view webControlPageHtml()
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
-      if (controlsState.dpiLines.length > 0)
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
-          taken.add(pin);                                // the DPI display holds them
+          taken.add(pin);                                // the DPI display holds the header's
       (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
         const info = row === skipRow ? null : controlsRowPinInfo(row);
         if (info)
           info.now.forEach((pin) => { if (pin !== null) taken.add(pin); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !skipTally && tallyShown(tally, "target") === "gpio") {
+      if (tally && !skipTally && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0)
           taken.add(pin);
@@ -17257,8 +17294,9 @@ std::string_view webControlPageHtml()
             owners.set(line.pin, { kind: "outside", text: line.consumer || "another program" });
         });
       });
-      // A DPI display (a Hyperpixel) holds GPIO 0 to 27: greyed and not to be picked, like a pin held outside Core.
-      if (controlsState.dpiLines.length > 0)
+      // A DPI display (a Hyperpixel) holds the header's GPIO 0 to 27: greyed and not to be picked, like a pin held
+      // outside Core. Another chip's lines are free of it.
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
           if (!owners.has(pin))
             owners.set(pin, { kind: "outside", text: "the DPI display" });
@@ -17272,7 +17310,7 @@ std::string_view webControlPageHtml()
           entry.pins.forEach((pin) => { if (pin !== null && !owners.has(pin)) owners.set(pin, { kind: "entry", entry: entry, text: controlsNewTitles[entry.kind] + " (not saved)" }); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio") {
+      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0 && !owners.has(pin))
           owners.set(pin, { kind: "tally", tally: tally, text: "Tally light" });
@@ -17280,11 +17318,13 @@ std::string_view webControlPageHtml()
       return owners;
     }
     // Every pin a dropdown lists: the model's free and used pins, whoever holds one now, and the extra pins asked for.
-    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones).
-    function controlsPinChoices(owners, extra) {
-      const pins = ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [])
-        .concat((((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || [])).map((used) => used.pin))
-        .concat(Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
+    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones). chipSetting is the chip the
+    // dropdown is for: the GPIO input's when not given.
+    function controlsPinChoices(owners, extra, chipSetting) {
+      const setting = chipSetting || controlsInputGpioChip();
+      const used = controlsGpioChipOnHeader(setting)
+        ? ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || []).map((entry) => entry.pin) : [];
+      const pins = controlsGpioLines(setting).concat(used, Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
       return Array.from(new Set(pins)).filter((pin) => Number.isFinite(pin)).sort((a, b) => a - b);
     }
     // Remote only: a GPIO button with no pin, saved as remote<N> in [gpio_buttons] (Core: ControlsModel.hpp). The
@@ -17427,13 +17467,12 @@ std::string_view webControlPageHtml()
       renderControls();
     }
 
-    // The pins a new row may take: free on the header, not held outside Core, not picked by another new row
-    // or by a row moved here.
+    // The pins a new row may take: free on the GPIO input's chip, not held outside Core, not picked by another
+    // new row or by a row moved here.
     function controlsFreePins(entry) {
-      const model = controlsState.model;
       const taken = controlsPinsTaken(null, false);
       controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => { if (pin !== null) taken.add(pin); }); });
-      return ((model && model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
+      return controlsGpioLines(controlsInputGpioChip()).filter((pin) => !taken.has(pin));
     }
 
     // A row added here: its pins are chosen in the row; a three-way switch has two.
@@ -17671,6 +17710,14 @@ std::string_view webControlPageHtml()
         info.textContent = status.info;
         text.appendChild(info);
       }
+      if (withSettings && status.chip) {                      // the GPIO chip Core reads the buttons on
+        const chip = document.createElement("div");
+        chip.className = "controls-row-detail";
+        chip.textContent = status.chip.ok
+          ? "Chip " + status.chip.path + " (" + status.chip.label + "), " + status.chip.lines + " lines"
+          : "Chip: " + (status.chip.error || "not found");
+        text.appendChild(chip);
+      }
       head.appendChild(text);
       const pill = document.createElement("div");
       pill.className = "online-pill";
@@ -17724,6 +17771,20 @@ std::string_view webControlPageHtml()
             option.textContent = optionText;
             control.appendChild(option);
           });
+        } else if (setting.key === "chip") {
+          // The GPIO chips there are. Auto is the Pi's own header; a chip the file names that is not there stays listed.
+          control = document.createElement("select");
+          control.className = "settings-select";
+          const chips = [["auto", "Auto (the Pi's own pins)"], ...controlsState.gpioChips.map((chip) =>
+            [chip.path, chip.path + " · " + chip.label + " · " + chip.lines + " lines" + (chip.header ? " (the Pi's own pins)" : "")])];
+          if (!chips.some(([optionValue]) => optionValue === value))
+            chips.push([value, value + " (not found)"]);
+          chips.forEach(([optionValue, optionText]) => {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            control.appendChild(option);
+          });
         } else if (setting.key === "pcf_pin") {
           // An expander has eight pins; -1 is none.
           control = document.createElement("select");
@@ -17741,6 +17802,13 @@ std::string_view webControlPageHtml()
           if (setting.type === "number") {
             control.min = String(setting.min);
             control.max = String(setting.max);
+            if (setting.key === "line" && !controlsGpioChipOnHeader(controlsGpioChipSetting(peripheral.section))) {
+              const chip = controlsGpioChipInfo(controlsGpioChipSetting(peripheral.section));   // another chip: its own lines
+              if (chip)
+                control.max = String(chip.lines - 1);
+              else
+                control.removeAttribute("max");
+            }
           }
         }
         control.value = value;
@@ -17828,9 +17896,11 @@ std::string_view webControlPageHtml()
       const shownPin = parseInt(tallyShown(peripheral, viaPcf ? "pcf_pin" : "line"), 10);
       const current = Number.isFinite(shownPin) && shownPin >= 0 ? (viaPcf ? "p:" : "g:") + shownPin : "none";
       const self = { tally: true };
-      const owners = controlsPinOwners(self);
+      // The buttons' pins matter here only when the tally's chip= is the chip they are on.
+      const owners = controlsTallyOnInputChip() ? controlsPinOwners(self) : new Map();
       const fileGpio = parseInt(tallyRaw(peripheral, "line"), 10);
-      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null]);
+      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null],
+        controlsGpioChipSetting(peripheral.section));
       const options = [["none", "None"], ...gpioPins.map((pin) => controlsPinOption(pin, "", owners.get(pin), "g:" + pin))];
       if (controlsExpanderAttached() || current.startsWith("p:")) {      // PCF8574 pins only with an expander detected
         const used = controlsPcfPinsInUse();
@@ -18206,7 +18276,7 @@ std::string_view webControlPageHtml()
         if (controlsState.dpiLines.length > 0) {
           const dpi = document.createElement("div");
           dpi.className = "controls-scan";
-          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot.";
+          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds the Pi's GPIO 0 to 27, so buttons on those pins and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot, or put the buttons on another GPIO chip.";
           buses.appendChild(dpi);
         }
         host.appendChild(buses);
@@ -18276,6 +18346,7 @@ std::string_view webControlPageHtml()
         controlsState.peripherals = controls.controls.peripherals || [];
         controlsState.buses = controls.controls.i2c_buses || [];
         controlsState.dpiLines = controls.controls.dpi_lines || [];
+        controlsState.gpioChips = controls.controls.gpio_chips || [];
         controlsState.apply = controls.controls.apply || null;
         controlsChipLines.clear();
         controlsSeparateTurns.clear();

@@ -107,4 +107,25 @@ GpioChipInfo readGpioChipInfo(const std::string &chipPath, int maxLines)
     return out;
 }
 
+std::vector<GpioChipInfo> listGpioChips()
+{
+    std::vector<int> numbers;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/dev", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.size() > 8 && name.rfind("gpiochip", 0) == 0 &&
+            std::all_of(name.begin() + 8, name.end(), [](unsigned char ch) { return std::isdigit(ch); }))
+            numbers.push_back(std::stoi(name.substr(8)));
+    }
+    std::sort(numbers.begin(), numbers.end());
+
+    std::vector<GpioChipInfo> chips;
+    for (const int number : numbers) {
+        GpioChipInfo chip = readGpioChipInfo("/dev/gpiochip" + std::to_string(number), 0);
+        if (chip.ok)
+            chips.push_back(std::move(chip));
+    }
+    return chips;
+}
+
 } // namespace apertar::hardware

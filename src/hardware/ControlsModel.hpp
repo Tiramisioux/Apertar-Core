@@ -213,26 +213,28 @@ inline bool sectionOn(const Document &doc, const std::string &name)
     return hasSection(doc, name) && truthy(effectiveValue(doc, name, "enabled").value_or(""), info && info->onByDefault);
 }
 
-// BCM pins taken by something that is switched on, with who holds them: buttons, encoders, and the trigger and
-// tally on a GPIO line. A disabled section holds no pin.
+// The header's pins taken by something that is switched on, with who holds them: buttons, encoders, switches, and
+// the trigger and tally on a GPIO line. A disabled section holds no pin, and neither does one whose chip= names
+// another chip: its line numbers are that chip's.
 inline std::vector<std::pair<int, std::string>> gpioPinsInUse(const Document &doc)
 {
+    const bool inputsOnHeader = gpioInputChip(doc) == "auto";
     std::vector<std::pair<int, std::string>> used;
     auto add = [&](long pin, const std::string &by) { if (pin >= 0) used.emplace_back(static_cast<int>(pin), by); };
-    if (sectionOn(doc, "gpio_buttons"))
+    if (inputsOnHeader && sectionOn(doc, "gpio_buttons"))
         for (const int pin : indexesOf(doc, "gpio_buttons", "d"))
             if (gpioButtonInFile(doc, pin)) add(pin, "button d" + std::to_string(pin));
-    if (sectionOn(doc, "gpio_encoders"))
+    if (inputsOnHeader && sectionOn(doc, "gpio_encoders"))
         for (const int index : indexesOf(doc, "gpio_encoders", "encoder"))
             for (const char *field : {"_a", "_b", "_press_gpio"})
                 if (const auto value = valueOf(doc, "gpio_encoders", "encoder" + std::to_string(index) + field))
                     if (const auto pin = integer(*value)) add(*pin, "encoder " + std::to_string(index));
-    if (sectionOn(doc, "gpio_switches"))
+    if (inputsOnHeader && sectionOn(doc, "gpio_switches"))
         for (const int index : indexesOf(doc, "gpio_switches", "switch"))
             for (const long pin : pinList(valueOf(doc, "gpio_switches", "switch" + std::to_string(index) + "_pins").value_or("")))
                 add(pin, "switch " + std::to_string(index));
     for (const std::string output : {"trigger_output", "recording_indicator"}) {
-        if (!sectionOn(doc, output)) continue;
+        if (!sectionOn(doc, output) || gpioOutputChip(doc, output) != "auto") continue;
         const std::string target = normalizeToken(valueOf(doc, output, "target").value_or("gpio"));
         if (target == "gpio" || target == "pin" || target == "raspberry_pi_gpio")
             if (const auto line = integer(valueOf(doc, output, "line").value_or("-1")); line)
@@ -260,12 +262,15 @@ inline std::vector<SettingSpec> peripheralSettings(const std::string &section)
             {"active_low", "Pressed", "bool", "true", "low,high", 0, 0},
             {"pull", "Pull", "choice", "up", "up,down,none", 0, 0},
             {"debounce_ms", "Debounce (ms)", "number", "60", "", 0, 1000},
-        };   // poll_ms (chips without edge events) and chip stay text-only: the Pi 5's header needs neither
+            {"chip", "GPIO chip", "text", "auto", "", 0, 0},
+            {"poll_ms", "Poll every (ms)", "number", "12", "", 2, 1000},   // read only when the chip gives no edge events
+        };
     if (section == "recording_indicator" || section == "trigger_output")
         return {
             {"enabled", "On", "bool", "false", "", 0, 0},
             {"target", "Wired to", "choice", "gpio", "gpio,pcf8574", 0, 0},
-            {"line", "GPIO", "number", section == "trigger_output" ? "17" : "-1", "", -1, 27},
+            {"chip", "GPIO chip", "text", "auto", "", 0, 0},
+            {"line", "GPIO", "number", section == "trigger_output" ? "17" : "-1", "", -1, 27},   // the header's; the page lifts it for another chip
             {"pcf_pin", "PCF8574 pin", "number", section == "trigger_output" ? "0" : "-1", "", -1, 7},
             {"active_high", "Active", "bool", "false", "high,low", 0, 0},
         };

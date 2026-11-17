@@ -4961,7 +4961,8 @@ std::string hardwareConfigDisplayPath(const std::filesystem::path &path)
     return value;
 }
 
-// What the validator needs to know about this Pi: the I2C buses that exist and the DPI overlays in config.txt.
+// What the validator needs to know about this Pi: the I2C buses and GPIO chips that exist and the DPI overlays in
+// config.txt.
 hwconf::Facts hardwareConfigFacts()
 {
     hwconf::Facts facts;
@@ -4974,6 +4975,9 @@ hwconf::Facts hardwareConfigFacts()
     std::sort(facts.buses.begin(), facts.buses.end());
     facts.known = !facts.buses.empty();
     facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(bootConfigPath())).dpiLines;
+    for (const hardware::GpioChipInfo &chip : hardware::listGpioChips())
+        facts.gpioChips.push_back({chip.path, chip.label, chip.lines});
+    facts.headerChip = hardware::headerGpioChipPath();
     return facts;
 }
 
@@ -11984,9 +11988,11 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
         detail = error;
     }
 
-    const std::string chipSetting = hwconf::effectiveValue(doc, "gpio_buttons", "chip").value_or("auto");
+    // The header's GPIOs are lines 0 to 27; another chip's lines are all its own.
+    const std::string chipSetting = hwconf::gpioInputChip(doc);
     const std::string chipPath = chipSetting == "auto" ? hardware::headerGpioChipPath() : chipSetting;
-    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{} : hardware::readGpioChipInfo(chipPath, 28);
+    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{}
+        : hardware::readGpioChipInfo(chipPath, chipSetting == "auto" ? 28 : 64);
     if (state == "running")
         detail = "Core reads the buttons on " + (chip.ok ? chip.path + " (" + chip.label + ")" : chipSetting) + ".";
 
@@ -12452,6 +12458,13 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         const hwconf::Facts facts = hardwareConfigFacts();
         for (size_t i = 0; i < facts.dpiLines.size(); ++i)
             body << (i ? "," : "") << facts.dpiLines[i];
+        // The GPIO chips a chip= setting can name; "header" marks the one chip=auto means.
+        body << "],\"gpio_chips\":[";
+        for (size_t i = 0; i < facts.gpioChips.size(); ++i) {
+            const hwconf::GpioChipFact &chip = facts.gpioChips[i];
+            body << (i ? "," : "") << "{\"path\":\"" << escapeJson(chip.path) << "\",\"label\":\"" << escapeJson(chip.label)
+                 << "\",\"lines\":" << chip.lines << ",\"header\":" << (chip.path == facts.headerChip ? "true" : "false") << "}";
+        }
         body << "]}";
         return okReply(command.id, body.str());
     }
