@@ -12727,6 +12727,10 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
     requiresReconfigure |= nextSettings.photoModeEnabled != settings_.photoModeEnabled;
     requiresReconfigure |= activeIspColorProfile(nextSettings) != activeIspColorProfile(settings_);
     requiresReconfigure |= nextSettings.clearHdr != settings_.clearHdr;
+#if APERTARCORE_HAS_LIBCAMERA
+    // Clear HDR 12-bit stores 12-bit codes in cDNG and linear 16-bit in MLV; the stream takes the depth at configure.
+    requiresReconfigure |= storageRawBitDepthForSettings(nextSettings) != storageRawBitDepthForSettings(settings_);
+#endif
     if (!nextSettings.photoModeEnabled) nextSettings.timelapseExposureLimitUs = 0;
     if (nextSettings.timelapseExposureLimitUs)
         nextSettings.shutterUs = std::min(nextSettings.shutterUs, nextSettings.timelapseExposureLimitUs);
