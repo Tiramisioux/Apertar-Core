@@ -87,6 +87,13 @@ int main()
     CHECK(near && near->width == 3840 && near->height == 2160);
     CHECK(im::nearest(im::Class::S12, 3840, 2160, 100000) == nullptr);
 
+    // Why setClearHdr enters at 3840x2160: the nearest 12-bit Clear HDR row of Full HD is the binned
+    // 1920x1080 one, not 4K; the 4K row exists in that class and is 1x1.
+    near = im::nearest(im::Class::H12, 1920, 1080);
+    CHECK(near && near->width == 1920 && near->height == 1080 && near->binned);
+    const im::Mode *hdr4k = im::find(im::Class::H12, 3840, 2160);
+    CHECK(hdr4k && !hdr4k->binned);
+
     // APERTAR_IMX585_MIN_MODE_WIDTH: a number overrides, a negative or unparsable value keeps the default.
     CHECK(im::minModeWidth() == 1280);
     setenv("APERTAR_IMX585_MIN_MODE_WIDTH", "0", 1);

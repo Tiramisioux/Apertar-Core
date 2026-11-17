@@ -9056,8 +9056,10 @@ std::string_view webControlPageHtml()
       return match ? match.value : "";
     }
 
-    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size; Core takes the
-    // nearest row of the new class on its own, the size sent is the one of the same ratio.
+    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size of the same ratio.
+    // Core enters Clear HDR at 3840x2160, which caps the FPS at that mode's, so turning it on sends the FPS again
+    // after the size, unless the Mode Ladder is on: it owns the FPS, and set_fps would end a Clear HDR override.
+    // Turning it off takes the nearest row of the new class on its own.
     function imx585BaseCommands(snapshot, value) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return [h264ResolutionCommandPayload(h264ResolutionFromBaseSelection(snapshot, value))];
@@ -9065,7 +9067,11 @@ std::string_view webControlPageHtml()
       const commands = clearHdr === !!snapshot.clear_hdr ? [] : [{ cmd: "set_clear_hdr", enabled: clearHdr ? "true" : "false" }];
       const current = resolutionLabelFromSnapshot(snapshot).split("x");
       const size = imx585ResolutionForBaseAndRatio(snapshot, value, imx585RatioLabel(Number(current[0]), Number(current[1])));
-      return size ? commands.concat([resolutionCommandPayload(size)]) : commands;
+      if (!size)
+        return commands;
+      const fps = Number(snapshot.fps);
+      const fpsAgain = clearHdr && !snapshot.clear_hdr && snapshot.ladder_enabled !== true && Number.isFinite(fps) && fps > 0;
+      return commands.concat([resolutionCommandPayload(size)], fpsAgain ? [{ cmd: "set_fps", value: fps }] : []);
     }
 
     // The sizes of the current class, widest picture first.

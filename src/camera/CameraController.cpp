@@ -10657,7 +10657,7 @@ bool CameraController::setResolution(Resolution resolution)
     CaptureSettings current = sanitizeSettingsForSensor(settings_, sensorFamily, (!simulateCamera_ && session_ && session_->monochromeSensor()));
     if (sensorFamily == SensorFamily::Imx585) {
         // An explicit size must be a mode of the current class (bit depth, Clear HDR); derived changes
-        // (bit depth, Clear HDR) take the nearest row instead, in the sanitiser.
+        // (bit depth, Clear HDR) take the nearest row in the sanitiser, except Clear HDR on: setClearHdr starts at 3840x2160.
         const Resolution wanted = imx585AliasResolution(resolution);
         if (!apertar::imx585::find(apertar::imx585::classFor(current.rawBitDepth, current.clearHdr),
                                    wanted.width, wanted.height)) {
@@ -11608,7 +11608,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
     // A real bit depth change ends a Clear HDR override, except the 16-bit that turning Clear HDR on is followed by
-    // (the hardware clear_hdr action and the touch UI send it right after set_clear_hdr).
+    // (the hardware clear_hdr action sends it right after set_clear_hdr; the touch UI stays at 12-bit).
     if (!(settings_.clearHdr && requested.rawBitDepth == 16))
         ladderOverride_ = false;
     return applySettingsLocked(next, true);
@@ -11630,6 +11630,9 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    // Clear HDR is entered at 4K, as the UIs label it; set_resolution picks another Clear HDR row after.
+    if (enabled && !settings_.clearHdr && sensorFamily == SensorFamily::Imx585)
+        next.resolution = Resolution{ 3840, 2160 };
     applyClearHdrCompression(next, settings_.clearHdr);   // before the sanitiser: lossless limits only apply to lossless
     if (enabled && !settings_.clearHdr && !simulateCamera_ && session_) {
         // Auto ISO and WB stop in Clear HDR (the sanitiser turns them off); hold the values
