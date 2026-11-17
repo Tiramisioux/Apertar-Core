@@ -460,29 +460,6 @@ bool isImx585LowResolutionAlias(const Resolution &resolution)
            resolutionMatches(resolution, 1928, 1090);
 }
 
-// The imx585 driver's 1.85:1 crops are 3840x2072 and the binned 1920x1036 (cinemate-modes, the
-// cinemate-port driver branch). The Apertar-Beta 1.6.0 driver had 3840x2076 and 1920x1038, windows
-// that started at PIX_VST 54 against the sensor's multiple-of-4 rule; the new driver has neither.
-// Settings, presets, ladder rungs and clients (the touch UI) that still say the old sizes are
-// moved to the new ones here, before any lookup.
-Resolution migratedImx585CropResolution(Resolution resolution)
-{
-    if (resolutionMatches(resolution, 3840, 2076))
-        return Resolution{ 3840, 2072 };
-    if (resolutionMatches(resolution, 1920, 1038))
-        return Resolution{ 1920, 1036 };
-    return resolution;
-}
-
-void migrateImx585LadderRungs(std::vector<ladder::Rung> &rungs)
-{
-    for (ladder::Rung &rung : rungs) {
-        const Resolution moved = migratedImx585CropResolution(Resolution{ rung.width, rung.height });
-        rung.width = moved.width;
-        rung.height = moved.height;
-    }
-}
-
 bool isImx585HighResolutionAlias(const Resolution &resolution)
 {
     return resolutionMatches(resolution, 3840, 2160) ||
@@ -518,22 +495,59 @@ bool isImx585KnownResolution(const Resolution &resolution)
 // mode): the Full HD and 3840-wide crops. The other table sizes are IMX585 only.
 bool isImx585LegacyCropResolution(const Resolution &resolution)
 {
-    for (const uint32_t height : { 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
+    for (const uint32_t height : { 1038u, 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
         if (resolutionMatches(resolution, 1920, height))
             return true;
     }
-    for (const uint32_t height : { 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
+    for (const uint32_t height : { 2076u, 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
         if (resolutionMatches(resolution, 3840, height))
             return true;
     }
     return false;
 }
 
+// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
+std::mutex probedSensorModesMutex;
+std::vector<CameraController::SensorMode> probedSensorModes;
+#if APERTARCORE_HAS_LIBCAMERA
+bool sensorModesProbed = false;
+#endif
+
+// The sizes the probe found in a class (bit depth, Clear HDR), as the driver delivers them.
+std::vector<apertar::imx585::Size> probedImx585Sizes(apertar::imx585::Class cls)
+{
+    std::vector<apertar::imx585::Size> sizes;
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    for (const auto &mode : probedSensorModes) {
+        if (mode.bitDepth == apertar::imx585::bitDepthOf(cls) && mode.clearHdr == apertar::imx585::clearHdrClass(cls))
+            sizes.push_back({ mode.size.width, mode.size.height });
+    }
+    return sizes;
+}
+
+// A 1.85:1 request in the height the installed driver has (2072 or 2076, 1036 or 1038).
+Resolution driverCropResolution(apertar::imx585::Class cls, const Resolution &requested)
+{
+    const auto size = apertar::imx585::driverCropSize(cls, { requested.width, requested.height }, probedImx585Sizes(cls));
+    return Resolution{ size.width, size.height };
+}
+
+// Ladder rungs saved with the other driver's 1.85:1 height take this driver's.
+void followDriverCropSizes(std::vector<ladder::Rung> &rungs)
+{
+    for (ladder::Rung &rung : rungs) {
+        const Resolution followed = driverCropResolution(apertar::imx585::classFor(rung.bits, rung.clearHdr),
+                                                         Resolution{ rung.width, rung.height });
+        rung.width = followed.width;
+        rung.height = followed.height;
+    }
+}
+
 // The row of a class that an active size stands for: the size itself, else (a size from another class
 // or sensor) the nearest row. Never null while the width policy leaves the class a row.
 const apertar::imx585::Mode *imx585ModeForResolution(apertar::imx585::Class cls, const Resolution &requested)
 {
-    const Resolution wanted = imx585AliasResolution(requested);
+    const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(requested));
     if (const auto *mode = apertar::imx585::find(cls, wanted.width, wanted.height))
         return mode;
     return apertar::imx585::nearest(cls, wanted.width, wanted.height);
@@ -722,7 +736,6 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         const auto parsed = apertar::clipname::parse(settings.clipNameTemplate);
         settings.clipNameTemplate = parsed.ok ? parsed.normalized : std::string(apertar::clipname::kDefaultTemplate);
     }
-    settings.resolution = migratedImx585CropResolution(settings.resolution);
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -3404,13 +3417,6 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
 
     return 1000.0;
 }
-
-// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
-std::mutex probedSensorModesMutex;
-std::vector<CameraController::SensorMode> probedSensorModes;
-#if APERTARCORE_HAS_LIBCAMERA
-bool sensorModesProbed = false;
-#endif
 
 std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
 {
@@ -11411,7 +11417,6 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
         std::stringstream ladderText;
         ladderText << ladderFile.rdbuf();
         modeLadder_ = ladder::parseFile(ladderText.str());   // a missing or broken file: ladder off
-        migrateImx585LadderRungs(modeLadder_.rungs);
     }
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
@@ -11463,6 +11468,7 @@ bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
         settings_ = session_->currentSettings();
     else if (simulateCamera_)
         settings_ = sanitizeSettingsForSensor(settings_, SensorFamily::Unknown);
+    followDriverCropSizes(modeLadder_.rungs);   // after the startup probe, which the session start ran
 
     if (simulateCamera_)
         constrainExposureMetering(settings_, std::getenv("LIBCAMERA_RPI_TUNING_FILE")
@@ -11554,7 +11560,6 @@ bool CameraController::setResolution(Resolution resolution)
         return false;
     }
 
-    resolution = migratedImx585CropResolution(resolution);   // a client that still sends 3840x2076 / 1920x1038
     if (!validateResolution(resolution))
         return false;
 
@@ -11565,9 +11570,9 @@ bool CameraController::setResolution(Resolution resolution)
     if (sensorFamily == SensorFamily::Imx585) {
         // An explicit size must be a mode of the current class (bit depth, Clear HDR); derived changes
         // (bit depth, Clear HDR) take the nearest row in the sanitiser, except Clear HDR on: setClearHdr starts at 3840x2160.
-        const Resolution wanted = imx585AliasResolution(resolution);
-        if (!apertar::imx585::find(apertar::imx585::classFor(current.rawBitDepth, current.clearHdr),
-                                   wanted.width, wanted.height)) {
+        const auto cls = apertar::imx585::classFor(current.rawBitDepth, current.clearHdr);
+        const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(resolution));
+        if (!apertar::imx585::find(cls, wanted.width, wanted.height)) {
             setErrorLocked(wanted.toString() + " is not a mode of the IMX585 at " + std::to_string(current.rawBitDepth) +
                            "-bit" + (current.clearHdr ? " Clear HDR." : "."));
             return false;
@@ -12023,7 +12028,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
             *error = parseError;
             return false;
         }
-        migrateImx585LadderRungs(draft.rungs);
+        followDriverCropSizes(draft.rungs);
     }
     if (enabled)
         draft.enabled = *enabled;
@@ -13717,7 +13722,7 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         setErrorLocked("Wait for still captures to finish before loading a preset.");
         return false;
     }
-    const Resolution presetResolution = migratedImx585CropResolution(requested.resolution);   // a preset saved with 3840x2076 / 1920x1038
+    const Resolution presetResolution = requested.resolution;
     if (!validateResolution(presetResolution)) return false;
     rampNominalShutterUs_ = 0; // a preset brings its own shutter
     CaptureSettings next = supportedRecordingSettings(requested);

@@ -94,6 +94,28 @@ int main()
     CHECK(im::transportFor(im::Class::S12, 3840, 2076, 0) == std::optional<im::Size>(im::Size{ 3840, 2076 }));
     CHECK(im::transportFor(im::Class::S10, 1920, 1038, 0) == std::optional<im::Size>(im::Size{ 1920, 1038 }));
 
+    // driverCropSize: a 1.85:1 size follows the height the probe found in the class.
+    const std::vector<im::Size> portS12 = { { 1920, 1080 }, { 3840, 2160 }, { 3840, 2072 }, { 1920, 1036 } };
+    const std::vector<im::Size> originalS12 = { { 1920, 1080 }, { 3840, 2160 }, { 3840, 2076 }, { 1920, 1038 } };
+    const std::vector<im::Size> portH16 = { { 3840, 2200 }, { 3840, 2112 }, { 1920, 1100 } };
+    const std::vector<im::Size> none;
+    for (const uint32_t height : { 2072u, 2076u }) {
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, portS12) == (im::Size{ 3840, 2072 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, originalS12) == (im::Size{ 3840, 2076 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, none) == (im::Size{ 3840, height }));
+        CHECK(im::driverCropSize(im::Class::H16, { 3840, height }, portH16) == (im::Size{ 3840, 2072 }));
+        CHECK(im::driverCropSize(im::Class::H16, { 3840, height }, none) == (im::Size{ 3840, 2072 }));
+    }
+    for (const uint32_t height : { 1036u, 1038u }) {
+        CHECK(im::driverCropSize(im::Class::S12, { 1920, height }, portS12) == (im::Size{ 1920, 1036 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 1920, height }, originalS12) == (im::Size{ 1920, 1038 }));
+        CHECK(im::driverCropSize(im::Class::S10, { 1920, height }, none) == (im::Size{ 1920, height }));
+        CHECK(im::driverCropSize(im::Class::H12, { 1920, height }, none) == (im::Size{ 1920, height }));  // no binned 1.85:1 there
+    }
+    CHECK(im::driverCropSize(im::Class::H12, { 3840, 2076 }, { { 3840, 2160 }, { 3840, 2072 } }) == (im::Size{ 3840, 2072 }));
+    CHECK(im::driverCropSize(im::Class::S12, { 3840, 2160 }, originalS12) == (im::Size{ 3840, 2160 }));
+    CHECK(im::driverCropSize(im::Class::S12, { 3840, 2024 }, portS12) == (im::Size{ 3840, 2024 }));
+
     // nearest: an exact row is its own nearest; a missing size takes the closest row.
     for (const im::Mode &mode : im::offered(im::Class::H12)) {
         const im::Mode *near = im::nearest(im::Class::H12, mode.width, mode.height);

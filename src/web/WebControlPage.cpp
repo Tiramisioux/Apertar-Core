@@ -10336,14 +10336,14 @@ std::string_view webControlPageHtml()
         .map((row) => formatResolutionValue(row.width, row.height));
     }
 
-    // What Core reports, with the old driver's 1.85:1 sizes (3840x2076, 1920x1038) and the other sensors' sizes a
-    // saved preset or an old client may still send mapped to the sizes the IMX585 has.
+    // What Core reports, with the other sensors' sizes a saved preset or an old client may still send mapped
+    // to the sizes the IMX585 has.
     function imx585NormalizedResolution(snapshot, resolutionValue) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return forcedH264CaptureResolutionForSnapshot(snapshot);
       const value = String(resolutionValue || "").trim();
       const aliases = {
-        "3840x2076": "3840x2072", "1920x1038": "1920x1036", "1928x1090": "1920x1080", "3856x2180": "3840x2160",
+        "1928x1090": "1920x1080", "3856x2180": "3840x2160",
         "1332x990": "1920x1080", "2028x1080": "1920x1080", "2028x1520": "1920x1080",
         "4056x2160": "3840x2160", "4056x3040": "3840x2160",
       };

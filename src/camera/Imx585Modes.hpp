@@ -241,6 +241,36 @@ inline std::optional<Size> activeFor(Size transport, uint32_t bitDepth)
     return Size{ found->width, found->height };
 }
 
+// The 1.85:1 size of the installed driver: 3840x2072 / 1920x1036 (cinemate-port driver) or 3840x2076 /
+// 1920x1038 (original Apertar driver). `probed` holds the transport sizes the startup probe found in the
+// class: the size of the pair it holds comes back. With nothing probed, the request if the class has it,
+// else its partner. Any other size comes back as it is.
+inline Size driverCropSize(Class cls, Size requested, const std::vector<Size> &probed)
+{
+    Size partner = requested;
+    if (requested == Size{ 3840, 2072 })
+        partner = { 3840, 2076 };
+    else if (requested == Size{ 3840, 2076 })
+        partner = { 3840, 2072 };
+    else if (requested == Size{ 1920, 1036 })
+        partner = { 1920, 1038 };
+    else if (requested == Size{ 1920, 1038 })
+        partner = { 1920, 1036 };
+    else
+        return requested;
+
+    for (const Size candidate : { requested, partner }) {
+        const auto transport = transportFor(cls, candidate.width, candidate.height, 0);
+        for (const Size &size : probed) {
+            if (transport && *transport == size)
+                return candidate;
+        }
+    }
+    if (find(cls, requested.width, requested.height, 0) || !find(cls, partner.width, partner.height, 0))
+        return requested;
+    return partner;
+}
+
 // The offered row closest to a size (Manhattan distance on the active picture; the driver's order
 // breaks ties). nullptr only when the width policy hides the whole class.
 inline const Mode *nearest(Class cls, uint32_t width, uint32_t height, uint32_t minWidth = minModeWidth())
