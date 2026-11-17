@@ -12558,27 +12558,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         body << "]";
         return okReply(command.id, body.str());
     }
-    if (command.name == "list_actions") {
-        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
-        const CaptureSettings cameraSettings = camera_.settings();
-        std::vector<std::string> resolutions;
-        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName(), cameraSettings))
-            resolutions.push_back(resolution.toString());
-        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
-        body = body.substr(1, body.size() - 2);
-        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
-            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
-                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
-            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
-                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
-            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
-            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
-            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
-        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
-            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
-        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
-        return okReply(command.id, body);
-    }
+    if (command.name == "list_actions")
+        return okReply(command.id, hardware::actions::catalogJson());
 
     return std::nullopt;
 }
