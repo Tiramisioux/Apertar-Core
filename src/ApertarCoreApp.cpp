@@ -5070,8 +5070,8 @@ buffer_ram_max_fraction=0.5
 
 [media]
 # Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
-# preroll=on runs it when Core starts, when a card is inserted and after a format; the command storage_preroll always works. Read at each request.
-# preroll=on
+# preroll=on runs it when Core starts, when a card is inserted and after a format (default off); the command storage_preroll always works. Read at each request.
+# preroll=off
 # Length in seconds, 1 to 10.
 # preroll_seconds=2
 
@@ -11117,7 +11117,7 @@ void ApertarCoreApp::runBufferSafetyStop()
 // ---- Storage pre-roll ---------------------------------------------------------------------------------------------
 // CineMate's storage warm-up: a short raw take at the mode's maximum fps through the real write path, deleted at
 // once (see CameraController::startStoragePreroll for what it keeps out of). Triggers: the storage_preroll command
-// (always), and with [media] preroll=on (default; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
+// (always), and with [media] preroll=on (default off; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
 // inserted and a format. The automatic ones wait 3 s, and for the mount's trim, so the order is trim, then pre-roll.
 // One thread, a cv, coalesced requests; never on the HTTP or watcher thread.
 

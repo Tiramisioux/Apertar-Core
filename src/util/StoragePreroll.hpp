@@ -19,7 +19,7 @@ constexpr unsigned kDefaultSeconds = 2;
 constexpr unsigned kMinSeconds = 1;
 constexpr unsigned kMaxSeconds = 10;
 
-// [media] preroll=on|off (default on: the automatic triggers; the manual command always works)
+// [media] preroll=on|off (default off: the automatic triggers; the manual command always works)
 // and preroll_seconds=1..10 (default 2). A missing or bad key is "not set".
 struct PrerollConf {
     std::optional<bool> automatic;
@@ -88,14 +88,14 @@ inline PrerollConf parsePrerollConf(const std::string &text)
     return conf;
 }
 
-// APERTAR_STORAGE_PREROLL=0|1 (anything else counts as unset) beats the file; absent both: on.
+// APERTAR_STORAGE_PREROLL=0|1 (anything else counts as unset) beats the file; absent both: off.
 inline bool automaticEnabled(const char *envValue, const PrerollConf &conf)
 {
     if (envValue && std::string(envValue) == "0")
         return false;
     if (envValue && std::string(envValue) == "1")
         return true;
-    return conf.automatic.value_or(true);
+    return conf.automatic.value_or(false);
 }
 
 // A requested length (the command's `seconds`, clamped by the caller's parse) else the file's, else 2.
@@ -226,7 +226,7 @@ struct PrerollState {
     std::atomic<double> fps{0.0};   // the fps the pre-roll applied while active; 0 otherwise
     // The effective automatic setting and whether APERTAR_STORAGE_PREROLL decides it, published by the app whenever the
     // hardware file changes (publishAutomatic), so the events thread and get_state read two atomics, never the file.
-    std::atomic<bool> automatic{true};
+    std::atomic<bool> automatic{false};
     std::atomic<bool> automaticFromEnv{false};
     std::mutex lastMutex;
     std::string last;

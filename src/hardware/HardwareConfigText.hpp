@@ -841,7 +841,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
             const std::string problem = storagepreroll::prerollConfProblem(line.key, line.value);
             if (!problem.empty())
                 add(line.number, true, "preroll_value", line.section, line.key, line.value, line.key + "=" + line.value + " on line " +
-                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "preroll" ? " (on)." : " (2)."));
+                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "preroll" ? " (off)." : " (2)."));
         }
         if (line.key == "bus") {
             const auto bus = integer(line.value);
