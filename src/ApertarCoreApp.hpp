@@ -80,7 +80,6 @@ private:
     std::string handleRequest(const std::string &line);
     std::string handleWebCommand(const std::string &payload);
     std::string handleCommand(const ControlCommand &command);
-    std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
     std::string testInputReply(const ControlCommand &command);
     std::string gpioPeripheralJson(const hwconf::Document &doc);
     std::string i2cPeripheralJson(const hwconf::Document &doc, const std::string &section, const std::string &title,

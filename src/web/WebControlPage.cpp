@@ -18691,6 +18691,7 @@ std::string_view webControlPageHtml()
     // T42 Listen: press a button or turn a knob and its row lights up.
     let controlsListenTimer = 0;
     let controlsListenSeq = -1;
+    let controlsListenStarted = 0;
     function controlsRowForKey(section, key) {
       const rows = (controlsState.model && controlsState.model.rows) || [];
       return rows.findIndex((row) => row.source === section && (row.lines.some((line) => line.key === key) || (row.keys || []).includes(key) ||
@@ -18707,17 +18708,21 @@ std::string_view webControlPageHtml()
         note.textContent = "Listening: press a button, flip a switch or turn a knob, and its row lights up.";
         note.hidden = !on;
       }
-      window.clearInterval(controlsListenTimer);
+      window.clearTimeout(controlsListenTimer);
       if (!on)
         return;
       controlsListenSeq = -1;
       const started = Date.now();
-      controlsListenTimer = window.setInterval(async () => {
+      // Ask again only after the reply: the command waits for the command lock, so at most one is ever waiting.
+      const listen = async () => {
         if (Date.now() - started > 120000 || !document.getElementById("controlsRows").offsetParent) {
           setControlsListening(false);
           return;
         }
-        const reply = await controlsCall({ cmd: "controls_last_input" });
+        const reply = await controlsCall({ cmd: "controls_last_input" }).catch(() => ({ ok: false }));
+        if (!controlsState.listening || controlsListenStarted !== started)
+          return;
+        controlsListenTimer = window.setTimeout(listen, 300);
         if (!reply.ok)
           return;
         if (controlsListenSeq < 0) {
@@ -18736,7 +18741,9 @@ std::string_view webControlPageHtml()
           element.scrollIntoView({ block: "center", behavior: "smooth" });
           window.setTimeout(() => element.classList.remove("heard"), 2000);
         }
-      }, 300);
+      };
+      controlsListenStarted = started;
+      controlsListenTimer = window.setTimeout(listen, 300);
     }
 
     async function saveControls() {

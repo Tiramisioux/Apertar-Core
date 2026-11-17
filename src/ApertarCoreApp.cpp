@@ -12494,81 +12494,8 @@ std::string ApertarCoreApp::buildHardwareConfigFileJson()
     return out.str();
 }
 
-// The hardware commands that only read: they run without the command lock.
-std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
-{
-    if (command.name == "controls_last_input") {
-        // T42 Listen: the last control that fired, as section and key, and how long ago.
-        std::lock_guard<std::mutex> lock(lastInputMutex_);
-        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - lastInputAt_).count());
-        const auto bar = lastInput_.find('|');
-        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
-            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
-            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
-    }
-    if (command.name == "scan_i2c") {
-        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
-        // driver is reading (it is listed as Core's), never during a take.
-        if (recordingGateActive())
-            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
-        const auto busValue = command.number("bus");
-        if (!busValue || *busValue < 0 || *busValue > 255)
-            return errorReply(command.id, "scan_i2c needs bus= (a bus from Settings > Config > Hardware).");
-        const int bus = static_cast<int>(*busValue);
-        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
-        std::set<int> held;
-        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
-            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
-            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
-            if (running && b && *b == bus)
-                held.insert(a ? static_cast<int>(*a) : fallback);
-        };
-        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
-        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
-        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
-        static const std::map<int, const char *> known = {
-            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
-            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
-            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
-            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
-        std::ostringstream body;
-        body << "\"bus\":" << bus << ",\"found\":[";
-        bool first = true;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        for (int address = 0x03; address <= 0x77; ++address) {
-            const auto guess = known.find(address);
-            std::string by;
-            if (held.count(address)) {
-                by = "core";
-            } else {
-                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
-                if (!probe.busExists)
-                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
-                if (std::chrono::steady_clock::now() >= deadline)
-                    return errorReply(command.id, "I2C bus " + std::to_string(bus) + " does not answer: check the wiring.");
-                if (!probe.found)
-                    continue;
-                by = probe.kernelDriver ? "kernel" : "";
-            }
-            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
-                 << (guess == known.end() ? "" : guess->second) << "\"}";
-            first = false;
-        }
-        body << "]";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "list_actions")
-        return okReply(command.id, hardware::actions::catalogJson());
-
-    return std::nullopt;
-}
-
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
-    // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
-    if (const auto reply = handleReadOnlyHardwareCommand(command))
-        return *reply;
     // The WebUI's Try and Remote controls: the actions are commands that take the command lock themselves.
     if (command.name == "test_input")
         return testInputReply(command);
@@ -12749,6 +12676,70 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         body << "]";
         return okReply(command.id, body.str());
     }
+
+    if (command.name == "controls_last_input") {
+        // T42 Listen: the last control that fired, as section and key, and how long ago.
+        std::lock_guard<std::mutex> lock(lastInputMutex_);
+        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastInputAt_).count());
+        const auto bar = lastInput_.find('|');
+        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
+            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
+            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
+    }
+    if (command.name == "scan_i2c") {
+        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
+        // driver is reading (it is listed as Core's), never during a take.
+        if (recordingGateActive())
+            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
+        const auto busValue = command.number("bus");
+        if (!busValue || *busValue < 0 || *busValue > 255)
+            return errorReply(command.id, "scan_i2c requires bus.");
+        const int bus = static_cast<int>(*busValue);
+        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
+        std::set<int> held;
+        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
+            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
+            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
+            if (running && b && *b == bus)
+                held.insert(a ? static_cast<int>(*a) : fallback);
+        };
+        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
+        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
+        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
+        static const std::map<int, const char *> known = {
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
+            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
+            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
+        std::ostringstream body;
+        body << "\"bus\":" << bus << ",\"found\":[";
+        bool first = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        for (int address = 0x03; address <= 0x77; ++address) {
+            const auto guess = known.find(address);
+            std::string by;
+            if (held.count(address)) {
+                by = "core";
+            } else {
+                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
+                if (!probe.busExists)
+                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return errorReply(command.id, "I2C bus " + std::to_string(bus) + " does not answer: check the wiring.");
+                if (!probe.found)
+                    continue;
+                by = probe.kernelDriver ? "kernel" : "";
+            }
+            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
+                 << (guess == known.end() ? "" : guess->second) << "\"}";
+            first = false;
+        }
+        body << "]";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "list_actions")
+        return okReply(command.id, hardware::actions::catalogJson());
 
     if (command.name == "test_output") {
         // T42: one blink of the tally or one trigger pulse, to see which one is wired where.
@@ -12935,7 +12926,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_input\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
