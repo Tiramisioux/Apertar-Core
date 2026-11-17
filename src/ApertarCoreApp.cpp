@@ -12411,6 +12411,10 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
                 return errorReply(command.id, row.title + " is switched off: switch it on and save first.");
             if (line.actions.empty() || (line.actions.size() == 1 && line.actions[0] == "none"))
                 return errorReply(command.id, "Nothing is assigned to " + row.title + " " + line.label + ".");
+            // A script starts from a physical press only, as in 1.6.0.
+            for (const std::string &action : line.actions)
+                if (hardware::scriptActionSlot(action) >= 0)
+                    return errorReply(command.id, "Scripts run from a button, not from the WebUI.");
             const bool turn = key.size() > 3 && (key.compare(key.size() - 3, 3, "_cw") == 0 ||
                                                  (key.size() > 4 && key.compare(key.size() - 4, 4, "_ccw") == 0));
             handleHardwareInputAction(line.raw, !turn);   // a turn does not wake from standby, as on the knob
