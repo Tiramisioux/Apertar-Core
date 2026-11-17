@@ -7305,12 +7305,12 @@ public:
         };
         // Preview temporal denoise switched off: libcamera loads a copy of the resolved tuning file without
         // its rpi.denoise tdn blocks. tuningPath stays the resolved file; activePath is what libcamera loads.
-        // H.264, ProRes and photo mode save the ISP output, so they always get the tuning file as it is.
-        const bool ispOutputSaved = settings.photoModeEnabled || isProcessedVideoFormat(settings.recordingFormat);
+        // H.264 and ProRes record the ISP output, so they always get the tuning file as it is.
+        const bool ispOutputRecorded = !settings.photoModeEnabled && isProcessedVideoFormat(settings.recordingFormat);
         std::string activePath;
         const auto loadablePath = [&](const std::string &path) {
             activePath = path;
-            if (!settings.previewTdn && !ispOutputSaved) {
+            if (!settings.previewTdn && !ispOutputRecorded) {
                 std::string note;
                 activePath = tuning::previewTuningPath(path, tuningPipeline, note);
                 if (!note.empty())
