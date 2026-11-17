@@ -9040,7 +9040,8 @@ private:
 
                 if (includeRawStream &&
                     (sensorFamily_ == SensorFamily::Imx477 || sensorFamily_ == SensorFamily::Imx577 ||
-                     sensorFamily_ == SensorFamily::Imx294)) {
+                     sensorFamily_ == SensorFamily::Imx294 ||
+                     (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && !useExplicitSensorConfig))) {
                     const libcamera::StreamConfiguration &candidateRawConfig =
                         candidateConfig->at(rawStreamIndex);
                     const bool invalidReadout = sensorFamily_ == SensorFamily::Imx294
@@ -9061,10 +9062,10 @@ private:
                     }
                 }
 
-                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_) {
-                    // A colour IMX585 is configured explicitly, so the driver must hand over exactly the
-                    // mode asked for: raw size, bit depth, and a ScalerCropMaximum of active size x binning
-                    // (the window the driver reports in native pixels). A mode it adjusted is refused.
+                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && useExplicitSensorConfig) {
+                    // Configured explicitly, a colour IMX585 driver must hand over exactly the mode asked
+                    // for: raw size, bit depth, and a ScalerCropMaximum of active size x binning (the
+                    // window the driver reports in native pixels). A mode it adjusted is refused.
                     std::string adjusted;
                     if (includeRawStream) {
                         const libcamera::StreamConfiguration &candidateRawConfig =
@@ -9091,7 +9092,8 @@ private:
                     const auto *imx585Row = apertar::imx585::find(imx585Class, sanitized.resolution.width,
                                                                   sanitized.resolution.height, 0);
                     const auto cropMaximum = camera_->properties().get(libcamera::properties::ScalerCropMaximum);
-                    if (adjusted.empty() && imx585Row && cropMaximum) {
+                    // A driver that reports its crop as the output size gives no window to compare.
+                    if (adjusted.empty() && imx585Row && cropMaximum && cropMaximum->size() != rawSize) {
                         const uint32_t binning = imx585Row->binned ? 2u : 1u;
                         if (cropMaximum->width != imx585Row->width * binning ||
                             cropMaximum->height != imx585Row->height * binning)
