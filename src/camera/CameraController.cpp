@@ -4215,6 +4215,15 @@ public:
     ~DngRecordingQueue()
     {
         stop();
+        // Writers left behind by a dead-medium stop still use this queue's members
+        // (exitMutex_, mutex_) when they return; give them the dead-medium time again.
+        {
+            const auto limit = std::chrono::milliseconds(unsignedEnvValue("APERTAR_DEAD_MEDIUM_STOP_MS", 2000, 100, 600000));
+            std::unique_lock<std::mutex> lock(exitMutex_);
+            if (!exitCv_.wait_for(lock, limit, [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; }))
+                std::cerr << "ApertarCore recording: detached writers still running ("
+                          << liveWorkers_.load(std::memory_order_acquire) << ") as the queue is destroyed\n";
+        }
         unregisterFlushAbort();
     }
 
@@ -4703,10 +4712,10 @@ public:
                 DngRecordingQueue *queue;
                 ~Exit()
                 {
-                    {
-                        std::lock_guard<std::mutex> lock(queue->exitMutex_);
-                        queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
-                    }
+                    // Notify under the lock: ~DngRecordingQueue may free the cv
+                    // as soon as it sees 0.
+                    std::lock_guard<std::mutex> lock(queue->exitMutex_);
+                    queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
                     queue->exitCv_.notify_all();
                 }
             } exit{this};
@@ -4960,9 +4969,10 @@ public:
         expectedRawBufferSize_ = 0;
     }
 
-    // A split take: make part_<part> once, on the copy side, before its first frame is queued (several copy threads
-    // may arrive here; the set and the mutex make each folder exactly once). A failed mkdir is logged; the writer's
-    // open then fails and the take ends as on any write failure.
+    // A split take: make part_<part> once, on a writer, before its first frame is written (several writers may arrive
+    // here; the set and the mutex make each folder exactly once). On a writer, a mkdir stuck on a removed medium is
+    // covered by stop()'s bounded wait. A failed mkdir is logged; the open then fails and the take ends as on any
+    // write failure.
     void ensurePartFolder(uint64_t part)
     {
         std::lock_guard<std::mutex> partLock(partMutex_);
@@ -4977,8 +4987,6 @@ public:
                  RawFrameView frame,
                  CdngEncoder::Metadata metadata)
     {
-        if (framesPerFolder_ > 0 && recordingFormat_ != RecordingFormat::Mlv)
-            ensurePartFolder(framepath::partIndex(metadata.frameIndex, framesPerFolder_));
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_ || workers_.empty())
             return false;
@@ -5277,6 +5285,8 @@ private:
             }
 
             job.frame.data = job.rawBytes.data();
+            if (framesPerFolder_ > 0)
+                ensurePartFolder(framepath::partIndex(job.metadata.frameIndex, framesPerFolder_));
             const bool timeLossless = settings_.recordingFormat == RecordingFormat::Cdng &&
                 settings_.cdngCompression == CdngCompression::LosslessJpeg;
             const auto wallStarted = std::chrono::steady_clock::now();
@@ -5589,8 +5599,8 @@ private:
     std::atomic<int64_t> lastWriteProgressNs_{0};
     int mediaDirFd_ = -1;   // the clip folder, for the once-a-second sync
     // [storage] frames_per_folder of this take (0 = every frame in the clip folder). Set in startAtFolder before any
-    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made on the copy side
-    // (ensurePartFolder, before the frame is queued), never by a writer.
+    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made by the writers
+    // (ensurePartFolder, before the frame is written), so stop()'s bounded wait covers a mkdir on a dead medium.
     unsigned framesPerFolder_ = 0;
     std::mutex partMutex_;
     std::unordered_set<uint64_t> partsCreated_;
