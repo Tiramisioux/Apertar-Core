@@ -5789,7 +5789,7 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Preview temporal denoise</span>
                 </div>
-                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Recordings are raw and never affected.</span>
+                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Raw recordings are never affected; H.264, ProRes and photo mode always keep it.</span>
                 <div class="pill-grid" id="settingsPreviewTdnOptions"></div>
               </section>
               <section class="select-block">

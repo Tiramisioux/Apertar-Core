@@ -7303,7 +7303,7 @@ public:
         const auto automaticTuningPath = [&](std::string path) {
             return settings.clearHdr ? tuning::clearHdrVariant(path, tuningPipeline) : path;
         };
-        // Preview temporal denoise off (the default): libcamera loads a copy of the resolved tuning file without
+        // Preview temporal denoise switched off: libcamera loads a copy of the resolved tuning file without
         // its rpi.denoise tdn blocks. tuningPath stays the resolved file; activePath is what libcamera loads.
         // H.264, ProRes and photo mode save the ISP output, so they always get the tuning file as it is.
         const bool ispOutputSaved = settings.photoModeEnabled || isProcessedVideoFormat(settings.recordingFormat);
