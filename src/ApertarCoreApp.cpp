@@ -1904,7 +1904,7 @@ struct SharedUiSettingsSnapshot
     bool recordingFrameEnabled = false;
     bool frameBufferBarEnabled = false;
     bool recordingRedTimecodeEnabled = true;
-    bool audioRecordedOutlineEnabled = true;
+    bool audioRecordedOutlineEnabled = false;
     bool recordAudioEnabled = false;
     bool soundRecorderEnabled = false;
     bool recordGyroEnabled = false;

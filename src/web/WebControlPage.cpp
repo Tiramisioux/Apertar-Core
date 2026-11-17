@@ -16154,7 +16154,7 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       });
-      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled !== false), async (value) => {
+      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled === true), async (value) => {
         try {
           await sendCommand({ cmd: "set_audio_recorded_outline_enabled", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
