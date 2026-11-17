@@ -12954,7 +12954,6 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"recording\":" << (recording ? "true" : "false")
              << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
              << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
-             << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
              << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
              << ",\"controls_errors\":" << controlsErrors_.load()
