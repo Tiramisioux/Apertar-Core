@@ -273,7 +273,16 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         return result;
     }
 
-    const std::string current = text_;
+    // A missing file starts from a /boot copy when there is one: the readers take its sections, so a write must keep them.
+    std::string current = text_;
+    if (!stamp_.exists) {
+        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
+            if (std::filesystem::is_regular_file(candidate, error)) {
+                current = readTextFile(candidate);
+                break;
+            }
+        }
+    }
     const std::string currentRevision = revision_;
     const hwconf::Document currentDoc = hwconf::parse(current);
     std::vector<hwconf::Edit> merged;
