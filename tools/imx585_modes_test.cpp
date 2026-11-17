@@ -17,7 +17,7 @@ int main()
 {
     CHECK(im::all(im::Class::S12).size() == 62);
     CHECK(im::all(im::Class::S10).size() == 62);
-    CHECK(im::all(im::Class::H12).size() == 29);
+    CHECK(im::all(im::Class::H12).size() == 28);   // the driver's binned 1920x1080 row is left out
     CHECK(im::all(im::Class::H16).size() == 34);
 
     CHECK(im::classFor(12, false) == im::Class::S12);
@@ -87,10 +87,16 @@ int main()
     CHECK(near && near->width == 3840 && near->height == 2160);
     CHECK(im::nearest(im::Class::S12, 3840, 2160, 100000) == nullptr);
 
-    // Why setClearHdr enters at 3840x2160: the nearest 12-bit Clear HDR row of Full HD is the binned
-    // 1920x1080 one, not 4K; the 4K row exists in that class and is 1x1.
+    // Why setClearHdr enters at 3840x2160: the nearest 12-bit Clear HDR row of Full HD is the 1x1
+    // 1920x1040 crop, not 4K; the 4K row exists in that class and is 1x1.
     near = im::nearest(im::Class::H12, 1920, 1080);
-    CHECK(near && near->width == 1920 && near->height == 1080 && near->binned);
+    CHECK(near && near->width == 1920 && near->height == 1040 && !near->binned);
+    // Binned 1920x1080 is not offered at 12-bit Clear HDR (its curve is unverified); 16-bit and SDR keep it.
+    CHECK(!im::find(im::Class::H12, 1920, 1080, 0));
+    for (const im::Class cls : { im::Class::S12, im::Class::S10, im::Class::H16 }) {
+        const im::Mode *hd = im::find(cls, 1920, 1080);
+        CHECK(hd && hd->binned);
+    }
     const im::Mode *hdr4k = im::find(im::Class::H12, 3840, 2160);
     CHECK(hdr4k && !hdr4k->binned);
 

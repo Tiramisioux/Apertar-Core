@@ -75,8 +75,11 @@ inline constexpr Mode kS10Modes[] = {
     { 1024, 408, true }, { 1024, 400, true },
 };
 
+// The driver also lists 1920x1080 binned here. Core holds it back until a capture shows that the 12-bit
+// companding curve, the full-resolution one, holds for the binned readout too. To offer it again, put
+// { 1920, 1080, true } back first, and "1920x1080b" in the WebUI's h12 list.
 inline constexpr Mode kH12Modes[] = {
-    { 1920, 1080, true }, { 3840, 2160, false }, { 2880, 2160, false }, { 2160, 2160, false },
+    { 3840, 2160, false }, { 2880, 2160, false }, { 2160, 2160, false },
     { 2976, 2160, false }, { 3840, 2072, false }, { 3840, 2032, false }, { 3840, 2024, false },
     { 3840, 1920, false }, { 3840, 1744, false }, { 3840, 1728, false }, { 3840, 1632, false },
     { 3840, 1608, false }, { 3840, 1536, false }, { 3840, 1504, false }, { 1920, 1040, false },
@@ -133,7 +136,8 @@ constexpr uint32_t bitDepthOf(Class cls)
     return 12;
 }
 
-// Every row of the class as the driver lists it (62, 62, 29, 34), hidden and shadowed rows included.
+// Every row of the class as the driver lists it (62, 62, 28 of 29, 34: see kH12Modes), hidden and shadowed
+// rows included.
 struct Rows {
     const Mode *first;
     const Mode *last;
