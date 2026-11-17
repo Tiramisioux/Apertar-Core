@@ -7417,11 +7417,7 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                     const libcamera::StreamFormats formats = config->at(0).formats();
                     // An IMX585 is probed by its mode tables (one configure per offered row of the class);
                     // any other sensor by the sizes it advertises.
-                    const auto model = camera->properties().get(libcamera::properties::Model);
-                    std::string modelName = model ? std::string(*model) : std::string();
-                    std::transform(modelName.begin(), modelName.end(), modelName.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    const bool tableProbe = modelName.find("imx585") != std::string::npos;
+                    const bool tableProbe = detectSensorFamily(camera->id()) == SensorFamily::Imx585;
                     for (const auto &pixelFormat : formats.pixelformats()) {
                         RawBitDepth depth;
                         PixelPacking packing;
@@ -7439,6 +7435,16 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                                 const auto transport = apertar::imx585::transportFor(cls, row);
                                 probeSizes.emplace_back(transport.width, transport.height);
                                 probeBinning.push_back(row.binned ? 2u : 1u);
+                            }
+                            for (const auto &advertised : formats.sizes(pixelFormat)) {
+                                bool covered = false;
+                                for (const auto &row : apertar::imx585::all(cls))
+                                    covered = covered || apertar::imx585::transportFor(cls, row) ==
+                                        apertar::imx585::Size{ advertised.width, advertised.height };
+                                if (!covered)
+                                    std::cerr << "ApertarCore sensor probe: " << pixelFormat.toString() << " "
+                                              << advertised.toString() << (clearHdr ? " clear_hdr" : " sdr")
+                                              << " is a driver mode with no IMX585 table row\n";
                             }
                         } else {
                             probeSizes = formats.sizes(pixelFormat);

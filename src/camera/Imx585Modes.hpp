@@ -3,6 +3,10 @@
 // The IMX585 modes the cinemate-port driver advertises, per class, and the size rules around them.
 // std-only: tools/imx585_modes_test.cpp includes it without libcamera.
 //
+// The original Apertar driver has 1.85:1 at 3840x2076 and binned 1920x1038 (12-bit and 10-bit), where the
+// cinemate-port driver has 3840x2072 and 1920x1036. The tables list both; the startup probe keeps the rows
+// the installed driver accepts.
+//
 // Sizes are the ACTIVE picture, the size Core records and shows. What the driver delivers (the
 // transport size) is the same for the three classes below; only 16-bit Clear HDR prepends
 // optical-black rows: +40 rows at 1x1, +20 rows binned, split evenly top and bottom, so the
@@ -54,6 +58,7 @@ inline constexpr Mode kS12Modes[] = {
     { 1024, 576, true }, { 1024, 552, true }, { 1024, 540, true }, { 1024, 512, true },
     { 1024, 464, true }, { 1024, 460, true }, { 1024, 436, true }, { 1024, 428, true },
     { 1024, 408, true }, { 1024, 400, true },
+    { 3840, 2076, false }, { 1920, 1038, true },     // 1.85:1 of the original Apertar driver
 };
 
 inline constexpr Mode kS10Modes[] = {
@@ -73,6 +78,7 @@ inline constexpr Mode kS10Modes[] = {
     { 1024, 576, true }, { 1024, 552, true }, { 1024, 540, true }, { 1024, 512, true },
     { 1024, 464, true }, { 1024, 460, true }, { 1024, 436, true }, { 1024, 428, true },
     { 1024, 408, true }, { 1024, 400, true },
+    { 3840, 2076, false }, { 1920, 1038, true },     // 1.85:1 of the original Apertar driver
 };
 
 // The driver also lists 1920x1080 binned here. Core holds it back until a capture shows that the 12-bit
@@ -87,6 +93,7 @@ inline constexpr Mode kH12Modes[] = {
     { 2048, 1080, false }, { 2048, 1024, false }, { 2048, 928, false }, { 2048, 920, false },
     { 2048, 872, false }, { 2048, 856, false }, { 2048, 816, false }, { 2048, 800, false },
     { 1440, 1080, false },
+    { 3840, 2076, false },          // a driver with 3840x2076 in SDR has it here too (the original: 4K only)
 };
 
 inline constexpr Mode kH16Modes[] = {
@@ -136,8 +143,7 @@ constexpr uint32_t bitDepthOf(Class cls)
     return 12;
 }
 
-// Every row of the class as the driver lists it (62, 62, 28 of 29, 34: see kH12Modes), hidden and shadowed
-// rows included.
+// Every row of the class (64, 64, 29, 34: see kH12Modes), hidden and shadowed rows included.
 struct Rows {
     const Mode *first;
     const Mode *last;
