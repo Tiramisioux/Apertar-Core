@@ -12535,6 +12535,7 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
         std::ostringstream body;
         body << "\"bus\":" << bus << ",\"found\":[";
         bool first = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         for (int address = 0x03; address <= 0x77; ++address) {
             const auto guess = known.find(address);
             std::string by;
@@ -12544,6 +12545,8 @@ std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const C
                 const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
                 if (!probe.busExists)
                     return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return errorReply(command.id, "I2C bus " + std::to_string(bus) + " does not answer: check the wiring.");
                 if (!probe.found)
                     continue;
                 by = probe.kernelDriver ? "kernel" : "";
