@@ -1187,8 +1187,8 @@ apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const 
     return v;
 }
 
-// The folder name for the next take of these settings; no side effects (nothing is created).
-std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
+// The folder name for the next take of these settings; `exists` says whether a name is taken. Nothing is created.
+std::string nextClipFolderName(const std::function<bool(const std::string &)> &exists, const CaptureSettings &settings,
                                const std::string &sensor, const std::chrono::system_clock::time_point &now)
 {
     using namespace apertar::clipname;
@@ -1196,13 +1196,20 @@ std::string nextClipFolderName(const std::filesystem::path &root, const CaptureS
     if (!parsed.ok)
         parsed = parse(kDefaultTemplate);
     const Values values = clipNameValues(settings, sensor, now);
-    const int clip = nextClipNumber(parsed, values, [&](const std::string &name) {
-        std::error_code ec;
-        return std::filesystem::exists(root / name, ec);
-    });
+    const int clip = nextClipNumber(parsed, values, exists);
     if (clip == 0)
         throw std::runtime_error("Could not allocate a unique clip folder.");
     return expand(parsed, values, clip);
+}
+
+// The same, probing the folders under `root` on the medium.
+std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
+                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+{
+    return nextClipFolderName([&](const std::string &name) {
+        std::error_code ec;
+        return std::filesystem::exists(root / name, ec);
+    }, settings, sensor, now);
 }
 
 std::filesystem::path withPhotoExtension(std::filesystem::path basePath, const char *extension)
@@ -11827,14 +11834,25 @@ std::string CameraController::clipNameSensorLocked() const
     return sensorFamilyName(session_->sensorFamily());
 }
 
+// No I/O here: it runs under mutex_ on every settings read and event, so it looks names up in the media
+// watcher's last listing of the root, not on the medium.
 void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
 {
     try {
-        out.clipNameExample = nextClipFolderName(mediaRootPath(mediaRoot_), out, clipNameSensorLocked(),
-                                                 std::chrono::system_clock::now());
+        out.clipNameExample = nextClipFolderName([this](const std::string &name) {
+            return clipFolderNames_.count(name) > 0;
+        }, out, clipNameSensorLocked(), std::chrono::system_clock::now());
     } catch (const std::exception &) {
         out.clipNameExample.clear();
     }
+}
+
+void CameraController::setClipFolderNames(std::set<std::string> names)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_)
+        return;   // listed before the take began: it lacks the take's folder (startRecording added it)
+    clipFolderNames_ = std::move(names);
 }
 
 bool CameraController::setClipNameTemplate(const std::string &value, std::string *stored)
@@ -12027,6 +12045,13 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     }
 
     if (simulateCamera_) recordingDropWarning_.reset();
+    if (!simulateCamera_) {
+        // The take's folder exists now; the media watcher lists the root again only after the take.
+        CaptureSettings take = settings_;
+        fillClipNameExampleLocked(take);
+        if (!take.clipNameExample.empty())
+            clipFolderNames_.insert(take.clipNameExample);
+    }
     recording_ = true;
     rampTakeBaseFps_ = settings_.fps;
     rampTakeChanged_ = false;

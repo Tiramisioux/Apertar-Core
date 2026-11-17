@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,6 +94,9 @@ public:
     // The name the NEXT clip would get with `value` (the saved template when empty), real counter and clock.
     // No side effects; false with `error` set when the template is invalid.
     bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
+    // The names in the media root, as the media watcher last listed them. The clip_name_example field is
+    // computed from these, so settings() never touches the medium.
+    void setClipFolderNames(std::set<std::string> names);
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
     bool setPreviewTdn(bool enabled);
@@ -219,6 +223,7 @@ private:
     std::map<RecordingFormat, CaptureSettings> formatSettings_;
     std::optional<CaptureSettings> stillSettings_;
     std::string mediaRoot_;
+    std::set<std::string> clipFolderNames_;                 // the media root's names (setClipFolderNames; mutex_)
     std::string lastError_;
     bool simulateCamera_ = false;
     bool recording_ = false;

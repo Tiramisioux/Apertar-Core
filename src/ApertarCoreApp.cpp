@@ -10896,6 +10896,17 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        // The clip-name example (clip_name_example) is computed from this listing, here on the watcher's own
+        // thread, so a hung medium never blocks the camera lock. Not during a take; nothing on a dead mount.
+        if (!camera_.isRecording()) {
+            std::set<std::string> names;
+            if (current.state == MediaSnapshot::State::Mounted || current.state == MediaSnapshot::State::None) {
+                std::error_code ec;
+                for (std::filesystem::directory_iterator it(options_.mediaRoot, ec), end; !ec && it != end; it.increment(ec))
+                    names.insert(it->path().filename().string());
+            }
+            camera_.setClipFolderNames(std::move(names));
+        }
         // A delete made outside Core (the touch UI removes clips itself) frees space without a trim: when the
         // mounted medium gains 1 GiB or more between two polls while nothing records, ask for one. Core's own
         // deletes already request theirs; repeated requests coalesce (kb working/dng-chain, R4).
