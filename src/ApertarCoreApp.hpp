@@ -89,6 +89,7 @@ private:
     std::string buildWebStateJson() const;
     std::string buildPresetLibraryJson() const;
     std::string buildMediaLibraryJson() const;
+    std::string buildHardwareConfigFileJson();
     void enqueuePreviewFrame(PreviewFrameDescriptor frame);
     void enqueueCurrentPreviewRegistrations();
     void updateWebPreviewRegistration(const PreviewFrameDescriptor &frame);

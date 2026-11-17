@@ -16652,7 +16652,7 @@ std::string_view webControlPageHtml()
       scans: {},             // bus -> { loading } or { found } or { error }: the Hardware card's Scan
       dpiLines: [],          // config.txt lines that load a DPI display
       gpioChips: [],         // the GPIO chips there are: { path, label, lines, header }; header = the one chip=auto means
-      apply: null,           // get_controls apply: { state, detail, pending }
+      apply: null,           // /api/config apply: { state, detail, pending }
       history: [],           // saved versions, newest first
       listening: false,
     };
@@ -18336,24 +18336,24 @@ std::string_view webControlPageHtml()
       controlsState.loading = true;
       updateControlsButtons();
       try {
-        const [controls, catalog] = await Promise.all([
-          controlsCall({ cmd: "get_controls" }),
+        const [payload, catalog] = await Promise.all([
+          fetch("/api/config", { cache: "no-store" }).then((response) => response.json()),
           controlsState.catalog ? Promise.resolve(null) : controlsCall({ cmd: "list_actions" }),
         ]);
-        if (!controls.ok)
-          throw new Error(controls.error || "Could not load the controls.");
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not load the controls.");
         if (catalog) {
           if (!catalog.ok)
             throw new Error(catalog.error || "Could not load the list of actions.");
           controlsState.catalog = catalog;
         }
-        controlsState.revision = String(controls.controls.revision || "");
-        controlsState.model = controls.controls.model || null;
-        controlsState.peripherals = controls.controls.peripherals || [];
-        controlsState.buses = controls.controls.i2c_buses || [];
-        controlsState.dpiLines = controls.controls.dpi_lines || [];
-        controlsState.gpioChips = controls.controls.gpio_chips || [];
-        controlsState.apply = controls.controls.apply || null;
+        controlsState.revision = String(payload.revision || "");
+        controlsState.model = payload.model || null;
+        controlsState.peripherals = payload.peripherals || [];
+        controlsState.buses = payload.i2c_buses || [];
+        controlsState.dpiLines = payload.dpi_lines || [];
+        controlsState.gpioChips = payload.gpio_chips || [];
+        controlsState.apply = payload.apply || null;
         controlsChipLines.clear();
         controlsSeparateTurns.clear();
         controlsReplaced.clear();
@@ -18372,7 +18372,7 @@ std::string_view webControlPageHtml()
               suffix: line.key.slice(row.base.length), value: line.raw, orig: line.key, raw: line.raw, removed: false,
             })) });
         });
-        const found = controls.controls;
+        const found = payload;
         if (found.errors > 0)
           showControlsMessage("The file has " + found.errors + (found.errors === 1 ? " error" : " errors") + ". Config shows where.", found.issues.filter((issue) => issue.error), false);
         else if (found.replaced && found.replaced.replaced)
@@ -18592,12 +18592,13 @@ std::string_view webControlPageHtml()
     // A moment after a save, read the file's state again: what Core restarted, and what still needs a restart.
     function controlsRecheckSoon() {
       window.setTimeout(async () => {
-        const reply = await controlsCall({ cmd: "get_controls" });
-        if (!reply.ok)
+        const response = await fetch("/api/config", { cache: "no-store" });
+        const payload = await response.json();
+        if (!payload.ok)
           return;
-        controlsState.apply = reply.controls.apply || null;
+        controlsState.apply = payload.apply || null;
         if (!controlsDirty() && !hardwareDirty()) {
-          controlsState.peripherals = reply.controls.peripherals || controlsState.peripherals;
+          controlsState.peripherals = payload.peripherals || controlsState.peripherals;
           renderControls();
           renderHardware();
         }

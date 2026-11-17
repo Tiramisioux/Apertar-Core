@@ -337,7 +337,7 @@ inline std::string peripheralSettingsJson(const Document &doc, const std::string
     return out + "]";
 }
 
-// {"sections":[...],"rows":[...],"gpio_pins":{"used":[...],"free":[...]}}: the part of get_controls the page draws.
+// {"sections":[...],"rows":[...],"gpio_pins":{"used":[...],"free":[...]}}: the part of GET /api/config the page draws.
 inline std::string modelJson(const Document &doc)
 {
     std::string out = "{\"sections\":[";
