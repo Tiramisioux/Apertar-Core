@@ -12784,6 +12784,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, "Send the whole file (text=) or single keys (set.<section>.<key>=), not both.");
         if (!text && edits.empty())
             return errorReply(command.id, "set_controls needs text= (the whole file), restore=true, or set.<section>.<key>=value.");
+        // A whole file, restored text included, gets the same checks as POST /api/config.
+        if (std::string message; text && !checkHardwareConfigText(*text, &message))
+            return errorReply(command.id, message);
         hardware::StoreFlags flags;
         flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
         const std::pair<const char *, bool *> flagFields[] = {
