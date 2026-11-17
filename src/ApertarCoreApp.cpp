@@ -7388,7 +7388,7 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
     std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
     out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
         << ",\"sound_text\":\"" << escapeJson(soundText) << "\""
-        << ",\"audio_url\":\"" << (hasAudio ? "/api/media/file?kind=folder&id=" + escapeJson(id) + "&name=" + escapeJson(f.name) + ".wav" : std::string()) << "\""
+        << ",\"audio_url\":\"" << (hasAudio ? escapeJson("/api/media/file?kind=folder&id=" + urlEncodeComponent(id) + "&name=" + urlEncodeComponent(f.name + ".wav")) : std::string()) << "\""
         << ",\"fps_badge\":\"" << fpsBuf << " FPS\""
         << ",\"info_line\":\"cDNG sequence \u2022 " << f.frames.count() << " frames\""
         << ",\"meta\":{\"captured\":\"" << escapeJson(f.shotDateText) << "\",\"type\":\"cDNG sequence\""
