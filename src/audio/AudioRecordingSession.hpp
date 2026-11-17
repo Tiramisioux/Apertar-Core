@@ -94,7 +94,7 @@ private:
     uint64_t videoLastBootUs_ = 0;
     int64_t videoLastDurationUs_ = 0;
     uint64_t videoEndBootUs_ = 0;
-    uint64_t capturedBytes_ = 0;
+    uint64_t capturedBytes_ = 0;  // bytes in rawStream_; the writer thread counts them
     uint64_t audioEndBootUs_ = 0;
     // Least-squares fit of samples captured against each block's BOOTTIME stamp,
     // for the clock-drift estimate (see finalizeWav).
