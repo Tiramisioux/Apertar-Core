@@ -18629,10 +18629,21 @@ std::string_view webControlPageHtml()
       });
     }
 
+    async function fetchConfigHistory(name) {
+      const response = await fetch("/api/config/history" + (name ? "?name=" + encodeURIComponent(name) : ""), { cache: "no-store" });
+      const payload = await response.json();
+      if (!payload.ok)
+        throw new Error(payload.error || "Could not read that version.");
+      return payload;
+    }
+
     // T42 Undo last save: put back the version the last save replaced (it is in the file's history).
     async function loadControlsHistory() {
-      const reply = await controlsCall({ cmd: "controls_history" });
-      controlsState.history = reply.ok ? reply.history || [] : [];
+      try {
+        controlsState.history = (await fetchConfigHistory("")).history || [];
+      } catch (error) {
+        controlsState.history = [];
+      }
       const undo = document.getElementById("undoControlsButton");
       if (undo)
         undo.disabled = !controlsState.history.some((entry) => entry.by !== "adopted");
@@ -18658,9 +18669,11 @@ std::string_view webControlPageHtml()
         return;
       if (!window.confirm("Put back the file as it was before the save at " + last.saved_at + "? Unsaved changes on this page are dropped."))
         return;
-      const version = await controlsCall({ cmd: "controls_history", name: last.name });
-      if (!version.ok) {
-        showToast(version.error || "Could not read that version.", true);
+      let version;
+      try {
+        version = await fetchConfigHistory(last.name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const result = await controlsCall({ cmd: "set_controls", base: controlsState.revision, text: version.text, by: "webui_undo" });
@@ -18970,9 +18983,11 @@ std::string_view webControlPageHtml()
         return;
       if (state.configDirty && !window.confirm("Replace the unsaved text in the editor with that version?"))
         return;
-      const reply = await controlsCall({ cmd: "controls_history", name: name });
-      if (!reply.ok) {
-        showToast(reply.error || "Could not read that version.", true);
+      let reply;
+      try {
+        reply = await fetchConfigHistory(name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const editor = document.getElementById("settingsConfigEditor");
