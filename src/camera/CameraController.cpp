@@ -8872,7 +8872,10 @@ private:
             ? std::array<bool, 2>{ false, true }
             : std::array<bool, 2>{ true, false };
         const bool allowAutoSensorConfigFallback = monochromeSensor_ || sensorFamily_ == SensorFamily::Imx294 ||
-                                                   sensorFamily_ == SensorFamily::Imx577;
+                                                   sensorFamily_ == SensorFamily::Imx577 ||
+                                                   (sensorFamily_ == SensorFamily::Imx585 &&
+                                                    sanitized.resolution.width == 3840 &&
+                                                    isImx585LegacyCropResolution(sanitized.resolution));
         std::ostringstream rejectionLog;
 
         for (const SensorModeSelection &sensorMode : sensorModes) {
