@@ -342,7 +342,10 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         result.error = "Script paths are changed over ssh, not here.";
         return result;
     }
-    result.newErrors = hwconf::newErrors(hwconf::validate(current, facts), result.issues);
+    // A whole-file save is written whatever the checker finds, as in 1.6.0: the readers skip what they cannot use
+    // and the reply names the issues. A key edit that adds an error is refused: the page writes keys nobody typed.
+    if (edits)
+        result.newErrors = hwconf::newErrors(hwconf::validate(current, facts), result.issues);
     if (!result.newErrors.empty() && !flags.force) {
         result.code = "errors";
         result.error = "Not saved: " + std::to_string(result.newErrors.size()) + " new error" +

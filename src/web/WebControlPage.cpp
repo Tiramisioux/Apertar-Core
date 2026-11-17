@@ -18903,7 +18903,7 @@ std::string_view webControlPageHtml()
       }
       const errors = found.filter((issue) => issue.error).length;
       showConfigIssues("Checked: " + errors + (errors === 1 ? " error" : " errors") + ", " + (found.length - errors) +
-        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save is refused until the errors are fixed." : "."), found);
+        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save writes the file anyway; the readers skip what they cannot use." : "."), found);
     }
 
     // T43: the lines that differ between the loaded file and the editor (a longest-common-subsequence line diff),
