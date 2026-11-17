@@ -314,7 +314,7 @@ sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
 
 ### Preview temporal denoise
 
-The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). **It is off by default**, because it is the most expensive step of the ISP back end. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on.
+The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). **It is off by default**, because it is the most expensive step of the ISP back end. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on. H.264, ProRes and photo mode save the ISP output, so there Core always loads the tuning file as it is and the switch has no effect; changing the record format or the mode restarts the pipeline on the right file.
 
 At 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
 
