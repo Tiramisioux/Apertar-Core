@@ -5083,23 +5083,23 @@ clear_hdr_iso_max_12bit=720
 clear_hdr_iso_max_16bit=1585
 
 [display]
-# Resolutions: 1920x1080(Default), 720x720, 640x480, 800x480, 1280x720, 1024x600
+# Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
 # Layouts:
 # square (For 720x720)
 # landscape_compact (For 640x480 and 800x480)
 # landscape_medium (For 1024x600)
 # landscape (For 1280x720)
 # landscape_large (For 1920x1080)
-ui_width=1920
-ui_height=1080
-ui_layout=landscape_large
+ui_width=720
+ui_height=720
+ui_layout=square
 controls_opacity=1.0
 # Zoom button magnification: 1.0-4.0; restart the UI after changing this.
 zoom_toggle_factor=4.0
 controls_mode=Light
 rotation=0
 windowed=false
-hdmi_external_only=true
+hdmi_external_only=false
 
 [run_script]
 # run_script (alias script) runs all configured scripts sequentially, up to five.
