@@ -535,28 +535,30 @@ inline std::string applyEdit(const std::string &text, const Edit &edit)
         return fromRaw(kept, finalNewline);
     }
     const std::string newLine = edit.key + "=" + edit.value;
-    // 1. Replace the first line of this key in the first section of this name; drop later copies.
-    std::optional<size_t> firstHeader, lastInSection, replaced;
-    std::vector<size_t> drop;
+    // 1. Replace the first line of this key in every copy of this section (the readers use the later lines);
+    //    drop later lines of the key inside the same copy.
+    std::optional<size_t> firstHeader, lastInSection;
+    std::vector<size_t> replaced, drop;
+    bool keyInCopy = false;
     for (size_t i = 0; i < L.size(); ++i) {
         if (L[i].kind == Kind::Section && L[i].section == edit.section && !firstHeader) firstHeader = i;
         if (!firstHeader || L[i].section != edit.section) continue;
-        if (L[i].kind == Kind::Section && i != *firstHeader) break;   // a second copy of the section: leave it
+        if (L[i].kind == Kind::Section) keyInCopy = false;   // a new copy of the section
         if (L[i].kind != Kind::Blank) lastInSection = i;
         if (L[i].kind == Kind::Key && L[i].key == edit.key) {
-            if (replaced) drop.push_back(i);
-            else replaced = i;
+            if (keyInCopy) drop.push_back(i);
+            else replaced.push_back(i);
+            keyInCopy = true;
         }
     }
-    if (replaced) {
-        const size_t i = *replaced;
-        const std::string indent = lines[i].substr(0, lines[i].find_first_not_of(" \t"));
+    if (!replaced.empty()) {
         std::vector<std::string> out;
         for (size_t j = 0; j < lines.size(); ++j) {
             if (std::find(drop.begin(), drop.end(), j) != drop.end()) continue;
-            if (j == i) {
-                if (!L[i].comment.empty())   // keep the comment, on its own line (inline comments break two readers)
-                    out.push_back(indent + (L[i].comment[0] == '#' || L[i].comment[0] == ';' ? "" : "# ") + L[i].comment);
+            if (std::find(replaced.begin(), replaced.end(), j) != replaced.end()) {
+                const std::string indent = lines[j].substr(0, lines[j].find_first_not_of(" \t"));
+                if (!L[j].comment.empty())   // keep the comment, on its own line (inline comments break two readers)
+                    out.push_back(indent + (L[j].comment[0] == '#' || L[j].comment[0] == ';' ? "" : "# ") + L[j].comment);
                 out.push_back(indent + newLine);
             } else {
                 out.push_back(lines[j]);
@@ -564,7 +566,7 @@ inline std::string applyEdit(const std::string &text, const Edit &edit)
         }
         return fromRaw(out, finalNewline);
     }
-    if (firstHeader) {   // 2. A new key goes after the section's last non-blank line.
+    if (firstHeader) {   // 2. A new key goes after the last non-blank line of the section's last copy.
         lines.insert(lines.begin() + static_cast<long>(*lastInSection + 1), newLine);
         return fromRaw(lines, finalNewline);
     }
