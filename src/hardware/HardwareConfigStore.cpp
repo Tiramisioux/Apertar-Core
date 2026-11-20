@@ -347,8 +347,11 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         return result;
     }
 
+    // APERTAR_SCRIPT_PATHS=ssh: a new [run_script] path is set over ssh only (1.6.0 lets the browser write it).
+    const char *scriptPathsEnv = std::getenv("APERTAR_SCRIPT_PATHS");
     const auto nextPaths = scriptPaths(hwconf::parse(next));
-    if (nextPaths != scriptPaths(currentDoc) && !keptScriptPaths(notes_, nextPaths)) {
+    if (scriptPathsEnv && std::string(scriptPathsEnv) == "ssh" && nextPaths != scriptPaths(currentDoc) &&
+        !keptScriptPaths(notes_, nextPaths)) {
         result.code = "script_paths";
         result.error = "Script paths are changed over ssh, not here.";
         return result;

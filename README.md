@@ -174,7 +174,7 @@ P2=capture
 
 These are mapping examples, not a complete hardware configuration. Use the correct section, pin numbering and wiring for your device. Grouped toggles flip independently; they do not force every option into the same state.
 
-The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust. The script paths in `[run_script]` are changed over ssh: the WebUI refuses a save that sets a new path, so nobody on the camera's network can point a button at a script. Undo, History and restore may put back a version the camera saved earlier, with the paths that version had.
+The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust. Anyone who can reach the WebUI can change the script paths in `[run_script]`, as in Apertar 1.6.0. With `APERTAR_SCRIPT_PATHS=ssh` in Core's environment (a systemd drop-in with `Environment=`) the WebUI refuses a save that sets a new path, so a path can only be set over ssh; Undo, History and restore may still put back a version the camera saved earlier, with the paths that version had.
 
 ## Boot Config (config.txt)
 
