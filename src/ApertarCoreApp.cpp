@@ -8564,6 +8564,30 @@ bool ApertarCoreApp::start()
             std::cerr << "Apertar standby USB recovery: " << result.output << '\n';
     }
 
+    // No hardware file at any path the readers try, and no record that one existed: write the template, as the 1.6.0
+    // touch UI did at its first start. A file moved away leaves a record, so it is offered for restore, not replaced.
+    bool wroteDefault = false;
+    {
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::filesystem::path notes = hardware::HardwareConfigStore::defaultNotesDirectory();
+        std::error_code error;
+        bool known = std::filesystem::exists(notes / "hardware-last-written.conf", error);
+        for (const auto &path : hardwareConfigCandidatePaths())
+            known = known || std::filesystem::is_regular_file(path, error);
+        for (const auto &entry : std::filesystem::directory_iterator(notes / "hardware-history", error))
+            known = known || entry.path().filename().string().rfind("adopted-", 0) == 0;
+        if (!known) {
+            const hardware::StoreResult result =
+                store.replace(std::string(hwconf::kAbsentRevision), defaultHardwareConfigTemplate(), "core");
+            wroteDefault = result.written;
+            if (wroteDefault)
+                std::cerr << "ApertarCore controls: wrote the default " << hardwareConfigDisplayPath(store.path()) << "\n";
+            else
+                std::cerr << "ApertarCore controls: could not write the default " << hardwareConfigDisplayPath(store.path())
+                          << ": " << result.error << "\n";
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(previewMutex_);
         previewPublisherRunning_ = true;
@@ -8695,7 +8719,7 @@ bool ApertarCoreApp::start()
         const size_t errors = controlsErrorCount(issues);
         controlsErrors_ = errors;
         controlsWarnings_ = issues.size() - errors;
-        const bool adopted = store.adopt();
+        const bool adopted = !wroteDefault && store.adopt();   // Core's own template is not "as Core first found it"
         refreshBufferRequest();
         std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
                   << errors << " errors, " << issues.size() - errors << " warnings"

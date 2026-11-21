@@ -162,6 +162,8 @@ Hardware mappings are configured in:
 /home/pi/apertar-hardware.conf
 ```
 
+When no hardware file exists (and Core has no record of an earlier one), Core writes its template to `~/apertar-hardware.conf` (`$APERTAR_HARDWARE_CONFIG` if set) at start, also with `--simulate`. It never replaces a file that exists, here or under `/boot`.
+
 Depending on the connected hardware, you can configure GPIO/PCF8574 buttons, rotary controls, recording LEDs, motion sensors and other supported accessories.
 
 Buttons can step settings, jump to specific values, toggle monitoring tools, trigger standby or launch configured scripts. A button can run up to six actions, for example:
