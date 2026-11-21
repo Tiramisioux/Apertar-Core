@@ -10088,11 +10088,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
     }
 
     uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    bool secondCameraRecords = false;
     // Time left is one value for the rig (design 6.4): both Cores fill one card, so free space over the rates of the
     // cameras in record_cameras. With no cam1 configured this is today's one-camera figure.
     if (!secondaryRole() && cam1Client_.configured()) {
         const std::string cameras = recordCamerasNow(cam1Client_, uiSettings, camera_.isRecording());
         const uint64_t cam1Rate = cam1EstimatedBytesPerSecond(cam1Client_.snapshot().settings, settings);
+        secondCameraRecords = cameras == "both" || cameras == "cam1";
         if (cameras == "both")
             estimatedBytesPerSecond += cam1Rate;
         else if (cameras == "cam1" && cam1Rate > 0)
@@ -10115,12 +10117,15 @@ std::string ApertarCoreApp::buildWebStateJson() const
             recordStillsLeft = std::floor(static_cast<double>(mediaFreeBytes) / estimatedStillFrameBytes);
     }
 
-    // The whole card's recording time in the current mode; the bar is time left out of it.
+    // One camera: the bar is time left out of 2 hours. With the second camera in the take set, out of the whole
+    // card's recording time in the current mode.
     std::optional<double> cardRecordMinutes;
-    if (estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
+    if (secondCameraRecords && estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
         cardRecordMinutes = static_cast<double>(mediaTotalBytes) / static_cast<double>(estimatedBytesPerSecond) / 60.0;
     std::optional<double> timeLeftPercent;
-    if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
+    if (recordTimeLeftMinutes.has_value() && !secondCameraRecords)
+        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / 120.0) * 100.0, 0.0, 100.0);
+    else if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
         timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / cardRecordMinutes.value()) * 100.0, 0.0, 100.0);
 
     std::optional<double> batteryPercent;
@@ -10298,7 +10303,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"record_time_left_minutes\":" << jsonNumberOrNull(recordTimeLeftMinutes, 1)
         << ",\"record_stills_left\":" << jsonNumberOrNull(recordStillsLeft, 0)
         << ",\"time_left_percent\":" << jsonNumberOrNull(timeLeftPercent, 1)
-        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings, cardRecordMinutes)) << "\""
+        << ",\"time_left_label\":\"" << escapeJson(secondCameraRecords ? timeLeftEstimateLabel(settings, cardRecordMinutes)
+                                                    : std::string("Current format estimate")) << "\""
         << ",\"time_zone\":\"" << escapeJson(currentTimeZone) << "\""
         << ",\"time_zone_options\":" << jsonStringArray(timeZones)
         << ",\"local_time_input\":\"" << escapeJson(localDateTimeValue) << "\""
