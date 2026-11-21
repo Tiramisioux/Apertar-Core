@@ -5934,15 +5934,15 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
-                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
+                  <p class="settings-card-copy">Mode sets the timecode of the screens and the clips. Files can set the clips' and the audio's timecode apart. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
                 </div>
               </div>
               <div class="field-stack">
-                <span class="input-label">UI timecode</span>
+                <span class="input-label">Mode</span>
                 <div class="pill-grid ladder-pair" id="settingsTimecodeOptions"></div>
               </div>
               <div class="field-stack">
-                <span class="input-label">File timecode (DNG, MLV, ProRes, H.264, WAV)</span>
+                <span class="input-label">Files (DNG, MLV, ProRes, H.264, WAV)</span>
                 <div class="pill-grid ladder-pair" id="settingsFileTimecodeOptions"></div>
               </div>
             </div>
@@ -11071,14 +11071,30 @@ std::string_view webControlPageHtml()
     }
 
     // The UI timecode (what the screens show, UI.conf) and the file timecode (Core's timecode_mode:
-    // DNG, MLV, ProRes, H.264 and the WAV) are set apart; set_timecode_mode takes target=ui|files.
+    // DNG, MLV, ProRes, H.264 and the WAV). Mode sets both, as the single control of 1.6.0; the file
+    // timecode is set apart only after Files is given a fixed value (ui.file_timecode_separate), and then
+    // set_timecode_mode takes target=ui|files.
     function uiTimecodeLabel(snapshot) {
       const ui = (snapshot && snapshot.ui) || {};
-      return timecodeModeLabel(ui.timecode_mode || (snapshot && snapshot.timecode_mode));
+      // ui.timecode_mode is UI.conf's "Rec Run", timecode_mode is Core's "rec_run"
+      return timecodeModeLabel(String(ui.timecode_mode || (snapshot && snapshot.timecode_mode) || "").replace(" ", "_"));
     }
 
     function fileTimecodeLabel(snapshot) {
       return timecodeModeLabel(snapshot && snapshot.timecode_mode);
+    }
+
+    function fileTimecodeSeparate(snapshot) {
+      const ui = (snapshot && snapshot.ui) || {};
+      return ui.file_timecode_separate === true;
+    }
+
+    function timecodeFilesChoices() {
+      return [{ value: "Same as Mode", label: "Same as Mode", enabled: true }].concat(timecodeChoices());
+    }
+
+    function timecodeFilesLabel(snapshot) {
+      return fileTimecodeSeparate(snapshot) ? fileTimecodeLabel(snapshot) : "Same as Mode";
     }
 
     function timecodeSummaryLabel(snapshot) {
@@ -11088,7 +11104,20 @@ std::string_view webControlPageHtml()
     }
 
     function timecodeCommand(value, target) {
-      return { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run", target };
+      const command = { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run" };
+      if (target)
+        command.target = target;
+      return command;
+    }
+
+    // Mode: no target, so Core sets both; while the files are set apart it sets the UI timecode only.
+    function timecodeModeCommand(value) {
+      return timecodeCommand(value, fileTimecodeSeparate(state.snapshot) ? "ui" : "");
+    }
+
+    // Files: Same as Mode sets both again (Core writes fileTimecodeSeparate=false), a fixed value sets the files apart.
+    function timecodeFilesCommand(value) {
+      return value === "Same as Mode" ? timecodeCommand(uiTimecodeLabel(state.snapshot)) : timecodeCommand(value, "files");
     }
 
     function autofocusModeLabel(modeValue) {
@@ -12439,12 +12468,12 @@ std::string_view webControlPageHtml()
             break;
           }
           case "timecode": {
-            card.appendChild(createFavoriteSelectBlock("UI Timecode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "ui"));
+            card.appendChild(createFavoriteSelectBlock("Mode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeModeCommand(value));
             }));
-            card.appendChild(createFavoriteSelectBlock("File Timecode", timecodeDisplayName(fileTimecodeLabel(snapshot)), timecodeChoices(), fileTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "files"));
-            }));
+            card.appendChild(createFavoriteSelectBlock("Files", fileTimecodeSeparate(snapshot) ? timecodeDisplayName(fileTimecodeLabel(snapshot)) : "Same as Mode", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeFilesCommand(value));
+            }, 3));
             break;
           }
           case "autofocus": {
@@ -15776,6 +15805,10 @@ std::string_view webControlPageHtml()
             snapshot.timecode_mode = mode;
           if (payload.target !== "files")
             uiState.timecode_mode = timecodeModeLabel(mode);
+          if (payload.target === "ui" || payload.target === "files")
+            uiState.file_timecode_separate = true;
+          else if (uiState.file_timecode_separate)
+            uiState.file_timecode_separate = false;
           break;
         }
         case "set_af_mode":
@@ -18016,17 +18049,21 @@ std::string_view webControlPageHtml()
         await applyStillTimelapseToggle(value === "On");
       }, 2);
 
-      for (const [id, target, current] of [["settingsTimecodeOptions", "ui", uiTimecodeLabel(snapshot)],
-                                           ["settingsFileTimecodeOptions", "files", fileTimecodeLabel(snapshot)]]) {
-        buildOptionButtons(id, timecodeChoices(),
-          current, async (value) => {
-            try {
-              await sendCommand(timecodeCommand(value, target));
-            } catch (error) {
-              showToast(error.message, true);
-            }
-          }, 2);
-      }
+      buildOptionButtons("settingsTimecodeOptions", timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeModeCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      buildOptionButtons("settingsFileTimecodeOptions", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeFilesCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 3);
 
       buildOptionButtons("settingsAutofocusModeOptions", autofocusModeOptions, autofocusModeText, async (value) => {
         try {

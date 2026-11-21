@@ -10339,6 +10339,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << "}"
         << ",\"ui\":{"
         << "\"timecode_mode\":\"" << escapeJson(uiSettings.timecodeMode) << "\""
+        << ",\"file_timecode_separate\":" << (uiSettings.fileTimecodeSeparate ? "true" : "false")
         << ",\"focus_peaking_enabled\":" << (uiSettings.focusPeakingEnabled ? "true" : "false")
         << ",\"focus_peaking_threshold\":" << jsonNumber(uiSettings.focusPeakingThreshold, 2)
         << ",\"focus_peaking_color\":\"" << escapeJson(uiSettings.focusPeakingColor) << "\""
