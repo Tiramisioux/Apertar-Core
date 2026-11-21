@@ -5779,6 +5779,7 @@ std::string_view webControlPageHtml()
                   <span class="input-label">Log</span>
                   <div class="pill-grid" id="settingsCdngLogOptions"></div>
                   <p class="settings-card-copy" id="settingsCdngLogNote">Linear storage.</p>
+                  <span class="subtle-note">Makes Clear HDR 16-bit files a quarter smaller but costs 2 to 3 fps in 4K. No effect in SDR, no cost at 2K.</span>
                 </label>
               </div>
               <div class="settings-field-grid hidden" id="settingsBufferModeField" data-search="buffer ram frames queue safety stop dropped">
@@ -6113,6 +6114,7 @@ std::string_view webControlPageHtml()
                   <span class="capture-value" id="settingsHdmi0Value">--</span>
                 </div>
               </div>
+              <span class="subtle-note">A connected WebUI costs about 0.5 fps, only at the limit of 4K Clear HDR. Close it on the shoot day.</span>
               <div class="field-stack">
                 <span class="input-label">Recording frame</span>
                 <div class="pill-grid" id="settingsRecordingFrameOptions"></div>
@@ -6204,6 +6206,7 @@ std::string_view webControlPageHtml()
                     <span>Focus peaking</span>
                   </div>
                   <div class="pill-grid" id="settingsFocusPeakingOptions"></div>
+                  <span class="subtle-note">No measured cost. At the limit of 4K Clear HDR the camera lost fewer frames with it on. Leave it on.</span>
                 </section>
                 <div class="settings-field-grid">
                   <div class="field-stack">
@@ -6223,6 +6226,7 @@ std::string_view webControlPageHtml()
                     <span>Zebra</span>
                   </div>
                   <div class="pill-grid" id="settingsZebraOptions"></div>
+                  <span class="subtle-note">No measured cost. At the limit of 4K Clear HDR the camera lost fewer frames with it on. Leave it on.</span>
                 </section>
                 <div class="settings-field-grid">
                   <div class="field-stack">
@@ -6367,6 +6371,7 @@ std::string_view webControlPageHtml()
                     <span>Record Audio</span>
                   </div>
                   <div class="pill-grid" id="settingsRecordAudioOptions"></div>
+                  <span class="subtle-note">Costs under 1 fps, only at the limit of 4K Clear HDR. Record sound as you like; at the limit, turning it off gains about 1 fps.</span>
                 </section>
               </div>
 
@@ -6663,7 +6668,7 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Preview temporal denoise</span>
                 </div>
-                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Raw recordings and photos are never affected; H.264 and ProRes always keep it.</span>
+                <span class="subtle-note">Costs about 5 fps and drops frames in every 4K mode; leave it off while recording 4K. No cost at 2K.</span>
                 <div class="pill-grid" id="settingsPreviewTdnOptions"></div>
               </section>
               <section class="select-block">
@@ -6677,13 +6682,14 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Frame-rate phase lock</span>
                 </div>
-                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
+                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock. Costs about 1 fps at the limit of 4K Clear HDR and Log; no cost at 2K or in lossless modes. Use it only when you sync to something.</span>
                 <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
               </section>
               <section class="select-block" data-search="frames per folder part split clip folder dng take long">
                 <div class="select-topline">
                   <span>Frames per folder</span>
                 </div>
+                <span class="subtle-note">Needed for long cDNG takes: a folder with many files slows file creation. No effect on MLV, ProRes and H.264.</span>
                 <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
                 <div class="field-stack">
                   <input class="settings-input" id="settingsFramesPerFolderInput" type="number" min="0" max="100000" step="1" value="0">
