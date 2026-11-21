@@ -8763,6 +8763,19 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.body = commandclasses::kSecondaryRefusal;
         return response;
     }
+    // Playback and downloads are held (409) while a take, a write, the speed test, standby or missing media needs the card.
+    const auto holdResponse = [](const std::string &hold) {
+        WebServer::Response response;
+        response.status = 409;
+        response.contentType = "application/json; charset=utf-8";
+        const char *sentence = hold == "writing" ? "Wait for the current capture to finish writing to media."
+            : hold == "media_test" ? "Wait for the media speed test to finish first."
+            : hold == "standby" ? "Wake the camera first."
+            : hold == "media" ? "Mount media first."
+            : "Stop recording or the timelapse before playing or downloading media.";
+        response.body = errorReply(-1, sentence);
+        return response;
+    };
 
     if (request.method == "OPTIONS") {
         WebServer::Response response;
@@ -8864,11 +8877,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         const std::string hold = playbackHoldReason();
         playback::ClipFacts facts;
         if (!hold.empty()) {
-            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok) {
-                response.status = 409;
-                response.body = errorReply(-1, "Playback held: " + hold + ".");
-                return response;
-            }
+            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok)
+                return holdResponse(hold);
         } else {
             facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
             if (!facts.ok) {
@@ -8903,16 +8913,13 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A frame needs kind=folder, id, n and a width of 320, 480, 640, 960, 1280 or 1920.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const std::filesystem::path mediaRoot(options_.mediaRoot);
         const auto itemPath = resolveMediaLibraryPath(mediaRoot, *requestedId);
         if (!itemPath || !std::filesystem::is_directory(*itemPath)) {
-            response.status = 404;
-            response.body = "{\"ok\":false,\"error\":\"This clip was removed.\",\"gone\":true}";
+            response.status = 410;
+            response.body = errorReply(-1, "This clip was removed.");
             return response;
         }
         const playback::ClipFacts facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
@@ -8930,15 +8937,12 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             *requestedId, *itemPath, facts.frames, number, static_cast<uint32_t>(width), facts.token,
             [] { return playbackYield().active(playbackNowMs()); });
         if (frame.status != 200) {
+            // The read stopped because a take, a media test or an eject began: name the hold.
+            if (frame.status == 409)
+                return holdResponse(playbackHoldReason());
             response.status = frame.status;
-            if (frame.status == 409) {
-                // The read stopped because a take, a media test or an eject began: name the hold.
-                std::string why = playbackHoldReason();
-                if (why.empty()) why = "recording";
-                response.body = "{\"ok\":false,\"error\":\"Playback held: " + why + ".\",\"hold\":\"" + why + "\"}";
-            }
-            else if (frame.busy)
-                response.body = "{\"ok\":false,\"busy\":true}";
+            if (frame.busy)
+                response.body = errorReply(-1, "Playback is busy. Try again in a moment.");
             else
                 response.body = errorReply(-1, frame.error);
             return response;
@@ -8973,11 +8977,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A sound request needs kind=folder, id and the name of a .wav file in the clip.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const auto itemPath = resolveMediaLibraryPath(std::filesystem::path(options_.mediaRoot), *requestedId);
         std::error_code ec;
         const std::filesystem::path file = itemPath ? *itemPath / *requestedName : std::filesystem::path();
@@ -9104,13 +9105,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         const auto requestedKind = queryParameterValue(request.query, "kind");
         const auto requestedId = queryParameterValue(request.query, "id");
@@ -9233,13 +9229,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download-selected") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         std::string errorMessage;
         const std::vector<MediaSelection> selections = mediaSelectionsFromQuery(request.query, &errorMessage);

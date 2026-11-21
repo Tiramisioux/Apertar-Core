@@ -13602,7 +13602,7 @@ std::string_view webControlPageHtml()
       document.getElementById("pbvPlay").setAttribute("aria-label", v.playing ? "Pause" : "Play");
     }
 
-    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone, stale.
+    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone (410), stale (404).
     async function pbvFetchFrame(number, width) {
       const v = state.pb.viewer;
       const url = "/api/media/frame?kind=folder&id=" + encodeURIComponent(v.item.id) + "&n=" + number + "&w=" + width
@@ -13618,10 +13618,10 @@ std::string_view webControlPageHtml()
         return { outcome: "hold" };
       if (response.status === 503)
         return { outcome: "busy" };
-      if (response.status === 404) {
-        const body = await response.json().catch(() => ({}));
-        return { outcome: body.gone ? "gone" : "stale" };
-      }
+      if (response.status === 410)
+        return { outcome: "gone" };
+      if (response.status === 404)
+        return { outcome: "stale" };
       if (!response.ok)
         return { outcome: "busy" };
       try {
@@ -14062,7 +14062,16 @@ std::string_view webControlPageHtml()
         const response = await fetch("/api/media/clip?kind=folder&id=" + encodeURIComponent(item.id), { cache: "no-store" });
         clip = await response.json();
         if (response.status === 409) {
-          pbvApplyHold(clip.hold || state.pb.snapshotHold || "recording");
+          // The poll may be a second old: ask Core which hold it is (GET /api/state takes no lock).
+          let hold = "recording";
+          try {
+            const snapshot = await (await fetch("/api/state", { cache: "no-store" })).json();
+            hold = String(snapshot.playback_hold || "") || hold;
+          } catch (error) {
+            hold = state.pb.snapshotHold || hold;
+          }
+          if (state.pb.viewer === v)
+            pbvApplyHold(hold);
           return;
         }
         if (!response.ok || !clip.ok)
