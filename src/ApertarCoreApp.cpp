@@ -1909,6 +1909,7 @@ struct SharedUiSettingsSnapshot
     std::string externalMonitorInfoOverlay = "On";
     std::string externalMonitorOrientation = "Landscape";
     std::string timecodeMode = "Free Run";
+    bool fileTimecodeSeparate = false;   // true once the operator sets the file timecode apart from timecodeMode
     bool photoModeEnabled = false;
     bool photoLongExposureEnabled = false;
     bool photoBracketingEnabled = false;
@@ -2104,6 +2105,8 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.externalMonitorOrientation = normalizeExternalMonitorOrientationValue(value);
         else if (key == "timecodeMode")
             snapshot.timecodeMode = value == "Rec Run" ? "Rec Run" : "Free Run";
+        else if (key == "fileTimecodeSeparate")
+            snapshot.fileTimecodeSeparate = parseUiSettingsBool(value, false);
         else if (key == "photoModeEnabled")
             snapshot.photoModeEnabled = parseUiSettingsBool(value, snapshot.photoModeEnabled);
         else if (key == "photoLongExposureEnabled")
@@ -8141,6 +8144,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
               uiValues.count("timecodeMode")
                   ? normalizeTimecodeModeValue(uiValues.at("timecodeMode"))
                   : uiSnapshot.timecodeMode);
+    addBoolFromMap("fileTimecodeSeparate", uiSnapshot.fileTimecodeSeparate);
     addBoolFromMap("photoModeEnabled", false);
     addBoolFromMap("photoLongExposureEnabled", uiSnapshot.photoLongExposureEnabled);
     addBoolFromMap("photoBracketingEnabled", uiSnapshot.photoBracketingEnabled);
@@ -14536,10 +14540,19 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (target != "ui" && !camera_.setTimecodeMode(mode))
             return errorReply(command.id, camera_.lastError());
 
+        // UI.conf fileTimecodeSeparate: true once the operator sets the file timecode apart (ui or files),
+        // false again by a change of both; a camera that never sets it apart gets no key.
         if (target != "files") {
-            (void)updateSharedUiGeneralSettings({
+            std::vector<std::pair<std::string, std::string>> updates = {
                 { "timecodeMode", mode == TimecodeMode::RecRun ? "Rec Run" : "Free Run" }
-            });
+            };
+            if (target == "ui")
+                updates.emplace_back("fileTimecodeSeparate", "true");
+            else if (readSharedUiSettings().fileTimecodeSeparate)
+                updates.emplace_back("fileTimecodeSeparate", "false");
+            (void)updateSharedUiGeneralSettings(updates);
+        } else {
+            (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
         }
         return okReply(command.id, settingsBody(camera_.settings()));
     }
@@ -15828,6 +15841,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             !addBoolUpdate("frameBufferBarEnabled") ||
             !addBoolUpdate("recordingRedTimecodeEnabled") ||
             !addBoolUpdate("audioRecordedOutlineEnabled") ||
+            !addBoolUpdate("fileTimecodeSeparate") ||
             !addBoolUpdate("soundRecorderEnabled") ||
             !addBoolUpdate("recordAudioEnabled") ||
             !addBoolUpdate("recordGyroEnabled") ||
