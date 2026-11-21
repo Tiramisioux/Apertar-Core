@@ -8665,6 +8665,14 @@ bool ApertarCoreApp::start()
         camera_.applyCapturePreset(next);
     }
 
+    // A camera that already has two different timecodes (the UI.conf mode and camera_settings.conf) keeps them
+    // apart: fileTimecodeSeparate is written once, so the touch UI does not copy one over the other.
+    if (!secondaryRole() && !stillSettings.fileTimecodeSeparate &&
+        stillSettings.timecodeMode != (camera_.settings().timecodeMode == TimecodeMode::RecRun ? "Rec Run" : "Free Run")) {
+        (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
+        std::cerr << "ApertarCore timecode: UI and file timecode differ, kept apart (fileTimecodeSeparate=true)\n";
+    }
+
     if (!controlServer_.start(options_.socketPath, [this](const std::string &line) {
             return handleRequest(line);
         })) {
