@@ -2239,7 +2239,7 @@ SharedUiSettingsSnapshot readSharedUiSettings()
     return snapshot;
 }
 
-// The dual-sensor settings as the `ui` object of /api/state and of the socket's get_state carries them (no braces).
+// The dual-sensor settings as the `ui` object of /api/state carries them (no braces).
 std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
 {
     return std::string("\"dual_sensor_enabled\":") + (ui.dualSensorEnabled ? "true" : "false")
@@ -10401,7 +10401,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"favorites_order\":" << jsonStringArray(uiSettings.favoritesOrder)
         << "," << valueStepsJson(uiSettings, camera_.sensorName())
         << "}"
-        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui, as in get_state (design 4.5)
+        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui (design 4.5)
         << ",\"audio\":{"
         << "\"input_devices\":" << jsonAudioDeviceOptions(audioDevices.inputOptions)
         << ",\"output_devices\":" << jsonAudioDeviceOptions(audioDevices.outputOptions)
@@ -14201,7 +14201,6 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
-             << ",\"ui\":{" << dualSensorUiStateJson(uiState) << "}"
              << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
         return okReply(command.id, body.str());
     }
