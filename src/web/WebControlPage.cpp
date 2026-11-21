@@ -6716,6 +6716,13 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsClipMergeStatus"></span>
                 <span class="subtle-note" id="settingsClipMergeLast" hidden></span>
               </section>
+              <section class="select-block" data-search="stop dropped frame drop recording take test">
+                <div class="select-topline">
+                  <span>Stop on Dropped Frame</span>
+                </div>
+                <span class="subtle-note">Ends the take at the first dropped frame.</span>
+                <div class="pill-grid" id="settingsStopOnDroppedFrameOptions"></div>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsThermalCard">
@@ -18140,6 +18147,13 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsFpsPhaseLockOptions", toggleOptions, formatToggleLabel(!!snapshot.fps_phase_lock), async (value) => {
         try {
           await sendCommand({ cmd: "set_fps_phase_lock", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      buildOptionButtons("settingsStopOnDroppedFrameOptions", toggleOptions, formatToggleLabel(!!snapshot.stop_on_dropped_frame), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_stop_on_dropped_frame", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
           showToast(error.message, true);
         }
