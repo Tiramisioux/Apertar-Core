@@ -151,7 +151,10 @@ int main(int argc, char **argv)
         std::string why;
         if (!apertar::cameraport::secondaryHasSensor({}, options.camera,
                                                      node.valid && apertar::cameraport::configNamesPort({}, node.port),
-                                                     20000, 500, &why)) {
+                                                     20000, 500, &why, [&](int ms) {
+                                                         pollfd stop{signalPipe[0], POLLIN, 0};
+                                                         return ::poll(&stop, 1, ms) > 0;
+                                                     })) {
             std::cerr << why << "\n";
             return 0;
         }

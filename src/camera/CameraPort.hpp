@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -269,28 +270,41 @@ inline bool configNamesPort(const fs::path &root, const std::string &port)
 // ---- waiting ----
 
 // Looks for a sensor subdev below nodePath every pollMs until timeoutMs has passed (once when timeoutMs is 0).
-inline bool waitForSensorSubdev(const fs::path &root, const std::string &nodePath, int timeoutMs, int pollMs = 500)
+// `stop(ms)`, when given, waits instead of sleeping and returns true when the caller was told to stop (a signal):
+// the look-up then gives up with false.
+inline bool waitForSensorSubdev(const fs::path &root, const std::string &nodePath, int timeoutMs, int pollMs = 500,
+                                const std::function<bool(int)> &stop = {})
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     for (;;) {
         if (sensorSubdevUnder(root, nodePath)) return true;
         if (std::chrono::steady_clock::now() >= deadline) return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+        if (stop) {
+            if (stop(pollMs)) return false;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+        }
     }
 }
 
 // The secondary's check in main(), before app.start(): is there a sensor on its port? A boot may not have probed one
 // that config.txt names, so with `configNamesIt` it looks again every pollMs up to timeoutMs; without, at once.
-// Fills *why with the one log line when there is none.
+// Fills *why with the one log line when there is none. `stop` ends the wait at a signal, as in waitForSensorSubdev.
 inline bool secondaryHasSensor(const fs::path &root, const std::string &value, bool configNamesIt, int timeoutMs,
-                               int pollMs, std::string *why)
+                               int pollMs, std::string *why, const std::function<bool(int)> &stop = {})
 {
     const Node node = resolve(root, value);
     if (!node.valid) {
         if (why) *why = "ApertarCore camera " + value + ": no such I2C node or port; nothing to run, exiting.";
         return false;
     }
-    if (waitForSensorSubdev(root, node.path, configNamesIt ? timeoutMs : 0, pollMs)) return true;
+    bool stopped = false;
+    const std::function<bool(int)> noteStop = [&](int ms) { return stopped = stop(ms); };
+    if (waitForSensorSubdev(root, node.path, configNamesIt ? timeoutMs : 0, pollMs, stop ? noteStop : stop)) return true;
+    if (stopped) {
+        if (why) *why = "ApertarCore camera " + value + ": stopped by a signal while waiting for a sensor on " + node.path + ".";
+        return false;
+    }
     if (why)
         *why = "ApertarCore camera " + value + ": no sensor on " + node.path + (configNamesIt ? " after the wait" : "") +
                "; nothing to run, exiting.";

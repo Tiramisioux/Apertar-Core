@@ -27,6 +27,7 @@ constexpr size_t kMaxLineBytes = 4u * 1024 * 1024;   // a get_state reply is som
 constexpr int kPollMs = 1000;                        // cam1's get_state, once a second (§4.1)
 constexpr int kUnknownGraceMs = 2000;                // §3.4: 2 s of failed connects clear the "cam1 unknown" flag
 constexpr int kIoStepMs = 100;
+constexpr size_t kMaxQueued = 64;                    // forwards waiting for a stuck cam1; the oldest plain one goes first
 constexpr int kForwardIdBase = 1 << 20;
 constexpr int kPollIdBase = 1 << 21;
 constexpr int kReadIdBase = 1 << 22;
@@ -215,6 +216,28 @@ bool ControlClient::enqueueLocked(const std::string &name, const std::map<std::s
 {
     if (!linked_.load(std::memory_order_acquire))
         return false;   // dropped: the resync on relink catches up
+    // A knob turned in steps sends the same setter again and again: while the last waiting forward is that setter
+    // with the same keys and nobody waits for its reply, the newer value replaces it (the final value is the same).
+    if (origin == Origin::Forward && !reply && !queue_.empty()) {
+        Forward &last = queue_.back();
+        if (last.kind == Kind::Setter && last.origin == Origin::Forward && !last.reply && last.name == name &&
+            last.fields.size() == fields.size() &&
+            std::equal(last.fields.begin(), last.fields.end(), fields.begin(),
+                       [](const auto &a, const auto &b) { return a.first == b.first; })) {
+            last.fields = fields;
+            last.fpsSent = resync::sentFps(name, fields);
+            return true;
+        }
+    }
+    if (queue_.size() >= kMaxQueued) {
+        for (auto it = queue_.begin(); it != queue_.end(); ++it) {
+            if (it->kind == Kind::Setter && it->origin == Origin::Forward && !it->reply) {
+                queue_.erase(it);
+                --pending_;   // the busy clock goes on: the new forward takes its place; the compare resyncs a lost one
+                break;
+            }
+        }
+    }
     static int nextForwardId = kForwardIdBase;
     Forward forward;
     forward.id = nextForwardId++;

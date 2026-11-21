@@ -8164,7 +8164,7 @@ public:
     }
 
     // record_stop with a stop_us (design 6.2): returns when the gate has seen a frame at or after stopUs, or when
-    // CLOCK_MONOTONIC has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
+    // CLOCK_BOOTTIME has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
     // once T62's journal has it). A stopUs already past arms the stop and returns at once. The caller holds no lock
     // of the controller; the gate's own mutex is released while waiting. The frames after stopUs are requeued by the
     // gate, so the clip ends on slot k1 - 1.
