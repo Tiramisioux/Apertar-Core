@@ -297,12 +297,19 @@ inline Line lineFrom(std::string raw)
         while (pos < end && s[pos] == '#') ++pos;
         while (pos < end && (s[pos] == ' ' || s[pos] == '\t')) ++pos;
     }
-    const size_t eq = s.find('=', pos);
-    if (eq == std::string::npos || eq >= end) return line;
-    const std::string key = lower(trimmed(std::string_view(s).substr(pos, eq - pos)));
-    if (key.empty() || !std::all_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '_'; }))
-        return line;
-    size_t vb = eq + 1;
+    std::string key;
+    size_t vb = 0;
+    if (s.compare(pos, 7, "include") == 0 && pos + 7 < end && blank(s[pos + 7])) {   // include <file>: no '=', the file name is the value
+        key = "include";
+        vb = pos + 7;
+    } else {
+        const size_t eq = s.find('=', pos);
+        if (eq == std::string::npos || eq >= end) return line;
+        key = lower(trimmed(std::string_view(s).substr(pos, eq - pos)));
+        if (key.empty() || !std::all_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '_'; }))
+            return line;
+        vb = eq + 1;
+    }
     while (vb < end && (s[vb] == ' ' || s[vb] == '\t')) ++vb;
     size_t ve = s.find('#', vb);
     if (ve == std::string::npos || ve > end) ve = end;
@@ -496,6 +503,7 @@ struct State {
     Board board;
     bool editable = false;
     std::string problem;                      // why it is not editable
+    std::string cameraProblem;                // an include line loads the sensor: the sensor and link rows are read-only
     std::map<std::string, CameraPort> cameras;
     std::map<std::string, Switch> toggles;    // i2c, i2s, spi, audio
     Switch rp1;
@@ -573,6 +581,8 @@ inline State readState(const Document &doc, const Board &board)
                 state.cameraAutoDetect = static_cast<int>(*value);
                 state.cameraAutoDetectLine = number;
             }
+        } else if (line.key == "include" && state.cameraProblem.empty()) {
+            state.cameraProblem = "config.txt includes " + line.value + ": the sensor comes from that file.";
         }
     }
     for (auto &[port, camera] : state.cameras)
@@ -854,6 +864,7 @@ inline ApplyResult applyRequest(const std::string &text, const Request &request,
         if (std::find(ports.begin(), ports.end(), port) == ports.end())
             return fail("This board has no " + port + " camera connector.");
         const CameraPort &current = result.before.cameras.at(port);
+        if (!result.before.cameraProblem.empty() && key != current.sensor) return fail(result.before.cameraProblem);
         if (key != "none") anySensor = true;
         const Sensor *sensor = findSensor(key);
         if (key != "none" && !sensor) {
@@ -868,6 +879,7 @@ inline ApplyResult applyRequest(const std::string &text, const Request &request,
         if (sensor && sensor->defaultHz) {
             const auto it = request.linkFrequencies.find(port);
             if (it != request.linkFrequencies.end()) {
+                if (!result.before.cameraProblem.empty() && it->second != current.linkFrequency) return fail(result.before.cameraProblem);
                 std::optional<uint64_t> hz = it->second;
                 if (hz) {
                     std::set<uint64_t> kept;
@@ -1267,6 +1279,7 @@ inline std::string stateJson(const State &state, const Facts &facts)
     for (size_t i = 0; i < ports.size(); ++i) out += (i ? "," : "") + jsonString(ports[i]);
     out += "]}";
     out += ",\"editable\":" + std::string(state.editable ? "true" : "false") + ",\"problem\":" + jsonString(state.problem);
+    out += ",\"camera_problem\":" + jsonString(state.cameraProblem);
     out += ",\"cameras\":{";
     bool first = true;
     for (const auto &[port, camera] : state.cameras) {

@@ -22260,11 +22260,13 @@ std::string_view webControlPageHtml()
       if (current !== "none" && !bootConfigSensorInfo(current))
         bootConfigOption(select, current, current + " (as in config.txt)");
       select.value = current;
-      select.disabled = !editable || bootConfigBusy();
+      select.disabled = !editable || bootConfigBusy() || !!bootState.camera_problem;
 
       const camera = (bootState.cameras && bootState.cameras[port]) || {};
       const note = document.getElementById(prefix + "Note");
-      if (current === loaded.sensors[port])
+      if (bootState.camera_problem)
+        note.textContent = bootState.camera_problem;
+      else if (current === loaded.sensors[port])
         note.textContent = camera.line ? "config.txt line " + camera.line + "." : "No sensor line is active for this connector.";
       else
         note.textContent = current === "none" ? "Save comments its line out." : "Save turns this sensor's line on.";
@@ -22292,7 +22294,7 @@ std::string_view webControlPageHtml()
       linkSelect.value = String(effective);
       const pi5 = bootState.board && bootState.board.family === "pi5";
       const rp1Gates = pi5 && bootConfigRp1Available();
-      linkSelect.disabled = !editable || bootConfigBusy() || (rp1Gates && !form.rp1);
+      linkSelect.disabled = !editable || bootConfigBusy() || !!bootState.camera_problem || (rp1Gates && !form.rp1);
       const linkNote = document.getElementById(prefix + "LinkNote");
       if (rp1Gates && !form.rp1)
         linkNote.textContent = effective !== info.link.default_hz
