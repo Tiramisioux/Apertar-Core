@@ -14,6 +14,8 @@
 #include <optional>
 #include <string>
 
+#include "Int128.hpp"
+
 namespace apertar::takeslots {
 
 struct Rate {
@@ -27,10 +29,10 @@ inline int64_t slotOfNs(int64_t tsNs, const Rate &rate, bool tieUp = false)
 {
     if (!rate.valid())
         return 0;
-    const __int128 period = static_cast<__int128>(1000000000) * rate.den;
-    const __int128 scaled = static_cast<__int128>(tsNs) * rate.num;
-    __int128 below = scaled / period;
-    __int128 rest = scaled % period;
+    const Int128 period = static_cast<Int128>(1000000000) * rate.den;
+    const Int128 scaled = static_cast<Int128>(tsNs) * rate.num;
+    Int128 below = scaled / period;
+    Int128 rest = scaled % period;
     if (rest < 0) {
         rest += period;
         --below;
@@ -50,9 +52,9 @@ inline int64_t slotTimeUs(int64_t slot, const Rate &rate)
 {
     if (!rate.valid())
         return 0;
-    const __int128 numerator = static_cast<__int128>(slot) * 1000000 * rate.den;
-    __int128 q = numerator / rate.num;
-    __int128 r = numerator % rate.num;
+    const Int128 numerator = static_cast<Int128>(slot) * 1000000 * rate.den;
+    Int128 q = numerator / rate.num;
+    Int128 r = numerator % rate.num;
     if (r < 0) {
         r += rate.num;
         --q;
@@ -67,10 +69,10 @@ inline int64_t boundaryUs(int64_t slot, const Rate &rate)
 {
     if (!rate.valid())
         return 0;
-    const __int128 numerator = (static_cast<__int128>(2) * slot - 1) * 1000000 * rate.den;
-    const __int128 denominator = static_cast<__int128>(2) * rate.num;
-    __int128 q = numerator / denominator;
-    __int128 r = numerator % denominator;
+    const Int128 numerator = (static_cast<Int128>(2) * slot - 1) * 1000000 * rate.den;
+    const Int128 denominator = static_cast<Int128>(2) * rate.num;
+    Int128 q = numerator / denominator;
+    Int128 r = numerator % denominator;
     if (r < 0) {
         r += denominator;
         --q;
@@ -85,10 +87,10 @@ inline int64_t ceilSlotUs(int64_t timeUs, const Rate &rate)
 {
     if (!rate.valid())
         return 0;
-    const __int128 scaled = static_cast<__int128>(timeUs) * rate.num;
-    const __int128 period = static_cast<__int128>(1000000) * rate.den;
-    __int128 q = scaled / period;
-    __int128 r = scaled % period;
+    const Int128 scaled = static_cast<Int128>(timeUs) * rate.num;
+    const Int128 period = static_cast<Int128>(1000000) * rate.den;
+    Int128 q = scaled / period;
+    Int128 r = scaled % period;
     if (r < 0) {   // C++ truncates toward zero: q is already the ceiling of a negative quotient
         r = 0;
     }
