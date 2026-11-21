@@ -15342,7 +15342,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, "set_value_steps needs values, free, increment, flicker_free or mains_hz.");
         if (!updateSharedUiGeneralSettings(updates))
             return errorReply(command.id, "Could not save the value list.");
-        return okReply(command.id, "\"ui\":{" + valueStepsJson(readSharedUiSettings(), camera_.sensorName()) + "}");
+        return okReply(command.id, valueStepsJson(readSharedUiSettings(), camera_.sensorName()));
     }
 
     if (command.name == "set_favorites_order") {
