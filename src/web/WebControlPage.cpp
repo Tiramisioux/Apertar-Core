@@ -22823,8 +22823,6 @@ std::string_view webControlPageHtml()
         return;
 
       const notes = [];
-      if (bootState.board && !bootState.board.detected)
-        notes.push("No Raspberry Pi device tree here: the card reads config.txt as a Pi 5 would.");
       (bootState.warnings || []).forEach((warning) => notes.push(warning));
       if (bootConfig.linkNote)
         notes.push(bootConfig.linkNote);

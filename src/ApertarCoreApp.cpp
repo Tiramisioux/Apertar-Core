@@ -3800,11 +3800,25 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
 
 // ---- Boot config card (System pane): config.txt read and edited in place, see hardware/BootConfigText.hpp ----
 
+// One device-tree file, from the paths RecordingCapabilities tries in the same order.
+std::string readDeviceTreeFile(const std::string &name)
+{
+    for (const char *base : {"/sys/firmware/devicetree/base/", "/proc/device-tree/"}) {
+        std::string text = readTextFileRaw(base + name);
+        if (!text.empty())
+            return text;
+    }
+    return {};
+}
+
 bootconf::Facts bootConfigFacts()
 {
     bootconf::Facts facts;
-    facts.board = bootconf::boardFromDeviceTree(readTextFileRaw("/proc/device-tree/compatible"),
-                                                readTextFileRaw("/proc/device-tree/model"));
+    std::string compatible = readDeviceTreeFile("compatible");
+    // A dev host has no device tree: with APERTAR_BOOT_CONFIG naming a copy, the copy is read as a Pi 5's. Nowhere else.
+    if (compatible.empty() && bootConfigPath() != std::filesystem::path(kBootConfigPath))
+        compatible = std::string("brcm,bcm2712\0", 13);
+    facts.board = bootconf::boardFromDeviceTree(compatible, readDeviceTreeFile("model"));
     std::set<std::string> names;
     std::error_code ec;
     for (const auto &entry : std::filesystem::directory_iterator(bootConfigPath().parent_path() / "overlays", ec))

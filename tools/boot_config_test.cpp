@@ -139,7 +139,21 @@ int main()
 {
     const Board board5 = pi5();
     check(board5.family == "pi5" && board5.detected && !board5.computeModule, "bcm2712 is a Pi 5");
-    check(boardFromDeviceTree("", "").family == "pi5" && !boardFromDeviceTree("", "").detected, "no device tree reads as an undetected Pi 5");
+    check(!boardFromDeviceTree("", "").detected && boardFromDeviceTree("", "").family.empty(), "no device tree: an unknown board");
+    const Board zero2 = boardFromDeviceTree(std::string("raspberrypi,model-zero-2-w\0brcm,bcm2837\0", 40), "Raspberry Pi Zero 2 W Rev 1.0");
+    check(zero2.family == "pi3" && zero2.detected, "bcm2837 is the Pi 3 family");
+    check(boardFromDeviceTree(std::string("brcm,bcm2835\0", 13), "").family.empty(), "bcm2835 is not a board the card knows");
+    check(!boardFromDeviceTree(std::string("vendor,not-brcm,bcm2712-x\0", 26), "").detected, "a compatible entry is compared whole, not searched");
+    {
+        const Board unknown = boardFromDeviceTree("", "");
+        const State u = readState(parseDocument(kApertar, unknown), unknown);
+        check(!u.editable && u.problem.find("not one the Boot Config card knows") != std::string::npos &&
+              u.cameras.at("cam0").sensor == "none", "an unknown board is read-only and the [pi5] lines do not apply");
+        const auto r = applyRequest(kApertar, Request{}, facts(unknown));
+        check(!r.ok && r.text.empty(), "an unknown board: a request is refused");
+    }
+    check(linkOptionsFor(*findSensor("imx477"), pi5()).size() == 8 && linkOptionsFor(*findSensor("imx477"), pi4()).size() == 1 &&
+          linkOptionsFor(*findSensor("imx477"), zero2).size() == 1, "the IMX477 link list ends at 500 MHz on every board that is not a Pi 5");
     check(boardFromDeviceTree(std::string("raspberrypi,5-compute-module\0brcm,bcm2712\0", 42), "Raspberry Pi Compute Module 5 Rev 1.0").computeModule,
           "a CM5 is a compute module");
 
