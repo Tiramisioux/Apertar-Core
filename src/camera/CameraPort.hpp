@@ -297,4 +297,43 @@ inline bool secondaryHasSensor(const fs::path &root, const std::string &value, b
     return false;
 }
 
+// --check-dual, the cam1 unit's ExecCondition, and the relay's configured test: is this a two-sensor rig for the Core
+// `value` names? True only when a sensor is on that port AND another on cam0's, the primary's. A port config.txt names
+// is looked at again every pollMs up to timeoutMs (a boot may not have probed it yet); a port it does not name, at
+// once. sysfs and config.txt only. Fills *why with the one log line either way.
+inline bool dualSensorsPresent(const fs::path &root, const std::string &value, int timeoutMs, int pollMs, std::string *why)
+{
+    const Node own = resolve(root, value);
+    const Node primary = resolve(root, "cam0");
+    const std::string name = own.port.empty() ? value : own.port;
+    if (!own.valid || !primary.valid || own.path == primary.path) {
+        if (why)
+            *why = "ApertarCore dual check: " + (!own.valid ? "'" + value + "' is no I2C node or port"
+                                                 : !primary.valid ? std::string("cam0 does not resolve")
+                                                                  : value + " is cam0's own port") +
+                   "; one camera.";
+        return false;
+    }
+    const bool ownNamed = configNamesPort(root, own.port);
+    const bool primaryNamed = configNamesPort(root, "cam0");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        const bool ownFound = sensorSubdevUnder(root, own.path);
+        const bool primaryFound = sensorSubdevUnder(root, primary.path);
+        if (ownFound && primaryFound) {
+            if (why) *why = "ApertarCore dual check: a sensor on cam0 and on " + name + "; two cameras.";
+            return true;
+        }
+        const bool waitOn = (ownFound || ownNamed) && (primaryFound || primaryNamed);
+        if (!waitOn || std::chrono::steady_clock::now() >= deadline) {
+            if (why)
+                *why = "ApertarCore dual check: no sensor on " + (!primaryFound ? std::string("cam0 (") + primary.path
+                                                                                : name + " (" + own.path) +
+                       ")" + (waitOn ? " after the wait" : "") + "; one camera.";
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+    }
+}
+
 } // namespace apertar::cameraport

@@ -37,6 +37,7 @@ void printUsage(const char *argv0)
         << "  --web-bind ADDR     Web control bind address (default: 0.0.0.0)\n"
         << "  --web-port PORT     Web control port, 0 disables it (default: 8000)\n"
         << "  --camera PORT       Camera by port: cam0 (default), cam1, or an I2C node such as i2c@88000\n"
+        << "  --check-dual        Exit 0 when a sensor is on cam0 and on the --camera port, else 1 (sysfs only)\n"
         << "  --simulate          Run without opening the camera yet\n"
         << "  --help              Show this help\n";
 }
@@ -46,6 +47,7 @@ void printUsage(const char *argv0)
 int main(int argc, char **argv)
 {
     apertar::ApertarCoreApp::Options options;
+    bool checkDual = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -55,6 +57,10 @@ int main(int argc, char **argv)
         }
         if (arg == "--simulate") {
             options.simulateCamera = true;
+            continue;
+        }
+        if (arg == "--check-dual") {
+            checkDual = true;
             continue;
         }
         if (arg == "--socket" && i + 1 < argc) {
@@ -92,6 +98,15 @@ int main(int argc, char **argv)
         std::cerr << "Unknown or incomplete option: " << arg << "\n";
         printUsage(argv[0]);
         return 2;
+    }
+
+    // The cam1 unit's ExecCondition: exit 1 makes systemd skip the secondary without a failure or a restart. sysfs and
+    // config.txt only, never libcamera: a camera-manager start would disturb the sensor the primary runs.
+    if (checkDual) {
+        std::string why;
+        const bool dual = apertar::cameraport::dualSensorsPresent({}, options.camera, 20000, 500, &why);
+        std::cerr << why << "\n";
+        return dual ? 0 : 1;
     }
 
     // Camera shutdown takes locks and joins threads: never do it inside a

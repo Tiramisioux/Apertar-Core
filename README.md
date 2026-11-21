@@ -287,6 +287,8 @@ Before recording, make sure the intended media is actually mounted at the select
 | `--media PATH` | Recording destination. Default: `/media/RAW`. |
 | `--web-bind ADDR` | WebUI listening address. Default: `0.0.0.0`. |
 | `--web-port PORT` | WebUI port. Default: `8000`; `0` disables it. |
+| `--camera PORT` | Camera by port: `cam0` (default), `cam1`, or an I2C node such as `i2c@88000`. Any value but `cam0` runs a second Core for a second sensor. |
+| `--check-dual` | Exit 0 when a sensor is on `cam0` and another on the `--camera` port, else 1, and start nothing. Reads sysfs and config.txt only, waiting up to 20 s for a sensor config.txt names. The cam1 unit runs it before it starts. |
 | `--simulate` | Run without opening a physical camera, for interface development. |
 | `--help` | Show command-line help. |
 
