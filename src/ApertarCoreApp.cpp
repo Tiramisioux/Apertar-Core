@@ -14188,7 +14188,6 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
-             << clipMergeStateJson()
              << ",\"ui\":{" << dualSensorUiStateJson(uiState) << "}"
              << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
         return okReply(command.id, body.str());
