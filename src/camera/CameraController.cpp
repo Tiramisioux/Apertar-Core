@@ -982,7 +982,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
     output << prefix << "prores_profile=" << toString(s.proresProfile) << '\n';
     output << prefix << "prores_color_profile=" << toString(s.proresColorProfile) << '\n';
-    output << prefix << "clear_hdr=" << (s.clearHdr ? "true" : "false") << '\n';
+    output << prefix << "clear_hdr=" << s.clearHdr << '\n';
     output << prefix << "hdr_threshold_high=" << s.hdrThresholdHigh << '\n';
     output << prefix << "hdr_threshold_low=" << s.hdrThresholdLow << '\n';
     output << prefix << "hdr_blend=" << s.hdrBlend << '\n';
@@ -993,12 +993,12 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "h264_height=" << s.h264Resolution.height << '\n';
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
-    output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
-    output << prefix << "preview_tdn=" << (s.previewTdn ? "true" : "false") << '\n';
-    output << prefix << "media_trim=" << (s.mediaTrimEnabled ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
+    output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
+    output << prefix << "preview_tdn=" << s.previewTdn << '\n';
+    output << prefix << "media_trim=" << s.mediaTrimEnabled << '\n';
+    output << prefix << "fps_speed_ramp=" << s.fpsSpeedRamp << '\n';
+    output << prefix << "fps_speed_ramp_keep_exposure=" << s.fpsSpeedRampKeepExposure << '\n';
+    output << prefix << "fps_speed_ramp_stretch_audio=" << s.fpsSpeedRampStretchAudio << '\n';
     output << prefix << "fps_speed_ramp_after=" << (s.fpsSpeedRampReturn ? "return" : "stay") << '\n';
     output << prefix << "clip_name_template=" << s.clipNameTemplate << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
