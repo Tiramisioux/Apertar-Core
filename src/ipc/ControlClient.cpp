@@ -301,7 +301,9 @@ void ControlClient::run()
             nextTickMs_ = now + kPollMs;
             tick();
         }
-        ioStep(kIoStepMs);
+        // Without a link nothing but the tick has work (a stop or an enqueue wakes the pipe): a camera with one sensor
+        // sleeps until the next tick instead of waking ten times a second.
+        ioStep(fd_ < 0 ? static_cast<int>(std::max<int64_t>(1, nextTickMs_ - nowMs())) : kIoStepMs);
         watchTake();
         if (takeChangeOwed_.exchange(false, std::memory_order_acq_rel) && options_.onTakeChange)
             options_.onTakeChange();
