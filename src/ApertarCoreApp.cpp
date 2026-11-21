@@ -3851,13 +3851,12 @@ std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts
            ",\"text\":" + bootconf::jsonString(text) + "}";
 }
 
+// A switch that decides whether a file is written: true or 1, false or 0, nothing else.
 std::optional<bool> boolFieldValue(const std::string &value)
 {
-    std::string v = value;
-    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (v == "true" || v == "1" || v == "on" || v == "yes")
+    if (value == "true" || value == "1")
         return true;
-    if (v == "false" || v == "0" || v == "off" || v == "no")
+    if (value == "false" || value == "0")
         return false;
     return std::nullopt;
 }
@@ -3923,8 +3922,13 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
         return {400, errorReplyBody(command.id, error, "\"code\":\"invalid\"")};
-    const bool dryRun = boolFieldValue(command.string("dry_run").value_or("false")).value_or(false);
-    const bool confirmDisplay = boolFieldValue(command.string("confirm_display").value_or("false")).value_or(false);
+    const auto dryRunValue = boolFieldValue(command.string("dry_run").value_or("false"));
+    const auto confirmDisplayValue = boolFieldValue(command.string("confirm_display").value_or("false"));
+    if (!dryRunValue || !confirmDisplayValue)
+        return {400, errorReplyBody(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.",
+                                    "\"code\":\"invalid\"")};
+    const bool dryRun = *dryRunValue;
+    const bool confirmDisplay = *confirmDisplayValue;
 
     const bootconf::Facts facts = bootConfigFacts();
     std::lock_guard<std::mutex> lock(bootConfigMutex());
@@ -13803,10 +13807,10 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, "set_controls needs base= (the revision you loaded).");
         // restore=true puts back the version Core last knew, when the file was replaced by a default.
         if (const auto restore = command.string("restore"); restore) {
-            bool wanted = false;
-            if (!parseBooleanToken(*restore, &wanted))
+            const auto wanted = boolFieldValue(*restore);
+            if (!wanted)
                 return errorReply(command.id, "restore must be true or false.");
-            if (wanted) {
+            if (*wanted) {
                 const hardware::ReplacedInfo replaced = hardware::configStore().replacedByDefault();
                 if (!replaced.replaced)
                     return errorReply(command.id, "Nothing to restore: the file has not been replaced.");
@@ -13829,8 +13833,12 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const std::pair<const char *, bool *> flagFields[] = {
             { "dry_run", &flags.dryRun }, { "force", &flags.force }, { "confirm_merge", &flags.confirmMerge } };
         for (const auto &[name, flag] : flagFields) {
-            if (const auto value = command.string(name); value && !parseBooleanToken(*value, flag))
-                return errorReply(command.id, std::string(name) + " must be true or false.");
+            if (const auto value = command.string(name); value) {
+                const auto parsed = boolFieldValue(*value);
+                if (!parsed)
+                    return errorReply(command.id, std::string(name) + " must be true or false.");
+                *flag = *parsed;
+            }
         }
         const std::string by = command.string("by").value_or("api");
         const hardware::StoreResult result = edits.empty()
