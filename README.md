@@ -214,7 +214,7 @@ If the camera does not come back after a change, put the card in a reader and co
 
 The card saves with the `set_boot_config` command through `POST /api/command`, the same door as every other setting; `GET /api/boot-config` reads the file.
 
-Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and, only with `APERTAR_BOOT_CONFIG_TEXT=on`, `text` (the whole file as edited; the other fields go on top of it).
+Socket command: `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and, only with `APERTAR_BOOT_CONFIG_TEXT=on`, `text` (the whole file as edited; the other fields go on top of it).
 
 ## Building From Source
 
