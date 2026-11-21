@@ -231,6 +231,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"timecode_mode\":\"" << toString(settings.timecodeMode) << "\""
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"preview_tdn\":" << (settings.previewTdn ? "true" : "false")
+        << ",\"stop_on_dropped_frame\":" << (settings.stopOnDroppedFrame ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
@@ -923,6 +924,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.previewTdn = (value == "true" || value == "1");
             else if (key == "media_trim")
                 settings.mediaTrimEnabled = !(value == "false" || value == "0");
+            else if (key == "stop_on_dropped_frame")
+                settings.stopOnDroppedFrame = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp")
                 settings.fpsSpeedRamp = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_keep_exposure")
@@ -1009,6 +1012,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
     output << prefix << "preview_tdn=" << s.previewTdn << '\n';
     output << prefix << "media_trim=" << s.mediaTrimEnabled << '\n';
+    output << prefix << "stop_on_dropped_frame=" << s.stopOnDroppedFrame << '\n';
     output << prefix << "fps_speed_ramp=" << s.fpsSpeedRamp << '\n';
     output << prefix << "fps_speed_ramp_keep_exposure=" << s.fpsSpeedRampKeepExposure << '\n';
     output << prefix << "fps_speed_ramp_stretch_audio=" << s.fpsSpeedRampStretchAudio << '\n';
@@ -11401,6 +11405,10 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
               eventCallback_(std::string("{\"event\":\"recording_health\",\"recording_has_dropped_frames\":")
                              + (dropped ? "true" : "false") + ",\"recording_dropped_frames\":"
                              + std::to_string(recordingDropWarning_.droppedFrames()) + "}");
+          // The first drop of a take (a pre-roll's drops never get here: muted). Runs on the writer or copy thread:
+          // the hook only flags Core, which stops the take on its own thread.
+          if (dropped && droppedFrameHook_)
+              droppedFrameHook_();
       })
     , session_(std::make_unique<CameraSession>(
           previewCallback_,
@@ -12333,6 +12341,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool fpsPhaseLock = next.fpsPhaseLock;
             const bool previewTdn = next.previewTdn;   // likewise one switch for the camera
             const bool mediaTrimEnabled = next.mediaTrimEnabled;   // one switch for the camera, not one per format
+            const bool stopOnDroppedFrame = next.stopOnDroppedFrame;   // and so is this one
             const CdngLog cdngLog = next.cdngLog; // CineMate Log is one switch for the camera too
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
             const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
@@ -12352,6 +12361,7 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.fpsPhaseLock = fpsPhaseLock;
             next.previewTdn = previewTdn;
             next.mediaTrimEnabled = mediaTrimEnabled;
+            next.stopOnDroppedFrame = stopOnDroppedFrame;
             next.cdngLog = cdngLog;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
@@ -12942,6 +12952,18 @@ bool CameraController::setPreviewTdn(bool enabled)
     next.previewTdn = enabled;
     // The pipeline restarts on the other tuning file, the same way setTuningFile does it.
     return applySettingsLocked(next, true);
+}
+
+bool CameraController::setStopOnDroppedFrame(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_) {
+        setErrorLocked("Stop on Dropped Frame changes are blocked while recording.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.stopOnDroppedFrame = enabled;
+    return applySettingsLocked(next, false);
 }
 
 std::string CameraController::activeTuningFile() const

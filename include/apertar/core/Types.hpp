@@ -138,6 +138,7 @@ struct CaptureSettings {
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
     bool previewTdn = true; // Temporal denoise in the preview ISP of raw takes. Off is much faster; H.264 and ProRes always keep it.
     bool mediaTrimEnabled = true; // Trim the recording drive after big deletes and when it is mounted (APERTAR_MEDIA_TRIM=0 overrides).
+    bool stopOnDroppedFrame = false; // End a take at its first dropped frame (a storage pre-roll is never stopped).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
     // numbered by count and the clip keeps the FPS it started with as its timeline rate.
     bool fpsSpeedRamp = false;

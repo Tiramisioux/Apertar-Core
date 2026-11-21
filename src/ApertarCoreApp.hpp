@@ -356,6 +356,8 @@ private:
     std::atomic<uint64_t> bufferSafetyStopUsed_{0};
     std::atomic<uint64_t> bufferSafetyStopCapacity_{0};
     std::atomic<bool> bufferSafetyStopRam_{false};
+    std::atomic<bool> droppedFrameStopPending_{false};   // Stop on Dropped Frame: the same thread stops the take
+    std::atomic<bool> stopOnDroppedFrameSetting_{false}; // the persisted switch (CaptureSettings::stopOnDroppedFrame)
     std::mutex bufferSafetyStopMutex_;
     std::condition_variable bufferSafetyStopCv_;
 

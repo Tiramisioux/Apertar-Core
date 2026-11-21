@@ -345,6 +345,10 @@ Core does not edit your tuning files. With the switch off it resolves the tuning
 
 `c++ -std=c++20 -I src tools/tuning_tdn_strip_test.cpp $(pkg-config --cflags --libs yaml-0.1)` builds the host test of the strip.
 
+### Stop on Dropped Frame
+
+Off by default. With the switch on, a take ends at its first dropped frame, as if you had pressed stop; the journal has `ApertarCore recording: Recording stopped: a frame was dropped.` Switch it in the WebUI (Settings, "Stop on Dropped Frame") or with `set_stop_on_dropped_frame enabled=true|false` (refused while recording); it is saved in `camera_settings.conf` (`stop_on_dropped_frame=`) and the state reports `stop_on_dropped_frame`. A storage pre-roll is never stopped by it.
+
 ### Split clips (frames per folder)
 
 On exFAT every new file walks all entries of its folder under the filesystem's lock, so a frame file costs more to create the fuller its clip folder is: about 14 ms at 45,000 frames (a 30-minute take at 25 fps), 35 % of the frame period (measured 2026-11-08, Apertar knowledge base `working/drop-frames/nvme-campaign/probe-exfat-dir.md`). `[storage] frames_per_folder=N` in `apertar-hardware.conf` (0, the default, keeps every frame in the clip folder; 100 to 100000) starts a new `part_NNN` folder inside the clip every N frames: frame f goes to `<clip>/part_<f / N>/` under its usual name, the numbering runs on across parts, and the WAV, `fps-ramp.txt` and the other sidecars stay in the clip folder, next to a `.parts` marker. Set it in the WebUI (Settings, System, Performance, "Frames per folder"), in the Config pane, or with `set_frames_per_folder value=N`; `APERTAR_CDNG_FRAMES_PER_FOLDER` wins over the file. It applies at the next take; the journal's `recording clip:` line ends in `frames_per_folder=N`. The storage pre-roll and MLV takes are never split. Core's clip list, playback, delete and download read both layouts.

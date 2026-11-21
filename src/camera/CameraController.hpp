@@ -148,6 +148,9 @@ public:
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
     bool setPreviewTdn(bool enabled);
+    bool setStopOnDroppedFrame(bool enabled);
+    // Called once per take, at the first dropped frame, from the writer or copy thread: lock-free and quick. Set before any take.
+    void setDroppedFrameHook(std::function<void()> hook) { droppedFrameHook_ = std::move(hook); }
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
@@ -282,6 +285,7 @@ private:
     EventCallback eventCallback_;
     PreviewCallback previewCallback_;
     RecordingDropWarning recordingDropWarning_;
+    std::function<void()> droppedFrameHook_;
     CameraState state_ = CameraState::Offline;
     CaptureSettings settings_{};
     std::map<RecordingFormat, CaptureSettings> formatSettings_;
