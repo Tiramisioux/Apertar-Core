@@ -11568,8 +11568,8 @@ namespace {
 std::string mediaEventJson(const MediaSnapshot &snapshot)
 {
     std::ostringstream out;
-    out << "{\"event\":\"media\",\"state\":\"" << snapshot.stateName() << "\""
-        << ",\"mounted\":" << (snapshot.mounted() ? "true" : "false")
+    out << "{\"event\":\"media\",\"media_state\":\"" << snapshot.stateName() << "\""
+        << ",\"media_alive\":" << (snapshot.mounted() ? "true" : "false")
         << ",\"device\":\"" << escapeJson(snapshot.device) << "\""
         << ",\"fstype\":\"" << escapeJson(snapshot.fstype) << "\""
         << ",\"free_bytes\":" << snapshot.freeBytes
@@ -13260,7 +13260,7 @@ void ApertarCoreApp::applyHardwareText(const std::string &text)
     }
     std::cerr << "ApertarCore controls: " << (names.empty() ? std::string("applied; no Core driver reads what changed") : "applied: restarted " + names + " in " + std::to_string(ms) + " ms") << "\n";
     publishEvent("{\"event\":\"controls\",\"applied\":\"" + escapeJson(hardware::configStore().currentRevision()) + "\",\"groups\":\"" +
-                 escapeJson(names) + "\",\"errors\":" + std::to_string(controlsErrors_.load()) + ",\"warnings\":" +
+                 escapeJson(names) + "\",\"controls_errors\":" + std::to_string(controlsErrors_.load()) + ",\"controls_warnings\":" +
                  std::to_string(controlsWarnings_.load()) + "}");
 }
 
