@@ -179,19 +179,6 @@ std::string errorReply(int id, const std::string &message)
     return out.str();
 }
 
-std::string errorReplyBody(int id, const std::string &message, const std::string &body)
-{
-    std::ostringstream out;
-    out << "{\"ok\":false";
-    if (id >= 0)
-        out << ",\"id\":" << id;
-    out << ",\"error\":\"" << escapeJson(message) << "\"";
-    if (!body.empty())
-        out << "," << body;
-    out << "}";
-    return out.str();
-}
-
 std::string imuStatusBody(bool includeLiveSample)
 {
     const Mpu6050RecordingSession::ConfigSnapshot imu =
@@ -3917,12 +3904,11 @@ std::string bootConfigSet(const ControlCommand &command)
     bootconf::Request request;
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
-        return errorReplyBody(command.id, error, "\"code\":\"invalid\"");
+        return errorReply(command.id, error);
     const auto dryRunValue = boolFieldValue(command.string("dry_run").value_or("false"));
     const auto confirmDisplayValue = boolFieldValue(command.string("confirm_display").value_or("false"));
     if (!dryRunValue || !confirmDisplayValue)
-        return errorReplyBody(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.",
-                              "\"code\":\"invalid\"");
+        return errorReply(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.");
     const bool dryRun = *dryRunValue;
     const bool confirmDisplay = *confirmDisplayValue;
 
@@ -3930,14 +3916,13 @@ std::string bootConfigSet(const ControlCommand &command)
     const std::filesystem::path path = bootConfigPath();
     const std::string text = readTextFileRaw(path);
     if (text.empty())
-        return errorReplyBody(command.id, "Could not read " + path.string() + ".", "\"code\":\"unreadable\"");
+        return errorReply(command.id, "Could not read " + path.string() + ".");
     const std::string current = bootconf::revisionOf(text);
     if (!dryRun) {
         if (revision && *revision != current)
-            return errorReplyBody(command.id,
-                                  "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
-                                  "Reload the card and choose again.",
-                                  "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current));
+            return errorReply(command.id,
+                              "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
+                              "Reload the card and choose again.");
     }
 
     // text: the file as the operator edited it on the card. The card's choices go on top of that text, and the result
@@ -3946,11 +3931,11 @@ std::string bootConfigSet(const ControlCommand &command)
     if (edited) {
         const std::string problem = bootconf::textProblem(*edited);
         if (!problem.empty())
-            return errorReplyBody(command.id, problem, "\"code\":\"invalid\"");
+            return errorReply(command.id, problem);
     }
     bootconf::ApplyResult result = bootconf::applyRequest(edited ? *edited : text, request, facts);
     if (!result.ok)
-        return errorReplyBody(command.id, result.error, "\"code\":\"refused\"");
+        return errorReply(command.id, result.error);
     if (edited) {
         result.before = bootconf::readState(bootconf::parseDocument(text, facts.board), facts.board);
         result.changes = bootconf::lineChanges(text, result.text);
@@ -3962,18 +3947,17 @@ std::string bootConfigSet(const ControlCommand &command)
     if (dryRun)
         return okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" + bootconf::jsonString(current));
     if (result.displayChanged && !confirmDisplay)
-        return errorReplyBody(command.id,
-                              "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
-                              "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
-                              "Send confirm_display=true to save anyway.",
-                              "\"code\":\"confirm_display\"");
+        return errorReply(command.id,
+                          "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
+                          "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
+                          "Send confirm_display=true to save anyway.");
     if (result.changes.empty())
         return okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current));
 
     std::string how;
     bool denied = false;
     if (!writeBootConfigText(result.text, &error, &how, &denied))
-        return errorReplyBody(command.id, error, denied ? "\"code\":\"permission\"" : "\"code\":\"write_failed\"");
+        return errorReply(command.id, error);
     std::cerr << "ApertarCore boot config: wrote " << path.string() << " (" << result.changes.size()
               << " line(s), via " << how << "); takes effect at the next reboot\n";
     return okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
