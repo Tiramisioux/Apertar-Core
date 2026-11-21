@@ -5253,10 +5253,107 @@ path4=
 path5=
 
 [imu]
-enabled=false
+# Current options: driver=mpu6050, bmi160, bmi270, icm42688p.
+# Free-running IMUs use sync_offset_ms to bake in a measured Gyroflow sync correction.
+enabled=true
 driver=mpu6050
 sync_mode=free_run
 sync_offset_ms=0
+
+[mpu6050]
+# Optional gyro/accelerometer sidecar recording for Gyroflow stabilization.
+# Enable "Record Gyro Data" in Record settings to write a .gcsv beside each clip.
+enabled=true
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+dlpf_hz=98
+use_fifo=true
+fifo_batch_samples=24
+# orientation uses Gyroflow axis notation. For chip facing back, X left, Y down, use xYz.
+orientation=XYZ
+# UI-only neutral level reference. Use Set Level in Gyro Calibration to update these.
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+# Prefer stored/manual bias. Set auto_calibrate_seconds only if the camera is guaranteed still after pressing record.
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+# Optional Gyroflow rolling-shutter metadata. Direction: 0=top-bottom, 1=bottom-top.
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi160]
+# Direct-polled Bosch BMI160 IMU. Use driver=bmi160 in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi270]
+# Direct-polled Bosch BMI270 IMU. Some boards need their Bosch config blob initialized by their driver.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[icm42688p]
+# Direct-polled TDK InvenSense ICM42688-P IMU. Use driver=icm42688p in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
 
 [pcf8574]
 # Pin actions include capture, record_toggle, iso_up/down, fps_up/down, wb_up/down,
