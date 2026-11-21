@@ -15016,23 +15016,15 @@ std::string_view webControlPageHtml()
     }
 
     // ---- Dual sensor: "active", and this browser's own view -------------------------------------------------
-    // "Active" = snapshot.cam1 exists (Core sends it only when cam1 is configured and the Dual sensor switch is on).
-    // While cam1 is absent from the state the old test stands in: the switch on and config.txt naming both sensors
-    // (config.txt not read yet: the switch alone).
+    // "Active" = snapshot.cam1 exists. Core sends it only with the Dual sensor switch on and a sensor on cam0 and on
+    // cam1 (or cam1's Core answering); with one sensor the page is the single-camera page, whatever config.txt names.
     function dualCam1(snapshot) {
       const cam1 = snapshot && snapshot.cam1;
       return cam1 && typeof cam1 === "object" ? cam1 : null;
     }
 
     function dualActive(snapshot) {
-      if (!snapshot)
-        return false;
-      if (dualCam1(snapshot))
-        return true;
-      if (!(snapshot.ui && snapshot.ui.dual_sensor_enabled === true))
-        return false;
-      const ports = dualSensorPorts();
-      return !ports || (ports.cam0 !== "none" && ports.cam1 !== "none");
+      return !!dualCam1(snapshot);
     }
 
     // The WebUI's own view: the six labels of previewSource, per browser (a viewer's choice that changes nothing on
@@ -22694,7 +22686,10 @@ std::string_view webControlPageHtml()
       const differ = configured && !!ports && ports.cam0 !== sensor1;
       // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
       const switchedOn = uiState.dual_sensor_enabled === true;
+      // Switch on, config.txt naming both and still no cam1 from Core: one of the two sensors did not answer.
+      const oneAnswered = !cam1 && switchedOn && configured;
       setText("dualSensorNote", cam1 && cam1.state === "not_found" ? "Camera 1 is set in Boot Config, but no sensor answered."
+        : oneAnswered ? "Boot Config names two sensors, but only one answered: one camera."
         : !ports && !cam1 ? "Reading config.txt..."
         : !configured ? (ports.cam1 === "none" ? "One sensor found. Set Camera 1 in Boot Config, then reboot."
           : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
