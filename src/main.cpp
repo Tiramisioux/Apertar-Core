@@ -3,8 +3,10 @@
 #include "ipc/PrimaryWait.hpp"
 
 #include <csignal>
+#include <cstdlib>
 #include <cerrno>
 #include <fcntl.h>
+#include <filesystem>
 #include <iostream>
 #include <poll.h>
 #include <string>
@@ -125,6 +127,21 @@ int main(int argc, char **argv)
     action.sa_flags = SA_RESTART;
     ::sigaction(SIGINT, &action, nullptr);
     ::sigaction(SIGTERM, &action, nullptr);
+
+    // A secondary reads only its own hardware file: with none, every reader would fall back to the primary's
+    // /home/pi/apertar-hardware.conf and take its [storage] buffer and [camera] keys. Exit 2, a launch error, which the
+    // cam1 unit does not restart.
+    if (apertar::cameraport::isSecondary(options.camera)) {
+        const char *hardwareConfig = std::getenv("APERTAR_HARDWARE_CONFIG");
+        std::error_code error;
+        if (!hardwareConfig || !*hardwareConfig || !std::filesystem::is_regular_file(hardwareConfig, error)) {
+            std::cerr << "ApertarCore camera " << options.camera << ": no hardware file of its own ("
+                      << (hardwareConfig && *hardwareConfig ? std::string(hardwareConfig) + " not found"
+                                                            : std::string("APERTAR_HARDWARE_CONFIG not set"))
+                      << "); install config/apertar-hardware-cam1.conf there. A second Core never reads the primary's file.\n";
+            return 2;
+        }
+    }
 
     // A secondary with no sensor on its port exits 0 before app.start(): start() restores the low-power state and
     // starts threads before the camera, and a failed start exits 1, which Restart=on-failure would loop. sysfs only,
