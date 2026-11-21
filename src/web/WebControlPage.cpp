@@ -8615,10 +8615,10 @@ std::string_view webControlPageHtml()
     function ladderCropAreaFor() {
       return sensorNameLower(modesSnapshot()).indexOf("imx283") !== -1 ? { width: 5472, height: 3648 } : ladderCropArea;
     }
-    const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K SDR"], ["crop", "4K SDR crops"], ["2k", "2K SDR binned"]];
+    const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K"], ["crop", "4K crops"], ["2k", "2K binned"]];
     // The IMX283's groups (design §5.3): by binning, the 1x1 readout split into the full frame and its windows.
-    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K SDR 2×2 binned"],
-      ["bin3", "1.8K SDR 3×3 binned"]];
+    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K 2×2 binned"],
+      ["bin3", "1.8K 3×3 binned"]];
 
     // The Modes cards edit one camera. state.ladder* holds that camera's ladder; the other's waits in state.ladderStash.
     // modesSnapshot() is the snapshot whose sensor names the modes: cam0's (never the CAM1 projection), or cam1's.
@@ -8657,7 +8657,7 @@ std::string_view webControlPageHtml()
       const info = ladderModeInfo(mode);
       const binning = imx283Binning(mode, info);
       const aspect = ladderAspectText(mode);
-      return ladderSizeText(mode) + " SDR" + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
+      return ladderSizeText(mode) + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
         + (ladderCropIn(info) ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + mode.bits + "-bit";
     }
 
@@ -8777,9 +8777,9 @@ std::string_view webControlPageHtml()
       return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
     }
 
-    function ladderClassText(mode) {  // "ClearHDR16", "SDR12 2.39:1": Core's running line
+    function ladderClassText(mode) {  // "Clear HDR 16-bit", "12-bit 2.39:1": as Core's running line
       const aspect = ladderAspectText(mode);
-      return (mode.clear_hdr ? "ClearHDR" : "SDR") + mode.bits + (aspect === "16:9" ? "" : " " + aspect);
+      return (mode.clear_hdr ? "Clear HDR " : "") + mode.bits + "-bit" + (aspect === "16:9" ? "" : " " + aspect);
     }
 
     // What Core knows about a mode: the probe's pool entry, else the saved resolution.
@@ -8795,9 +8795,9 @@ std::string_view webControlPageHtml()
       return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropAreaFor().width;
     }
 
-    function ladderClassName(mode) {  // "Clear HDR", "SDR", "SDR 2×2 binned"
+    function ladderClassName(mode) {  // "Clear HDR", "", "2×2 binned" (1.6.0 names no class for a plain mode)
       const info = ladderModeInfo(mode);
-      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR " + Number(info.binning) + "×" + Number(info.binning) + " binned" : "SDR");
+      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? Number(info.binning) + "×" + Number(info.binning) + " binned" : "");
     }
 
     // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
@@ -8815,9 +8815,9 @@ std::string_view webControlPageHtml()
       if (mode.clear_hdr)
         return (mode.width === 3840 && aspect === "16:9" ? "4K" : ladderSizeText(mode)) + " Clear HDR " + bits;
       if (!cropIn && mode.width === 3840)
-        return "4K SDR " + (aspect === "16:9" ? "" : aspect + " ") + bits;
+        return "4K " + (aspect === "16:9" ? "" : aspect + " ") + bits;
       if (!cropIn && mode.width === 1920)
-        return "2K SDR binned " + (aspect === "16:9" ? "" : aspect + " ") + bits;
+        return "2K binned " + (aspect === "16:9" ? "" : aspect + " ") + bits;
       return ladderSizeText(mode) + (cropIn ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + bits;
     }
 
@@ -9082,7 +9082,7 @@ std::string_view webControlPageHtml()
       };
     }
 
-    // "3840×2160 · ClearHDR16 · Uncompressed": the camera's mode when the ladder does not run it.
+    // "3840×2160 · Clear HDR 16-bit · Uncompressed": the camera's mode when the ladder does not run it.
     function ladderSnapshotLine(snapshot) {
       const mode = ladderSnapshotMode(snapshot);
       const format = recordingFormatLabel(snapshot.recording_format);
@@ -9292,7 +9292,7 @@ std::string_view webControlPageHtml()
       const text = createDomElement("div", "ladder-row-text");
       text.appendChild(createDomElement("div", "ladder-row-name", name));
       text.appendChild(createDomElement("div", "ladder-row-meta",
-        ladderSizeText(rung) + " · " + ladderAspectText(rung) + " · " + rung.bits + "-bit · " + ladderClassName(rung)));
+        ladderSizeText(rung) + " · " + ladderAspectText(rung) + " · " + rung.bits + "-bit" + (ladderClassName(rung) ? " · " + ladderClassName(rung) : "")));
       if (crop.desc)
         text.appendChild(createDomElement("div", "ladder-row-desc" + (crop.cropIn ? " crop-in" : ""), crop.desc));
       const rangeFrom = rowState.after ? "Above Resolution " + rowState.after : (rowState.from === 0 ? "Lowest FPS" : "Above " + rowState.from);
@@ -9329,7 +9329,7 @@ std::string_view webControlPageHtml()
       compField.appendChild(compSelect);
       compField.appendChild(createDomElement("span", "ladder-note", rung.comp === "none" ? "Exact, largest files"
         : (rung.comp === "lossless_jpeg"
-          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : (rung.clear_hdr ? "Exact, smaller files" : "Smaller files (SDR is sensor-compressed)"))
+          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : (rung.clear_hdr ? "Exact, smaller files" : "Smaller files (the sensor compresses outside Clear HDR)"))
           : "Smaller files")));
       if (rung.comp === "lossless_jpeg" && known && ceiling > 30 && sensorNameLower(state.snapshot).indexOf("imx585") !== -1)
         compField.appendChild(createDomElement("span", "ladder-note over",
@@ -9372,7 +9372,7 @@ std::string_view webControlPageHtml()
         const classChange = ladderClassName(below) !== ladderClassName(rung) || below.bits !== rung.bits;
         const sizeChange = below.width !== rung.width || below.height !== rung.height;
         if (classChange)
-          parts.push(ladderClassName(rung) + " " + rung.bits + "-bit → " + ladderClassName(below) + " " + below.bits + "-bit");
+          parts.push((ladderClassName(rung) + " " + rung.bits + "-bit").trim() + " → " + (ladderClassName(below) + " " + below.bits + "-bit").trim());
         if (sizeChange)
           parts.push("picture " + ladderSizeText(rung) + " → " + ladderSizeText(below));
         if (rung.comp !== below.comp)
@@ -9516,7 +9516,7 @@ std::string_view webControlPageHtml()
       const text = createDomElement("div", "ladder-pool-text");
       text.appendChild(createDomElement("div", "ladder-pool-name", name));
       text.appendChild(createDomElement("div", "ladder-pool-meta", ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · "
-        + ladderClassName(mode) + " · " + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
+        + (ladderClassName(mode) ? ladderClassName(mode) + " · " : "") + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
         + (crop.cropIn ? " · crop in" : "") + " · " + ladderFrameMB(mode, "none").toFixed(1) + " MB/frame"));
       if (why)
         text.appendChild(createDomElement("div", "ladder-pool-why", why));
@@ -10014,7 +10014,7 @@ std::string_view webControlPageHtml()
       ],
       10: [
         { value: "5472x3648", label: "5.5K", groups: [[25.48, "5472x3648 3648x3648 4864x3648 5016x3648"], [30.173, "5472x3076 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144"]] },
-        { value: "3840x2160", label: "4K UHD", groups: [[60.16, "3840x2160"]] },
+        { value: "3840x2160", label: "4K", groups: [[60.16, "3840x2160"]] },
       ],
     };
     // Core's table order (Imx283Modes.hpp kModes): normalise() takes the nearest mode, the first row on a tie.
@@ -10173,7 +10173,7 @@ std::string_view webControlPageHtml()
     };
     // The resolution pills; each also has a Clear HDR version ("<key>-hdr") where the class has rows for it.
     const imx585Families = [
-      { key: "hd", label: "Full HD binned" },   // 1920 wide, 2x2 binned
+      { key: "hd", label: "Full HD" },          // 1920 wide, 2x2 binned, as 1.6.0 names it
       { key: "4k", label: "4K" },
       { key: "2k", label: "2K crop" },          // 2048 wide (and 1440x1080), 1x1
       { key: "crop", label: "HD crop" },        // 1920 wide, 1x1
@@ -10181,9 +10181,9 @@ std::string_view webControlPageHtml()
     const imx585Ratios = [[1, "1:1"], [4 / 3, "1.33:1"], [1.378, "1.38:1"], [16 / 9, "16:9"], [1.85, "1.85:1"], [1.89, "1.89:1"],
       [1.9, "1.90:1"], [2, "2.00:1"], [2.2, "2.20:1"], [2.22, "2.22:1"], [2.35, "2.35:1"], [2.39, "2.39:1"], [2.4, "2.40:1"],
       [2.5, "2.50:1"], [2.55, "2.55:1"]];
-    const imx585LadderGroups = [["4k-hdr", "4K Clear HDR"], ["4k", "4K SDR"], ["hd-hdr", "Full HD binned Clear HDR"],
-      ["hd", "Full HD binned SDR"], ["2k-hdr", "2K crop Clear HDR"], ["2k", "2K crop SDR"], ["crop-hdr", "HD crop Clear HDR"],
-      ["crop", "HD crop SDR"]];
+    const imx585LadderGroups = [["4k-hdr", "4K Clear HDR"], ["4k", "4K"], ["hd-hdr", "Full HD Clear HDR"],
+      ["hd", "Full HD"], ["2k-hdr", "2K crop Clear HDR"], ["2k", "2K crop"], ["crop-hdr", "HD crop Clear HDR"],
+      ["crop", "HD crop"]];
 
     function imx585Selected(snapshot) {
       return sensorNameLower(snapshot).indexOf("imx585") !== -1;
@@ -10366,10 +10366,10 @@ std::string_view webControlPageHtml()
       return imx585LadderFamily(mode).key + (mode.clear_hdr ? "-hdr" : "");
     }
 
-    // "4K Clear HDR 16-bit", "4K SDR 2.39:1 12-bit", "Full HD binned SDR 12-bit", "HD crop SDR 2.00:1 12-bit".
+    // "4K Clear HDR 16-bit", "4K 2.39:1 12-bit", "Full HD 12-bit", "HD crop 2.00:1 12-bit".
     function imx585LadderModeName(mode) {
       const ratio = imx585RatioLabel(mode.width, mode.height);
-      return imx585LadderFamily(mode).label + (mode.clear_hdr ? " Clear HDR " : " SDR ") + (ratio === "16:9" ? "" : ratio + " ")
+      return imx585LadderFamily(mode).label + (mode.clear_hdr ? " Clear HDR " : " ") + (ratio === "16:9" ? "" : ratio + " ")
         + mode.bits + "-bit";
     }
 
@@ -17333,7 +17333,7 @@ std::string_view webControlPageHtml()
         }
       }, 2);
       setText("settingsCdngLogNote", cdngLogBits > 0 && snapshot.cdng_log_applied === false
-        ? "Not applied: in SDR the sensor chip already compresses the raw stream, so Log works in Clear HDR (16-bit). The files stay linear."
+        ? "Not applied: outside Clear HDR the sensor chip already compresses the raw stream, so Log works in Clear HDR (16-bit). The files stay linear."
         : cdngLogBits > 0
         ? "Stores " + cdngLogBits + "-bit (from " + snapshot.raw_bit_depth + "-bit sensor data)."
         : (cdngLogSetting !== "off"

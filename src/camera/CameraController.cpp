@@ -11821,7 +11821,7 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
         if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat))
             return std::string();
         std::string line = std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
-            (out.clearHdr ? "ClearHDR" : "SDR") + std::to_string(out.rawBitDepth);
+            (out.clearHdr ? "Clear HDR " : "") + std::to_string(out.rawBitDepth) + "-bit";
         return line;
     };
     const std::string base = runningText();
