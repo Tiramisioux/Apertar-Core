@@ -61,7 +61,7 @@ std::string timestamp(const char *format, std::time_t when)
     return out;
 }
 
-// The name part of a history entry: [a-z0-9_] only, so a caller cannot put a path in it.
+// The writer's name in a history entry and in the state note: [a-z0-9_] only, so a caller cannot put a path or a line in it.
 std::string safeName(const std::string &by)
 {
     std::string out;
@@ -432,7 +432,7 @@ void HardwareConfigStore::addHistoryLocked(const std::string &text, const std::s
 void HardwareConfigStore::writeStateLocked(const std::string &by)
 {
     state_.writtenAt = timestamp("%Y-%m-%d %H:%M:%S", std::time(nullptr));
-    state_.writtenBy = by;
+    state_.writtenBy = safeName(by);
     settingsFile::atomicWrite(notes_ / "hardware-state.conf",
                               "written_revision=" + state_.writtenRevision + "\n" +
                               "written_at=" + state_.writtenAt + "\n" +
