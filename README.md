@@ -277,6 +277,21 @@ sudo systemctl stop apertar-core.service
 
 Run this from the Core repository folder. For a source-only setup without the service, skip the service command. Press `Ctrl+C` to stop the manual process; restart the service afterward if you normally use it.
 
+### Two sensors (a second Core for cam1)
+
+A camera with a second sensor on cam1 runs a second Core for it, `apertar-core-cam1.service`, beside `apertar-core.service`. Nothing changes for a camera that does not install it. Install it once, from the Core repository folder:
+
+```bash
+install -m 0755 scripts/start-apertar-core.sh /home/pi/start-apertar-core.sh
+[[ -f /home/pi/apertar-hardware-cam1.conf ]] || install -m 0644 config/apertar-hardware-cam1.conf /home/pi/apertar-hardware-cam1.conf
+mkdir -p /home/pi/.config-cam1
+sudo install -m 0644 config/apertar-core-cam1.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable apertar-core-cam1
+```
+
+The start script is the one `apertar-core.service` runs; without `APERTAR_CAMERA` it starts the main Core exactly as before. From the next boot on, the second Core starts with the main one, using the same binary. Before it starts, `apertar-core --camera cam1 --check-dual` looks for a sensor on cam0 and another on cam1; with one sensor or none, systemd skips the unit (`systemctl status apertar-core-cam1` says the condition failed) and no second Core runs. The second Core uses its own socket (`/tmp/apertar-core-cam1.sock`), WebUI port 8001, settings in `/home/pi/.config-cam1` and the hardware file `/home/pi/apertar-hardware-cam1.conf`, which turns every input off; without that file it does not start. The **Dual sensor** switch in the WebUI's Dual Sensor card decides whether the main Core uses it. To remove it: `sudo systemctl disable apertar-core-cam1`.
+
 Before recording, make sure the intended media is actually mounted at the selected path. An existing folder by itself does not prove that an external drive is mounted there.
 
 ### Launch Options
