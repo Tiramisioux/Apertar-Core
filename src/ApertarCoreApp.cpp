@@ -13871,13 +13871,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const hardware::StoreResult result = edits.empty()
             ? hardware::configStore().replace(*base, *text, by, flags, hardwareConfigFacts())
             : hardware::configStore().edit(*base, edits, by, flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13911,11 +13906,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "storage", "buffer", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13951,11 +13943,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "storage", key, value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13985,11 +13974,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.trusted = true;   // [media] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "media", "preroll", text } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();

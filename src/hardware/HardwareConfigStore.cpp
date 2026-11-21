@@ -323,7 +323,7 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         result.conflicts = hwconf::conflicts(*baseText, current, merged);
         if (!result.conflicts.empty()) {
             result.code = "conflict";
-            result.error = "The file changed in the same place since you loaded it.";
+            result.error = "The file changed in the same place since you loaded it. Reload, then change it again.";
             return result;
         }
         next = hwconf::applyEdits(current, merged);

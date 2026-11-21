@@ -18621,10 +18621,13 @@ std::string_view webControlPageHtml()
       const editor = document.getElementById("settingsConfigEditor");
       const reloadButton = document.getElementById("reloadConfigButton");
       const saveButton = document.getElementById("saveConfigButton");
+      const checkButton = document.getElementById("checkConfigButton");
       if (reloadButton)
         reloadButton.disabled = loading || saving;
       if (saveButton)
         saveButton.disabled = loading || saving || !state.configDirty;
+      if (checkButton)
+        checkButton.disabled = !state.configRevision;
       if (editor)
         editor.disabled = loading || saving;
 
@@ -20308,10 +20311,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your settings stay on the page. Press Reload to see the newer file." : "";
-          showHardwareMessage((result.error || "Could not save the settings.") + kept, found, false);
+          showHardwareMessage(result.error || "Could not save the settings.", [], false);
           showToast(result.error || "Could not save the settings.", true);
           return;
         }
@@ -20681,7 +20681,7 @@ std::string_view webControlPageHtml()
       }
       const result = await controlsCall({ cmd: "set_controls", base: controlsState.revision, text: version.text, by: "webui_undo" });
       if (!result.ok) {
-        showControlsMessage(result.error || "Could not undo.", result.issues, false);
+        showControlsMessage(result.error || "Could not undo.", [], false);
         return;
       }
       await loadControls(true);
@@ -20758,10 +20758,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your choices stay on the page. Press Reload to see the newer file." : "";
-          showControlsMessage((result.error || "Could not save the controls.") + kept, found, false);
+          showControlsMessage(result.error || "Could not save the controls.", [], false);
           showToast(result.error || "Could not save the controls.", true);
           return;
         }
@@ -20893,10 +20890,10 @@ std::string_view webControlPageHtml()
     // T43 Check: Core reads the text without saving it and says what it finds, with line numbers.
     async function checkConfigFile() {
       const editor = document.getElementById("settingsConfigEditor");
-      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision || "h", text: editor ? editor.value : "", dry_run: "true", by: "webui" });
+      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision, text: editor ? editor.value : "", dry_run: "true", by: "webui" });
       const found = Array.isArray(result.issues) ? result.issues : [];
-      if (!result.ok && found.length === 0) {
-        showConfigIssues(result.error || "Could not check the text.", result.new_errors || []);
+      if (!result.ok) {
+        showConfigIssues(result.error || "Could not check the text.", []);
         return;
       }
       if (found.length === 0) {
