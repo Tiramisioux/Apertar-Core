@@ -8252,6 +8252,8 @@ void ApertarCoreApp::startCam1Client()
         const cameraport::Node node = cameraport::resolve({}, "cam1");
         return node.valid && cameraport::sensorSubdevUnder({}, node.path);
     };
+    // One sensor (either port) or none: no cam1, as the cam1 unit's ExecCondition skips it.
+    options.dualSensors = [] { return cameraport::dualSensorsPresent({}, "cam1", 0, 0, nullptr); };
     options.primaryInStandby = [this] { return primaryStandby_.load(std::memory_order_acquire); };
     options.ties = [] { return cam1TiesCached(); };
     options.primaryView = [this] { return relayView(); };

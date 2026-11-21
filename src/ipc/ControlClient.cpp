@@ -91,7 +91,8 @@ void ControlClient::start(Options options)
     bool unknown = false;
     if (options_.switchOn && options_.switchOn()) {
         struct stat st{};
-        unknown = (options_.configNames && options_.configNames("cam1")) || ::stat(options_.socketPath.c_str(), &st) == 0;
+        unknown = (options_.configNames && options_.configNames("cam1") && options_.sensorPresent && options_.sensorPresent()) ||
+                  ::stat(options_.socketPath.c_str(), &st) == 0;
     }
     unknown_.store(unknown, std::memory_order_release);
     if (::pipe(wakeFds_) == 0) {
@@ -331,7 +332,7 @@ void ControlClient::tick()
     }
 
     const bool namesCam1 = options_.configNames && options_.configNames("cam1");
-    const bool namesBoth = namesCam1 && options_.configNames("cam0");
+    const bool dualSensors = options_.dualSensors && options_.dualSensors();
     const bool ours = sameInodeAsOwn();
 
     if (fd_ < 0 && !ours) {
@@ -368,7 +369,7 @@ void ControlClient::tick()
 
     cam1state::ConfiguredInputs inputs;
     inputs.switchOn = true;
-    inputs.configNamesBoth = namesBoth;
+    inputs.dualSensors = dualSensors;
     inputs.socketAccepted = acceptedEver_;
     inputs.socketIsOurs = ours;
     configured_.store(cam1state::configured(inputs) || fd_ >= 0, std::memory_order_release);

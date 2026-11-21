@@ -37,6 +37,7 @@ public:
         std::function<bool()> switchOn;                        // UI.conf dualSensorEnabled
         std::function<bool(const std::string &)> configNames;  // config.txt names a sensor on this port ("cam0", "cam1")
         std::function<bool()> sensorPresent;                   // sysfs shows a sensor on cam1's port
+        std::function<bool()> dualSensors;                     // sysfs shows a sensor on cam0's port and on cam1's
         std::function<bool()> primaryInStandby;                // published by the command thread
         // The primary's side of the resync and the compare (design 4.4). All of them are read on the relay thread and
         // must not take commandMutex_ or the controller's mutex_: the command thread publishes what they return.
