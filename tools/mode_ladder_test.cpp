@@ -1,4 +1,5 @@
-// Host test for src/camera/ModeLadder.hpp (mode_ladder.conf and the get/set_mode_ladder JSON): the aspect filter.
+// Host test for src/camera/ModeLadder.hpp (the ladder from its saved text, an old mode_ladder.conf and the
+// get/set_mode_ladder JSON): the aspect filter.
 //   g++ -std=c++20 -O2 -Wall -Wextra -I src -I include tools/mode_ladder_test.cpp -o /tmp/mlt && /tmp/mlt
 #include "camera/ModeLadder.hpp"
 
@@ -21,7 +22,7 @@ static bool contains(const std::string &text, const std::string &part)
     return text.find(part) != std::string::npos;
 }
 
-// A file as Core wrote it before the aspect filter: no aspects= line.
+// A mode_ladder.conf as Core wrote it before the aspect filter: no aspects= line.
 static const std::string kRungs = "3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::lossless_jpeg,1920x1080:12:sdr";
 static const std::string kOldFile =
     "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Record > Mode Ladder).\n"
@@ -31,25 +32,18 @@ static const std::string kOldFile =
 
 int main()
 {
-    // ---- round trip through fileText and parseFile ----
+    // ---- the ladder from the text of its settings ----
     {
-        Ladder l = parseFile(kOldFile);
-        l.rampReady = true;
-        l.aspects = { "16:9", "2.39:1" };
-        const std::string text = fileText(l);
-        check(contains(text, "\naspects=16:9,2.39:1\n"), "fileText: its own aspects= line, the card's labels joined by commas");
-        check(contains(text, "\nresolutions=" + kRungs + "\n"), "fileText: the resolutions line as before");
-        const Ladder back = parseFile(text);
-        check(back.aspects == l.aspects, "round trip: the aspects, in their order");
-        check(back.enabled && back.rampReady && rungsText(back.rungs) == kRungs, "round trip: enabled, ramp_ready and the rungs");
-        Ladder all = back;
-        all.aspects.clear();
-        const std::string allText = fileText(all);
-        check(contains(allText, "\naspects=\n") && parseFile(allText).aspects.empty() && rungsText(parseFile(allText).rungs) == kRungs,
-              "round trip: All is an empty aspects= line");
-        Ladder other = back;   // IMX585 decimals and the Record pane's IMX283 names
-        other.aspects = { "1:1", "1.33:1", "1.85:1", "2.55:1", "4:3", "3:2", "1.37:1" };
-        check(parseFile(fileText(other)).aspects == other.aspects, "round trip: 1:1, 1.33:1, 1.85:1, 2.55:1, 4:3, 3:2, 1.37:1");
+        const Ladder l = fromText(true, true, kRungs, "16:9,2.39:1");
+        check(l.aspects == std::vector<std::string>{ "16:9", "2.39:1" }, "fromText: the aspects, in their order");
+        check(l.enabled && l.rampReady && rungsText(l.rungs) == kRungs, "fromText: enabled, ramp_ready and the rungs");
+        const Ladder all = fromText(true, false, kRungs, "");
+        check(all.aspects.empty() && all.enabled && !all.rampReady && rungsText(all.rungs) == kRungs,
+              "fromText: an empty filter is All");
+        const std::vector<std::string> other = { "1:1", "1.33:1", "1.85:1", "2.55:1", "4:3", "3:2", "1.37:1" };   // IMX585 decimals and the Record pane's IMX283 names
+        check(fromText(true, false, kRungs, aspectsText(other)).aspects == other, "round trip: 1:1, 1.33:1, 1.85:1, 2.55:1, 4:3, 3:2, 1.37:1");
+        const Ladder none = fromText(true, true, "", "");
+        check(none.rungs.empty() && !none.enabled, "fromText: no resolutions text, the ladder is off");
     }
 
     // ---- a file without the line ----
@@ -98,25 +92,26 @@ int main()
               "a broken resolutions line (ladder off) keeps the aspects");
     }
 
-    // ---- withAspectsLine: a filter save replaces only the aspects= line ----
+    // ---- fromText: a text this Core cannot read leaves the rest alone ----
     {
-        const std::string damaged = "enabled=true\nresolutions=3840x2160:99:sdr\naspects=16:9\nramp_ready=true\n";
-        const std::string saved = withAspectsLine(damaged, { "2.39:1" });
-        check(saved == "enabled=true\nresolutions=3840x2160:99:sdr\nramp_ready=true\naspects=2.39:1\n",
-              "withAspectsLine: a resolutions line this Core cannot read and enabled=true stay byte for byte");
-        check(withAspectsLine(kOldFile, { "16:9" }) == kOldFile + "aspects=16:9\n", "withAspectsLine: an old file gets the line at the end");
-        check(withAspectsLine("enabled=true\naspects=1:1\naspects=4:3\n", {}) == "enabled=true\naspects=\n",
-              "withAspectsLine: two aspects= lines become one, All");
-        check(withAspectsLine("enabled=true\r\naspects=1:1\r\n", { "4:3" }) == "enabled=true\r\naspects=4:3\n",
-              "withAspectsLine: CRLF lines are kept as they are");
-        check(withAspectsLine("# mine\naspects_old=1\nfuture=2", { "4:3" }) == "# mine\naspects_old=1\nfuture=2\naspects=4:3\n",
-              "withAspectsLine: comments, other keys and a last line without its newline are kept");
+        const Ladder broken = fromText(true, true, "3840x2160:99:sdr", "2.39:1");
+        check(broken.rungs.empty() && !broken.enabled && broken.rampReady && broken.aspects == std::vector<std::string>{ "2.39:1" },
+              "fromText: a broken resolutions text (ladder off) keeps ramp_ready and the aspects");
+        const Ladder badFilter = fromText(true, false, kRungs, "16:9,<script>");
+        check(badFilter.aspects.empty() && badFilter.enabled && rungsText(badFilter.rungs) == kRungs,
+              "fromText: a bad filter is All, the ladder stays on");
+    }
+
+    // ---- an old mode_ladder.conf, taken over by parseFile and the text functions ----
+    {
         Ladder l = parseFile(kOldFile);
-        const Ladder back = parseFile(withAspectsLine(fileText(l), { "16:9", "2.39:1" }));
-        check(back.aspects == std::vector<std::string>{ "16:9", "2.39:1" } && back.enabled && rungsText(back.rungs) == kRungs,
-              "withAspectsLine: fileText's file reads back with the new filter and the same ladder");
-        check(contains(fileText(l), "(Settings > Modes: Activated sensor modes and Mode Ladder)"),
-              "fileText: the header names where the card is now");
+        l.aspects = { "16:9" };
+        const Ladder back = fromText(l.enabled, l.rampReady, rungsText(l.rungs), aspectsText(l.aspects));
+        check(back.enabled && !back.rampReady && rungsText(back.rungs) == kRungs && back.aspects == l.aspects,
+              "take-over: the old file's values come back from their text");
+        check(rungsText(parseFile("rungs=" + kRungs + "\n").rungs) == kRungs, "parseFile: \"rungs\", the first name of resolutions");
+        check(parseFile("enabled=true\nresolutions=1920x1080:12:sdr\nresolutions=3840x2160:99:sdr\n").rungs.empty(),
+              "parseFile: the last resolutions line counts");
     }
 
     // ---- parseAspects, as set_mode_ladder aspects uses it ----

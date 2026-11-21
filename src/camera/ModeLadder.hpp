@@ -358,53 +358,42 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
 }
 
-// mode_ladder.conf: one key per line, so a person can read it. A ladder save rewrites it whole, with this
-// header. A filter save writes a missing or empty file whole; in any other it replaces the aspects= line and
-// puts it last (withAspectsLine), so the header stays as it is.
-inline std::string fileText(const Ladder &l)
-{
-    return "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Modes: Activated sensor modes and Mode Ladder).\n"
-           "enabled=" + std::string(l.enabled ? "true" : "false") + "\n"
-           "ramp_ready=" + std::string(l.rampReady ? "true" : "false") + "\n"
-           "resolutions=" + rungsText(l.rungs) + "\n"
-           "aspects=" + aspectsText(l.aspects) + "\n";
-}
-
-// The file with its aspects= line replaced by one at the end (as fileText puts it; several become one). Every
-// other line stays byte for byte, so a filter save never rewrites what this Core could not read: a resolutions
-// line from another build, a CRLF hand edit, an unknown key. A last line without its newline gets one.
-inline std::string withAspectsLine(const std::string &text, const std::vector<std::string> &aspects)
-{
-    std::string out;
-    std::stringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        const auto eq = line.find('=');
-        if (eq != std::string::npos && line.compare(0, eq, "aspects") == 0)
-            continue;
-        out += line + "\n";
-    }
-    return out + "aspects=" + aspectsText(aspects) + "\n";
-}
-
-inline Ladder parseFile(const std::string &text)
+// The ladder from the text of its four settings (camera_settings.conf keys). A resolutions text that does not
+// parse is no ladder, and a bad filter is All; neither switches the camera.
+inline Ladder fromText(bool enabled, bool rampReady, const std::string &resolutions, const std::string &aspects)
 {
     Ladder l;
+    std::string error;
+    l.enabled = enabled;
+    l.rampReady = rampReady;
+    if (!resolutions.empty() && !parseRungs(resolutions, l.rungs, error))
+        l.rungs.clear();
+    if (!parseAspects(aspects, l.aspects, error))
+        l.aspects.clear();
+    if (l.rungs.empty())
+        l.enabled = false;  // a broken ladder never switches the camera
+    return l;
+}
+
+// mode_ladder.conf, the file the ladder lived in before camera_settings.conf held it: one key per line.
+// Read only to take an old file over.
+inline Ladder parseFile(const std::string &text)
+{
+    bool enabled = false, rampReady = false;
+    std::string resolutions, aspects;
     std::stringstream in(text);
-    std::string line, error;
+    std::string line;
     while (std::getline(in, line)) {
         const auto eq = line.find('=');
         if (line.empty() || line[0] == '#' || eq == std::string::npos)
             continue;
         const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
-        if (key == "enabled") l.enabled = value == "true";
-        else if (key == "ramp_ready") l.rampReady = value == "true";
-        else if ((key == "resolutions" || key == "rungs") && !parseRungs(value, l.rungs, error)) l.rungs.clear();   // "rungs": the first name
-        else if (key == "aspects" && !parseAspects(value, l.aspects, error)) l.aspects.clear();   // a bad filter is All; the rungs stay
+        if (key == "enabled") enabled = value == "true";
+        else if (key == "ramp_ready") rampReady = value == "true";
+        else if (key == "resolutions" || key == "rungs") resolutions = value;   // "rungs": the first name
+        else if (key == "aspects") aspects = value;
     }
-    if (l.rungs.empty())
-        l.enabled = false;  // a broken file never switches the camera
-    return l;
+    return fromText(enabled, rampReady, resolutions, aspects);
 }
 
 } // namespace apertar::ladder

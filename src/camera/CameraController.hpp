@@ -157,9 +157,8 @@ public:
     // T34: the mode ladder. Any of rungs / enabled / rampReady / aspects; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
     // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
-    // saved in a take too, with no check or apply, by replacing the file's aspects= line and putting it last, or
-    // writing the whole file when it is missing or empty (a filter unchanged from Core's copy writes nothing);
-    // refused for a bad label, a file that cannot be read whole, or a failed write.
+    // saved in a take too, with no check or apply (a filter unchanged from Core's copy saves nothing);
+    // refused for a bad label. The ladder is saved in camera_settings.conf with the other settings.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
                        std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
                        std::string *json, std::string *error);
@@ -252,11 +251,6 @@ private:
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;
-    bool saveModeLadderLocked() const;   // false (and logged) when atomicWrite failed, also after its rename
-    // The aspect filter's own save: the aspects= line of mode_ladder.conf replaced and put last (a missing or
-    // empty file is written whole). True when the file holds aspects; false with *error when the file could not
-    // be read whole or the write did not reach it.
-    bool saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;
@@ -319,7 +313,7 @@ private:
     uint32_t rampNominalShutterUs_ = 0;
     double rampTakeBaseFps_ = 0.0;
     bool rampTakeChanged_ = false;
-    ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
+    ladder::Ladder modeLadder_;   // T34, parsed from the settings_.modeLadder* text; set only where those are written
     bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
     TakeInfo takeInfo_;
     std::unique_ptr<CameraSession> session_;
