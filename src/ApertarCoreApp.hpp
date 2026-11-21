@@ -194,7 +194,7 @@ private:
     enum class ClipMergeOutcome { Done, Stopped, Shutdown };
     ClipMergeOutcome mergeSplitClip(const std::filesystem::path &clip);
     MediaProfile mediaProfile() const;
-    void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
+    bool handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
     void handleSingleHardwareInputAction(const std::string &action);
     void handleHardwareAnalogInput(const GroveAnalogInput::AnalogEvent &event);

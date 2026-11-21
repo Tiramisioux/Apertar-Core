@@ -203,9 +203,9 @@ uint32_t readBigEndianU32(const uint8_t in[4])
 
 } // namespace
 
-NeoRotary4Input::NeoRotary4Input(ActionCallback actionCallback, ActionCallback rotationCallback)
+NeoRotary4Input::NeoRotary4Input(PressCallback actionCallback, ActionCallback rotationCallback)
     : actionCallback_(std::move(actionCallback))
-    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : actionCallback_)
+    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : ActionCallback(actionCallback_))
 {
 }
 
@@ -519,11 +519,11 @@ void NeoRotary4Input::closeDevice(int *fd) const
     }
 }
 
-void NeoRotary4Input::emitAction(const std::string &action)
+bool NeoRotary4Input::emitAction(const std::string &action)
 {
     if (action.empty() || !actionCallback_)
-        return;
-    actionCallback_(action);
+        return false;
+    return actionCallback_(action);
 }
 
 void NeoRotary4Input::setLastError(const std::string &error)
@@ -634,13 +634,16 @@ void NeoRotary4Input::run()
                     static const char *const suffixes[] = {"_press", "_single", "_double", "_triple", "_hold"};
                     seenCallback_("neorotary4|encoder" + std::to_string(encoder) + suffixes[static_cast<size_t>(event)]);
                 }
+                bool woke = false;
                 switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(actions.press); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(actions.single); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(actions.doubleClick); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(actions.triple); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(actions.hold); break;
+                case hardware::ButtonGesture::Event::Press: woke = emitAction(actions.press); break;
+                case hardware::ButtonGesture::Event::Single: woke = emitAction(actions.single); break;
+                case hardware::ButtonGesture::Event::Double: woke = emitAction(actions.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: woke = emitAction(actions.triple); break;
+                case hardware::ButtonGesture::Event::Hold: woke = emitAction(actions.hold); break;
                 }
+                if (woke)
+                    gestures[encoder].consume();   // A wake press does nothing else.
             }
         }
 

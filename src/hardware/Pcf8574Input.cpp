@@ -167,7 +167,7 @@ std::string i2cDevicePath(int busNumber)
 
 } // namespace
 
-Pcf8574Input::Pcf8574Input(ActionCallback actionCallback)
+Pcf8574Input::Pcf8574Input(PressCallback actionCallback)
     : actionCallback_(std::move(actionCallback))
 {
 }
@@ -374,11 +374,11 @@ void Pcf8574Input::closeDevice(int *fd) const
     }
 }
 
-void Pcf8574Input::emitAction(const std::string &action)
+bool Pcf8574Input::emitAction(const std::string &action)
 {
     if (action.empty() || !actionCallback_)
-        return;
-    actionCallback_(action);
+        return false;
+    return actionCallback_(action);
 }
 
 void Pcf8574Input::setLastError(const std::string &error)
@@ -470,13 +470,16 @@ void Pcf8574Input::run()
                     static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
                     seenCallback_("pcf8574|pin" + std::to_string(pin) + suffixes[static_cast<size_t>(event)]);
                 }
+                bool woke = false;
                 switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(config_.actions[pin]); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(more[0]); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(more[1]); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(more[2]); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(more[3]); break;
+                case hardware::ButtonGesture::Event::Press: woke = emitAction(config_.actions[pin]); break;
+                case hardware::ButtonGesture::Event::Single: woke = emitAction(more[0]); break;
+                case hardware::ButtonGesture::Event::Double: woke = emitAction(more[1]); break;
+                case hardware::ButtonGesture::Event::Triple: woke = emitAction(more[2]); break;
+                case hardware::ButtonGesture::Event::Hold: woke = emitAction(more[3]); break;
                 }
+                if (woke)
+                    gestures[pin].consume();   // A wake press does nothing else.
             }
         }
 

@@ -16,8 +16,9 @@ namespace apertar {
 class GpioInput {
 public:
     using ActionCallback = std::function<void(const std::string &)>;
+    using PressCallback = std::function<bool(const std::string &)>;   // true: the press woke the camera, nothing else follows
 
-    explicit GpioInput(ActionCallback actionCallback, ActionCallback rotationCallback = {});
+    explicit GpioInput(PressCallback actionCallback, ActionCallback rotationCallback = {});
     // Called with "section|key" each time a control fires, mapped or not (the WebUI's Listen). Set before start().
     void setSeenCallback(ActionCallback seenCallback) { seenCallback_ = std::move(seenCallback); }
     ~GpioInput();
@@ -129,10 +130,10 @@ private:
                               std::string *errorMessage) const;
     bool readLineValues(int lineFd, size_t lineCount, uint64_t *bits) const;
     void closeFd(int *fd) const;
-    void emitAction(const std::string &action);
+    bool emitAction(const std::string &action);
     void setLastError(const std::string &error);
 
-    ActionCallback actionCallback_;
+    PressCallback actionCallback_;
     ActionCallback rotationCallback_;
     ActionCallback seenCallback_;
     Config config_;

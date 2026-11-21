@@ -8163,13 +8163,13 @@ ApertarCoreApp::ApertarCoreApp(Options options)
     , camera_(
           [this](const std::string &eventJson) { publishEvent(eventJson); },
           [this](PreviewFrameDescriptor frame) { enqueuePreviewFrame(std::move(frame)); })
-    , gpioInput_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , gpioInput_([this](const std::string &action) { return handleHardwareInputAction(action); },
                  [this](const std::string &action) { handleHardwareInputAction(action, false); })
     , standbyPowerButton_([this](bool doublePress) { return handlePowerButtonPress(doublePress); })
     , groveAnalogInput_([this](const GroveAnalogInput::AnalogEvent &event) { handleHardwareAnalogInput(event); })
-    , neoRotary4Input_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , neoRotary4Input_([this](const std::string &action) { return handleHardwareInputAction(action); },
                        [this](const std::string &action) { handleHardwareInputAction(action, false); })
-    , pcf8574Input_([this](const std::string &action) { handleHardwareInputAction(action); })
+    , pcf8574Input_([this](const std::string &action) { return handleHardwareInputAction(action); })
 {
     // The write queue's safety stop (see runBufferSafetyStop): lock-free, runs under the queue's mutex. Set before any take.
     bufferbudget::safetyStopHook() = [this](const bufferbudget::SafetyStopHit &hit) {
@@ -10828,25 +10828,26 @@ bool ApertarCoreApp::handlePowerButtonPress(bool doublePress)
     return true;
 }
 
-void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
+// True when the press only woke the camera from Standby: the input then counts nothing more from it.
+bool ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
 {
     if (!running_.load(std::memory_order_relaxed) || action.empty())
-        return;
+        return false;
 
     const auto actions = hardware::parseButtonActions(action, [](const std::string &token) { return token; });
     if (!actions.error.empty()) {
         std::cerr << "Hardware input mapping ignored: " << actions.error << '\n';
-        return;
+        return false;
     }
     // Keep one button's sequence together across GPIO, I2C and analog inputs.
     std::lock_guard<std::mutex> sequenceLock(hardwareInputSequenceMutex_);
     if (camera_.state() == CameraState::Standby) {
         if (!buttonPress)
-            return;
+            return false;
         ControlCommand wake;
         wake.name = "wake";
         dispatchHardwareInputCommand(std::move(wake));
-        return;
+        return true;
     }
     lastUserActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -10856,6 +10857,7 @@ void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool b
         handleSingleHardwareInputAction(singleAction);
         if (camera_.state() == CameraState::Standby) break;
     }
+    return false;
 }
 
 void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)

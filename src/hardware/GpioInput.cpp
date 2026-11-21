@@ -195,9 +195,9 @@ int8_t quadratureDelta(int previousState, int currentState)
 
 } // namespace
 
-GpioInput::GpioInput(ActionCallback actionCallback, ActionCallback rotationCallback)
+GpioInput::GpioInput(PressCallback actionCallback, ActionCallback rotationCallback)
     : actionCallback_(std::move(actionCallback))
-    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : actionCallback_)
+    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : ActionCallback(actionCallback_))
 {
 }
 
@@ -564,11 +564,11 @@ void GpioInput::closeFd(int *fd) const
     }
 }
 
-void GpioInput::emitAction(const std::string &action)
+bool GpioInput::emitAction(const std::string &action)
 {
     if (action.empty() || !actionCallback_)
-        return;
-    actionCallback_(action);
+        return false;
+    return actionCallback_(action);
 }
 
 void GpioInput::setLastError(const std::string &error)
@@ -657,13 +657,16 @@ void GpioInput::run()
                     const auto at = static_cast<size_t>(event);
                     seenCallback_(button.seenKey + (at == 0 ? button.pressSuffix : std::string(suffixes[at])));
                 }
+                bool woke = false;
                 switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(button.doubleClick); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(button.triple); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(button.hold); break;
+                case hardware::ButtonGesture::Event::Press: woke = emitAction(button.action); break;
+                case hardware::ButtonGesture::Event::Single: woke = emitAction(button.single); break;
+                case hardware::ButtonGesture::Event::Double: woke = emitAction(button.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: woke = emitAction(button.triple); break;
+                case hardware::ButtonGesture::Event::Hold: woke = emitAction(button.hold); break;
                 }
+                if (woke)
+                    button.gesture.consume();   // A wake press does nothing else.
             }
         }
 
