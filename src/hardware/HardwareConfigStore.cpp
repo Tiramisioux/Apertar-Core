@@ -11,7 +11,6 @@
 #include <map>
 #include <memory>
 #include <sstream>
-#include <thread>
 
 #include <sys/stat.h>
 
@@ -205,18 +204,15 @@ std::optional<std::string> HardwareConfigStore::baseTextLocked(const std::string
     return std::nullopt;
 }
 
-// A file Core did not write must not be edited while an editor may still be saving it (nano rewrites in place).
+// A file Core did not write must not be edited while an editor may still be saving it (nano rewrites in place):
+// one changed in the last second is left alone. Never sleep here: every writer waits on mutex_.
 bool HardwareConfigStore::settledLocked() const
 {
     if (!stamp_.exists || revision_ == state_.writtenRevision)
         return true;
     const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     const int64_t age = now - stamp_.mtimeNs;
-    if (age >= 0 && age < 1000000000)
-        return false;
-    const Stamp first = statFile();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return first == statFile();
+    return !(age >= 0 && age < 1000000000);
 }
 
 std::string HardwareConfigStore::currentText() const
