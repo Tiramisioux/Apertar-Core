@@ -10,12 +10,16 @@
 #include "hardware/Pcf8574Input.hpp"
 #include "hardware/RecordingIndicatorOutput.hpp"
 #include "hardware/TriggerOutput.hpp"
+#include "ipc/CommandClasses.hpp"
+#include "ipc/ControlClient.hpp"
+#include "ipc/Resync.hpp"
 #include "ipc/ControlProtocol.hpp"
 #include "ipc/ControlServer.hpp"
 #include "web/WebServer.hpp"
 #include "util/MediaProfile.hpp"
 #include "util/StoragePreroll.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -40,6 +44,7 @@ public:
         std::string mediaRoot = "/media/RAW";
         std::string webBindAddress = "0.0.0.0";
         uint16_t webPort = 8000;
+        std::string camera;     // --camera: "" or cam0 = the primary; cam1 or an I2C node (i2c@88000) = a secondary
         bool simulateCamera = false;
     };
 
@@ -79,7 +84,50 @@ private:
 
     std::string handleRequest(const std::string &line);
     std::string handleWebCommand(const std::string &payload);
+    // The wrapper (design 4.1 The hook): the pre-steps, commandMutex_, handleCommandLocal, then the relay's forward.
     std::string handleCommand(const ControlCommand &command);
+    // Today's handleCommand body, called with commandMutex_ held.
+    std::string handleCommandLocal(const ControlCommand &command);
+    // The relay (design 4.1). All of it is inert while cam1Client_ is not configured.
+    void startCam1Client();
+    std::optional<std::string> cam1RefusalBefore(const ControlCommand &command);
+    void cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties);
+    std::string handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties);
+    bool cam1HoldsMedium() const;
+    // The take with cam1 (design 6.1, 6.2). prepareCam1Take runs in the record_start branch under commandMutex_: the
+    // cameras, and with cam1 in the take the slot, both names, the published take and cam1's record_start (not waited for).
+    struct Cam1TakeStart {
+        bool refused = false;
+        std::string refusal;
+        int cameras = 1;                                  // takeplan::kCam0 / kCam1 / kBoth
+        int64_t cam1StartUs = 0;
+        std::shared_ptr<ControlClient::Reply> reply;      // cam1's answer to its record_start
+    };
+    struct TakeViews {                                    // the UI.conf settings the policy reads (design 6.1)
+        std::string recordCameras;
+        std::string previewSource;
+        std::string hdmi1Source;
+    };
+    Cam1TakeStart prepareCam1Take(const ControlCommand &command, const TakeViews &views, CameraController::TakeOptions &take);
+    std::string startCam1OnlyTake(const ControlCommand &command, const Cam1TakeStart &plan);
+    void endCam1OnlyTake();                               // the tally and `active:false`, once
+    void endFailedTake();                                 // cam0's take failed: cam1 in it stops on the next slot
+    void onCam1TakeChange();                              // the relay thread, no lock held: adopted / ended
+    // cam1 records or is in the primary's take (P7): the card is in use. Lock-free; false with no cam1.
+    bool cam1RecordingActive() const { return cam1Client_.configured() && cam1Client_.recordingNow(); }
+    // The primary runs a take that only cam1 records (or adopted one): `recording`, the tally, REC toggles to stop.
+    bool cam1OnlyTakeActive() const { return cam1OnlyTake_.load(std::memory_order_acquire); }
+    std::atomic<bool> cam1OnlyTake_{false};
+    // The primary's side of the relay's resync and compare (design 4.1 Locks, 4.4): what the command thread publishes.
+    void publishRelayView(const std::string &afterCommand);
+    resync::PrimaryView relayView() const;
+    bool primaryIdleForRelay() const;
+    bool primaryTakeActiveForRelay() const;
+    std::vector<skew::Stamp> primaryFramesForRelay() const;
+    void noteRelayFrame(int64_t timestampUs);
+    void noteRelayEvent(const std::string &eventJson);
+    // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
+    bool secondaryRole() const;
     std::string testInputReply(const ControlCommand &command);
     std::string gpioPeripheralJson(const hwconf::Document &doc);
     std::string i2cPeripheralJson(const hwconf::Document &doc, const std::string &section, const std::string &title,
@@ -141,6 +189,7 @@ private:
     bool clipMergeMayRun(std::string *why = nullptr) const;
     void waitForClipMerge(const std::string &commandName, int blockMs);
     std::string clipMergeStateJson() const;
+    bool clipMergeIsActive(const std::string &clipName) const;   // the merge worker is moving this clip's frames now
     void endClipMergeRename();
     enum class ClipMergeOutcome { Done, Stopped, Shutdown };
     ClipMergeOutcome mergeSplitClip(const std::filesystem::path &clip);
@@ -157,6 +206,24 @@ private:
     Options options_;
     CameraController camera_;
     ControlServer controlServer_;
+    ControlClient cam1Client_;                       // the relay thread; started in the primary role only
+    std::atomic<bool> primaryStandby_{false};        // published by the command thread for the relay
+    // The take flags the relay reads without a lock (4.1 Locks), kept by the command thread and by the controller's events.
+    std::atomic<bool> relayRecording_{false};
+    std::atomic<bool> relayTimelapse_{false};
+    std::atomic<bool> relayStillExposure_{false};
+    std::atomic<bool> relayMediaWrites_{false};
+    std::atomic<bool> relayPhotoMode_{false};
+    std::atomic<bool> primaryTakeStarting_{false};   // the record_start branch publishes its take here (T62)
+    mutable std::mutex relayViewMutex_;              // guards relayView_ only; never held across a call into the controller
+    resync::PrimaryView relayView_;
+    // The primary's recent preview frames for the live sync check (design 7.6): a ring the preview publisher writes and the
+    // relay reads, no lock. A torn entry only costs one pair.
+    static constexpr size_t kRelayFrameRing = 64;
+    std::array<std::atomic<int64_t>, kRelayFrameRing> relayFrameUs_{};
+    std::array<std::atomic<int64_t>, kRelayFrameRing> relayFrameAtMs_{};
+    std::atomic<uint32_t> relayFrameHead_{0};
+    std::atomic<bool> relayPrimaryLocked_{false};
     WebServer webServer_;
     GpioInput gpioInput_;
     StandbyPowerButtonInput standbyPowerButton_;
@@ -168,6 +235,8 @@ private:
     TriggerOutput triggerOutput_;
     AudioRecordingSession soundRecorder_;
     std::atomic<bool> soundRecordingActive_{false};
+    std::atomic<int> soundInputLevel_{0};                    // the Sound Recorder's last audio_level, for the WebUI's meter
+    int webAudioInputLevel() const;                          // the level the WebUI's meter shows: the Sound Recorder's or the take's
     std::atomic<bool> storagePrerollFormatRunning_{false};   // a format runs; the watcher's mount change is not an insert
     std::atomic<int64_t> storagePrerollFormatDoneMs_{0};     // trimNowMs() when the last format ended (0 = none)
     std::atomic<bool> mediaDeleteActive_{false};   // T50, Q23: a media delete is running; record_start waits
@@ -239,6 +308,17 @@ private:
     mutable bool cpuSampleValid_ = false;
     mutable uint64_t lastCpuIdleTicks_ = 0;
     mutable uint64_t lastCpuTotalTicks_ = 0;
+    // The media card's write rate and temperature (NVMe only), under telemetryMutex_.
+    mutable std::string mediaStatDevice_;
+    mutable bool mediaStatValid_ = false;
+    mutable uint64_t lastMediaSectorsWritten_ = 0;
+    mutable std::chrono::steady_clock::time_point lastMediaStatAt_{};
+    mutable std::optional<double> mediaWriteMBps_;
+    mutable std::chrono::steady_clock::time_point mediaTempAt_{};
+    mutable std::optional<double> mediaTempC_;
+    mutable std::optional<double> mediaTempMaxC_;
+    mutable std::optional<double> mediaTempCritC_;
+    mutable std::string mediaCardLabel_;
     bool recordingStartKnown_ = false;
     std::chrono::steady_clock::time_point recordingStartedAt_{};
 
@@ -321,6 +401,17 @@ private:
     std::atomic<unsigned> clipMergePending_{0};     // clips with a .parts marker at the last scan
     std::atomic<bool> clipMergeRenaming_{false};    // one rename is in flight
     std::atomic<int64_t> clipMergeBlockUntilMs_{0}; // a take or media action began: no rename until then
+    // Progress (KB clip-merge-progress-plan.md), counted from the disk at each scan: a clip's frames in its root are
+    // done, the ones in its parts are left, so it comes back after a power-off. Under clipMergeMutex_: the scan's
+    // clips in order and the one being merged. Atomics: the clip being merged and its renames this run (time left).
+    struct ClipMergeCount { std::string name; uint64_t inRoot = 0; uint64_t total = 0; };
+    std::vector<ClipMergeCount> clipMergeQueue_;
+    size_t clipMergeQueueIndex_ = 0;
+    std::string clipMergePaused_;                   // why the merge waits ("" while it renames)
+    std::atomic<uint64_t> clipMergeClipDone_{0};
+    std::atomic<uint64_t> clipMergeClipTotal_{0};
+    std::atomic<uint64_t> clipMergeRunRenames_{0};
+    std::atomic<uint64_t> clipMergeRunRenameNs_{0};
     int mediaTrimBackoffRounds_ = 0;
     int64_t mediaTrimBackoffUntilMs_ = 0;
     std::string mediaTrimLastResult_ = "none";

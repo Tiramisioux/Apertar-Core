@@ -47,6 +47,9 @@ struct Ladder {
     bool enabled = false;     // the toggle: Core honours the ladder
     bool rampReady = false;   // with Speed Ramp on: takes start in the top rung
     std::vector<Rung> rungs;  // first = preferred mode, serves the lowest FPS; thresholds rise
+    // The WebUI's aspect filter on Activated sensor modes, the ratios as the card labels them ("16:9",
+    // "2.39:1"); empty = All. Kept here so the camera remembers it; it never changes which mode runs.
+    std::vector<std::string> aspects;
 };
 
 // What CameraController knows about one rung right now.
@@ -202,6 +205,47 @@ inline std::string rungsText(const std::vector<Rung> &rungs)
     return text;
 }
 
+// The aspect filter's text: the card's ratio labels joined by "," ("16:9,2.39:1"), "" = All. At most
+// kMaxAspects labels of 1 to kMaxAspectLength characters from 0-9 . : (a repeat is dropped); anything else
+// is refused, so a hand edit or a damaged line can only mean All.
+inline constexpr size_t kMaxAspects = 32;
+inline constexpr size_t kMaxAspectLength = 16;
+
+inline bool parseAspects(const std::string &text, std::vector<std::string> &out, std::string &error)
+{
+    out.clear();
+    if (text.size() > kMaxAspects * (kMaxAspectLength + 1)) {
+        error = "The aspect filter is too long.";
+        return false;
+    }
+    std::stringstream list(text);
+    std::string item;
+    while (std::getline(list, item, ',')) {
+        if (item.empty() || item.size() > kMaxAspectLength || item.find_first_not_of("0123456789.:") != std::string::npos) {
+            error = "\"" + item + "\": an aspect ratio is written as the card shows it, such as 16:9 or 2.39:1.";
+            out.clear();
+            return false;
+        }
+        if (std::find(out.begin(), out.end(), item) != out.end())
+            continue;
+        if (out.size() == kMaxAspects) {
+            error = "At most " + std::to_string(kMaxAspects) + " aspect ratios.";
+            out.clear();
+            return false;
+        }
+        out.push_back(item);
+    }
+    return true;
+}
+
+inline std::string aspectsText(const std::vector<std::string> &aspects)
+{
+    std::string text;
+    for (size_t i = 0; i < aspects.size(); ++i)
+        text += (i ? "," : "") + aspects[i];
+    return text;
+}
+
 // Errors refuse a save. Warnings are shown and saved (they depend on the format).
 inline void validate(const Ladder &l, const std::vector<RungState> &s,
                      std::vector<std::string> &errors, std::vector<std::string> &warnings)
@@ -298,6 +342,7 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     };
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
         ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(rungsText(l.rungs)) +
+        ",\"aspects\":" + list(l.aspects) +
         ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_resolution\":" + std::to_string(running + 1) +
         ",\"resolutions\":[";
     double from = 0.0;  // a rung serves (from, ceiling]
@@ -313,13 +358,33 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
 }
 
-// mode_ladder.conf: one key per line, so a person can read it. Core rewrites it whole.
+// mode_ladder.conf: one key per line, so a person can read it. A ladder save rewrites it whole, with this
+// header. A filter save writes a missing or empty file whole; in any other it replaces the aspects= line and
+// puts it last (withAspectsLine), so the header stays as it is.
 inline std::string fileText(const Ladder &l)
 {
-    return "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Record > Mode Ladder).\n"
+    return "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Modes: Activated sensor modes and Mode Ladder).\n"
            "enabled=" + std::string(l.enabled ? "true" : "false") + "\n"
            "ramp_ready=" + std::string(l.rampReady ? "true" : "false") + "\n"
-           "resolutions=" + rungsText(l.rungs) + "\n";
+           "resolutions=" + rungsText(l.rungs) + "\n"
+           "aspects=" + aspectsText(l.aspects) + "\n";
+}
+
+// The file with its aspects= line replaced by one at the end (as fileText puts it; several become one). Every
+// other line stays byte for byte, so a filter save never rewrites what this Core could not read: a resolutions
+// line from another build, a CRLF hand edit, an unknown key. A last line without its newline gets one.
+inline std::string withAspectsLine(const std::string &text, const std::vector<std::string> &aspects)
+{
+    std::string out;
+    std::stringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto eq = line.find('=');
+        if (eq != std::string::npos && line.compare(0, eq, "aspects") == 0)
+            continue;
+        out += line + "\n";
+    }
+    return out + "aspects=" + aspectsText(aspects) + "\n";
 }
 
 inline Ladder parseFile(const std::string &text)
@@ -335,6 +400,7 @@ inline Ladder parseFile(const std::string &text)
         if (key == "enabled") l.enabled = value == "true";
         else if (key == "ramp_ready") l.rampReady = value == "true";
         else if ((key == "resolutions" || key == "rungs") && !parseRungs(value, l.rungs, error)) l.rungs.clear();   // "rungs": the first name
+        else if (key == "aspects" && !parseAspects(value, l.aspects, error)) l.aspects.clear();   // a bad filter is All; the rungs stay
     }
     if (l.rungs.empty())
         l.enabled = false;  // a broken file never switches the camera

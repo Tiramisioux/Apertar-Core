@@ -31,6 +31,33 @@ inline int64_t clockMicroseconds(clockid_t clock)
         ? int64_t(time.tv_sec) * 1000000 + time.tv_nsec / 1000 : 0;
 }
 
+// A take that starts on a slot (design §6.2, §6.3) stamps each frame with its slot's time plus the primary's
+// tc_offset_us instead of the frame's own timestamp, so two Cores give the same timecode for the same slot and
+// jitter can never repeat or skip a number. periodNum == 0 means no slots: the timecode of a take without them.
+// The grid is k * den / num seconds (num / den = recordingFrameRate(fps)), as in util/TakeSlots.hpp.
+struct TimecodeSlot {
+    int64_t offsetUs = 0;
+    int64_t periodNum = 0;
+    int64_t periodDen = 0;
+    bool enabled() const { return periodNum > 0 && periodDen > 0; }
+};
+
+// The slot nearest bootUs and its time, in microseconds (the tie to the earlier slot, as FramePhaseLock::gridPoint).
+inline int64_t slotTimeOfBootUs(int64_t bootUs, int64_t periodNum, int64_t periodDen)
+{
+    const __int128 period = static_cast<__int128>(1000000) * periodDen;
+    const __int128 scaled = static_cast<__int128>(bootUs) * periodNum;
+    __int128 slot = scaled / period;
+    __int128 rest = scaled % period;
+    if (rest < 0) { rest += period; --slot; }
+    if (2 * rest > period) ++slot;
+    const __int128 numerator = slot * period;
+    __int128 q = numerator / periodNum;
+    const __int128 r = numerator % periodNum;
+    if (2 * r >= periodNum) ++q;
+    return static_cast<int64_t>(q);
+}
+
 class RecordingClock {
 public:
     RecordingClock()
@@ -39,12 +66,21 @@ public:
         const auto wall = clockMicroseconds(CLOCK_REALTIME);
         offsetUs_ = wall - (before + clockMicroseconds(CLOCK_BOOTTIME)) / 2;
     }
+    explicit RecordingClock(const TimecodeSlot &slot) : RecordingClock()
+    {
+        if (slot.enabled()) {
+            slot_ = slot;
+            offsetUs_ = slot.offsetUs;
+        }
+    }
     uint64_t wallTime(int64_t bootUs) const
     {
-        return uint64_t(std::max<int64_t>(0, bootUs + offsetUs_));
+        const int64_t base = slot_.enabled() ? slotTimeOfBootUs(bootUs, slot_.periodNum, slot_.periodDen) : bootUs;
+        return uint64_t(std::max<int64_t>(0, base + offsetUs_));
     }
 private:
     int64_t offsetUs_ = 0;
+    TimecodeSlot slot_;
 };
 
 inline std::string recordingTimecode(bool freeRun, uint64_t epochUs, double fps)

@@ -1,0 +1,21 @@
+# /etc/systemd/system/apertar-core-cam1.service: the live unit (T56 0.1) without the wait-ui ExecStartPre
+# No PartOf=: a primary restart leaves cam1 and its take alone (start order below)
+[Unit]
+After=apertar-core.service
+[Service]
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/ApertarCore/
+ExecStart=/home/pi/start-apertar-core-ds.sh
+Restart=on-failure
+RestartSec=5
+LimitNICE=-5
+LimitRTPRIO=80
+Environment=LIBCAMERA_LOG_LEVELS=IPARPI:ERROR
+Environment=APERTAR_CAMERA=cam1 APERTAR_SOCKET_PATH=/tmp/apertar-core-cam1.sock APERTAR_WEB_PORT=8001
+Environment=XDG_CONFIG_HOME=/home/pi/.config-cam1 APERTAR_HARDWARE_CONFIG=/home/pi/apertar-hardware-cam1.conf
+Environment=APERTAR_STORAGE_PREROLL=0 APERTAR_MEDIA_TRIM=0 APERTAR_MEDIA_TUNE=0 APERTAR_CLIP_MERGE=0
+Environment=APERTAR_CORE_BIN=/home/pi/ApertarCore-ds-build/apertar-core
+SyslogIdentifier=apertar-core-cam1
+[Install]
+WantedBy=apertar-core.service

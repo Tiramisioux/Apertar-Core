@@ -95,6 +95,7 @@ add_executable(apertar-core
     src/hardware/GpioChipInfo.cpp
     src/hardware/I2cProbe.cpp
     src/ipc/ControlProtocol.cpp
+    src/ipc/ControlClient.cpp
     src/ipc/ControlServer.cpp
     src/web/WebControlPage.cpp
     src/web/WebServer.cpp

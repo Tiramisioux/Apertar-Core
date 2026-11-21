@@ -95,6 +95,7 @@ public:
     bool open(const ApertarLibavH264Config &config, std::string *error)
     {
         freeRunTimecode_ = config.freeRunTimecode;
+        clock_ = apertar::RecordingClock(apertar::TimecodeSlot{config.tcOffsetUs, config.tcPeriodNum, config.tcPeriodDen});
         fps_ = apertar::recordingFps(config.fps);
         if (config.abiVersion != kApertarLibavH264PluginAbi
             || !config.outputPath || !config.encoder

@@ -48,6 +48,10 @@ int main()
     // Default == today's name.
     const Parsed def = parse(kDefaultTemplate);
     check(def.ok && !def.corrected && def.normalized == kDefaultTemplate, "default template parses unchanged");
+    // The Standard preset adds the take's start timecode.
+    const Parsed standard = parse(kStandardTemplate);
+    check(standard.ok && !standard.corrected && standard.normalized == kStandardTemplate, "Standard preset parses unchanged");
+    same(expand(standard, at("cDNG", 26, 10, 28), 1), "cDNG_26-10-28_C0001_01400812", "Standard: clip then HHMMSSFF");
     struct Combo { const char *prefix; const char *format; int y, mo, d, clip; };
     const Combo combos[] = {
         {"cDNG_", "cDNG", 26, 10, 28, 1}, {"MLV_", "MLV", 25, 1, 2, 17}, {"H264_", "H264", 26, 12, 31, 9999},
@@ -124,6 +128,21 @@ int main()
     check(nextClipNumber(def, at("cDNG", 26, 10, 28), exists) == 3, "next number fills the first gap (as before)");
     check(nextClipNumber(def, at("cDNG", 26, 10, 29), exists) == 1, "a new date restarts at C0001");
     check(nextClipNumber(dashed, at("cDNG", 26, 10, 28), exists) == 1, "a time-in-name template starts at C0001");
+
+    // A time token: the number counts the day's folders at any time (and the same names without the time).
+    std::set<std::string> timedTaken{"cDNG_26-10-28_C0001_01000000", "cDNG_26-10-28_C0002_02-00-00-00x", "cDNG_26-10-28_C0002_09300011"};
+    const std::vector<std::string> timedList(timedTaken.begin(), timedTaken.end());
+    auto timedExists = [&](const std::string &n) { return timedTaken.count(n) > 0; };
+    check(nextClipNumber(standard, at("cDNG", 26, 10, 28), timedExists, timedList) == 3, "Standard: C0001 and C0002 taken at other times");
+    check(nextClipNumber(standard, at("cDNG", 26, 10, 29), timedExists, timedList) == 1, "Standard: a new date restarts at C0001");
+    const std::vector<std::string> oldNames(taken.begin(), taken.end());
+    check(nextClipNumber(standard, at("cDNG", 26, 10, 28), exists, oldNames) == 3, "Standard: original names of the day count (C0001 C0002 C0004)");
+    check(nextClipNumber(standard, at("cDNG", 26, 10, 28), [](const std::string &) { return false; }) == 1, "Standard without a listing: C0001");
+    const std::vector<std::string> compactNames{"cDNG_26_10_28_01400812_C0001", "cDNG_26_10_28_11223344_C0002"};
+    check(nextClipNumber(compact, at("cDNG", 26, 10, 28, 15, 0, 0, 0), [](const std::string &) { return false; }, compactNames) == 3,
+          "time before {clip}: other times still count");
+    check(!sameClipAnyTime(standard, at("cDNG", 26, 10, 28), 1, "cDNG_26-10-28_C0001_0140081x"), "a letter is not a time");
+    check(!sameClipAnyTime(standard, at("cDNG", 26, 10, 28), 1, "cDNG_26-10-28_C00012_01400812"), "C00012 is not C0001");
 
     std::printf("%s\n", g_failed ? "FAILED" : "all passed");
     return g_failed ? 1 : 0;
