@@ -189,6 +189,11 @@ struct CaptureSettings {
     bool ladderOverride = false;   // Runtime: an explicit Clear HDR choice holds the mode; the ladder waits for the next fps/mode change.
     uint32_t ladderCount = 0;      // Runtime (T34): resolutions in the ladder.
     std::vector<double> ladderTops; // Runtime (T34): each resolution's top FPS, in order (for the FPS pill labels).
+    double limitFps = 0.0;         // Runtime: the known limit of the current mode for 30-minute takes at the storage and levers in use, a step; 0 = none known.
+    double limitShortFps = 0.0;    // Runtime: what that mode holds for takes up to about 8 minutes; 0 = none known.
+    std::string limitBasis;        // Runtime: measured, derived, probable, unconfirmed, or sensor (no measurement).
+    std::string limitBy;           // Runtime: the wall that sets it: back end, encoder, drive, sensor or TDN.
+    std::string limitWhy;          // Runtime: one sentence for the limit line under the FPS picker.
     std::string ladderText;        // Runtime (T34): the running line, e.g. "Resolution 1 · 3840×2160 · ClearHDR16 · ≤25 · Uncompressed".
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;

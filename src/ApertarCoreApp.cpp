@@ -328,6 +328,11 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
+        << ",\"limit_fps\":" << settings.limitFps
+        << ",\"limit_short_fps\":" << settings.limitShortFps
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -10148,6 +10153,11 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
+        << ",\"limit_fps\":" << jsonNumber(settings.limitFps, 3)
+        << ",\"limit_short_fps\":" << jsonNumber(settings.limitShortFps, 3)
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -11606,6 +11616,9 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        if ((current.mounted() && current.totalBytes > 0 &&
+             1.0 - double(current.freeBytes) / double(current.totalBytes) > 0.94) != ladderFillHigh_.load(std::memory_order_relaxed))
+            refreshLadderContext();
         // The clip-name example (clip_name_example) is computed from this listing, here on the watcher's own
         // thread, so a hung medium never blocks the camera lock. Not during a take; nothing on a dead mount.
         if (!camera_.isRecording()) {
@@ -11663,6 +11676,7 @@ void ApertarCoreApp::runMediaWatcher()
                 previousProfile = mediaProfile_;
                 mediaProfile_ = profile;
             }
+            refreshLadderContext();
             if (current.mounted()) {
                 applyMediaTuning(profile, true);
                 trimMedia("mount");   // once per mount; the worker waits for an idle medium
@@ -12137,6 +12151,41 @@ MediaProfile ApertarCoreApp::mediaProfile() const
 {
     std::lock_guard<std::mutex> lock(mediaStateMutex_);
     return mediaProfile_;
+}
+
+// The camera reads TDN, phase lock and Log itself; the rest of what the known limits depend on lives here: the
+// storage, the filesystem, how full the card is, the aids, the audio and the clip split. Pushed at a media change,
+// when the card crosses 94 percent, after a switch or a preset and after set_frames_per_folder.
+void ApertarCoreApp::refreshLadderContext()
+{
+    const MediaProfile profile = mediaProfile();
+    uint64_t total = 0, free = 0;
+    {
+        std::lock_guard<std::mutex> lock(mediaStateMutex_);
+        total = mediaSnapshot_.totalBytes;
+        free = mediaSnapshot_.freeBytes;
+    }
+    const SharedUiSettingsSnapshot ui = readSharedUiSettings();
+    sustained::Context context;
+    switch (profile.mediaClass) {
+    case MediaClass::PiNvme:
+        context.storage = sustained::Kind::Nvme;
+        break;
+    case MediaClass::UsbUas:
+        context.storage = sustained::Kind::UsbSsd;
+        break;
+    default:   // no column for this storage: the USB SSD's stands in
+        context.storage = sustained::Kind::UsbSsd;
+        context.storageMeasured = false;
+        break;
+    }
+    context.fatLike = profile.filesystem == MediaFilesystem::Exfat || profile.filesystem == MediaFilesystem::Vfat;
+    context.fillFraction = total > 0 ? 1.0 - double(free) / double(total) : 0.0;
+    context.aidsOn = ui.focusPeakingEnabled || ui.zebraEnabled;
+    context.audioOn = ui.recordAudioEnabled;
+    context.splitOn = bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire) > 0;
+    ladderFillHigh_.store(context.fillFraction > 0.94, std::memory_order_relaxed);
+    camera_.setLadderContext(context);
 }
 
 // Kernel-side knobs (block queue, vm.dirty_*) need root; Core hands them to
@@ -14087,6 +14136,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             wakeControlsWorker();
         }
         refreshBufferRequest();
+        refreshLadderContext();
         if (!fpf && bufferbudget::clipMergeRequest().load())
             clipMerge("switch");
         return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
@@ -14593,6 +14643,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (!updateSharedUiGeneralSettings({ { settingKey, value ? "true" : "false" } }))
             return errorReply(command.id, "Could not update shared UI settings.");
 
+        refreshLadderContext();
         return okReply(command.id, settingsBody(camera_.settings()));
     };
 
@@ -15913,6 +15964,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             }))
             return errorReply(command.id, camera_.lastError());
 
+        refreshLadderContext();
         return okReply(command.id,
                        "\"applied_preset\":\"" + escapeJson(trimAscii(presetLabel)) + "\""
                        + std::string(",\"state\":{") + settingsBody(camera_.settings()) + "}");

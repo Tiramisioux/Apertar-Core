@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace apertar::sustained {
 
@@ -117,6 +118,8 @@ struct Context {
     bool splitOn = true;            // the clip folder is split into parts
     bool fatLike = false;           // exFAT or FAT: a flat folder slows file creation
     double fillFraction = 0.0;      // how full the medium is, 0 to 1
+
+    bool operator==(const Context &) const = default;
 };
 
 inline const char *labelName(Label label)
@@ -277,6 +280,54 @@ inline Cap capFor(const Context &context, const Mode &mode, double sensorCeiling
 inline bool cardNearlyFull(const Context &context)
 {
     return context.storage == Kind::Nvme && context.fillFraction > 0.94;
+}
+
+// The words the screens use for a mode and a drive: "4K Clear HDR 16-bit", "2K SDR 12-bit", "2880x2160 SDR 12-bit".
+inline std::string modeName(const Mode &mode)
+{
+    const std::string size = mode.width == 3840 && mode.height == 2160 ? "4K"
+        : mode.width == 1920 && mode.height == 1080 ? "2K"
+        : std::to_string(mode.width) + "x" + std::to_string(mode.height);
+    return size + (mode.hdr ? " Clear HDR " : " SDR ") + std::to_string(mode.bits) + "-bit";
+}
+
+inline const char *storageName(Kind storage) { return storage == Kind::Nvme ? "NVMe card" : "USB SSD"; }
+
+// The one sentence under the fps picker for the running mode (limit_why): what it holds, then what the levers
+// and the storage change. fps is shown whole: the steps and the table's numbers are whole.
+inline std::string whyText(const Context &context, const Mode &mode, const Cap &cap, double sensorCeiling)
+{
+    const auto whole = [](double fps) { return std::to_string(static_cast<long>(std::floor(fps + 1e-9))); };
+    const std::string name = modeName(mode) + (cap.row.cell && cap.row.cell->log ? " + Log" : "");
+    if (context.board != Board::Pi5)
+        return "Limits are not measured on this Raspberry Pi.";
+    std::string text;
+    if (cap.by == std::string("TDN")) {
+        text = "Preview temporal denoise is on: " + name + " drops frames at every rate tried (from 23 fps). "
+               "Turn it off to use it.";
+    } else if (!cap.row.found) {
+        text = "No measurement for " + name + ": the sensor's own limit of " + whole(sensorCeiling) + " fps applies.";
+    } else {
+        text = name + " holds " + whole(cap.fps) + " fps for 30-minute takes on this " + storageName(context.storage) +
+               " (" + labelName(cap.row.label) + ").";
+        if (cap.row.fpsShort > cap.limit)
+            text += " " + whole(cap.row.fpsShort) + " fps holds up to 8 minutes (measured).";
+        if (context.lock && cap.row.group == Group::BackEnd) {
+            Context free = context;
+            free.lock = false;
+            const Cap without = capFor(free, mode, sensorCeiling);
+            if (without.fps > cap.fps)
+                text += " Phase lock is on: " + name + " holds " + whole(cap.fps) + " fps instead of " +
+                        whole(without.fps) + ".";
+        }
+        if (!context.splitOn && context.fatLike && cap.lever == std::string("split"))
+            text += " Split long takes is off: takes over 30 minutes slow down above 32 fps. Turn it on.";
+    }
+    if (!context.storageMeasured)
+        text += " Storage type not measured: limits are the USB SSD's. Run the speed test.";
+    if (cardNearlyFull(context))
+        text += " The card is over 94 percent full: it stalled near 96 percent in 4K Clear HDR 16-bit takes.";
+    return text;
 }
 
 } // namespace apertar::sustained

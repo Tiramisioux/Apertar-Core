@@ -2,6 +2,7 @@
 
 #include "camera/FramePhaseLock.hpp"
 #include "camera/ModeLadder.hpp"
+#include "camera/SustainedFps.hpp"
 #include <apertar/core/Types.hpp>
 #include "util/ClipName.hpp"
 #include "util/RecordingDropWarning.hpp"
@@ -163,6 +164,9 @@ public:
                        std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
                        std::string *json, std::string *error);
     std::string modeLadderJson() const;
+    // The storage and the switches the known limits depend on, pushed by the application when they change
+    // (the camera itself reads TDN, phase lock, Log and the split). An event goes out when they change.
+    void setLadderContext(const sustained::Context &context);
     // A preset that names a mode (namesMode) must be the one the ladder would pick for its FPS;
     // one that names none follows the ladder. False with *error otherwise.
     bool applyLadderToPreset(CaptureSettings &settings, bool namesMode, std::string *error) const;
@@ -249,6 +253,9 @@ private:
     bool ladderActiveForLocked(const CaptureSettings &base) const;
     bool ladderRewriteLocked(CaptureSettings &next) const;
     void fillLadderFieldsLocked(CaptureSettings &out) const;
+    void fillLimitFieldsLocked(CaptureSettings &out) const;
+    // The probe's entry for a mode in Core's identity (the active picture); false in simulation or before the probe.
+    bool probedModeLocked(const ladder::Rung &rung, SensorMode *mode) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
@@ -313,6 +320,7 @@ private:
     uint32_t rampNominalShutterUs_ = 0;
     double rampTakeBaseFps_ = 0.0;
     bool rampTakeChanged_ = false;
+    sustained::Context ladderContext_;   // the application's half of the known limits' inputs
     ladder::Ladder modeLadder_;   // T34, parsed from the settings_.modeLadder* text; set only where those are written
     bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
     TakeInfo takeInfo_;

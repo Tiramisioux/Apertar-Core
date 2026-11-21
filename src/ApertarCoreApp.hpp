@@ -168,6 +168,8 @@ private:
     void runStoragePrerollOnce(storagepreroll::Trigger trigger, unsigned seconds);
     void stopStoragePreroll();
     MediaSnapshot mediaSnapshot() const;
+    // Hands the camera the storage and the switches its known limits depend on (SustainedFps.hpp).
+    void refreshLadderContext();
     std::string mediaGateError() const;
     bool mediaGateBypassed() const;
     std::string playbackHoldReason(bool withYield = true) const;   // "" or recording, writing, media_test, standby, media
@@ -341,6 +343,7 @@ private:
     MediaSnapshot mediaSnapshot_;
     bool mediaSnapshotValid_ = false;
     MediaProfile mediaProfile_;
+    std::atomic<bool> ladderFillHigh_{false};   // the card was above 94 percent full at the last refreshLadderContext
 
     // The "buffer" event thread (runBufferEvents): own thread, no controller lock; stopped in stopMediaWatcher.
     std::thread bufferEventThread_;

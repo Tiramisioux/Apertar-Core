@@ -187,6 +187,11 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << ladderTopsJson(settings.ladderTops)
+        << ",\"limit_fps\":" << settings.limitFps
+        << ",\"limit_short_fps\":" << settings.limitShortFps
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -11863,6 +11868,53 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     }
 }
 
+// The derived limit fields (never persisted): what the table says the running mode holds for a 30-minute take at
+// the storage and switches in use. Information only; nothing here changes a setting.
+void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
+{
+    out.limitFps = 0.0;
+    out.limitShortFps = 0.0;
+    out.limitBasis = "sensor";
+    out.limitBy = "sensor";
+    out.limitWhy.clear();
+    if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat)) {
+        out.limitWhy = "Limits are not measured for H.264, ProRes and stills.";
+        return;
+    }
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    sustained::Context context = ladderContext_;
+    // BCM2712 (Pi 5, CM5) is the one board measured; a simulated camera stands for it.
+    context.board = simulateCamera_ || recordingCapabilities().rawCompression ? sustained::Board::Pi5 : sustained::Board::Other;
+    context.tdn = out.previewTdn;
+    context.lock = out.fpsPhaseLock;
+    context.log = out.cdngLog != CdngLog::Off;
+    context.splitOn = bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire) > 0;
+    sustained::Mode mode;
+    mode.width = out.resolution.width;
+    mode.height = out.resolution.height;
+    mode.hdr = out.clearHdr;
+    mode.bits = out.rawBitDepth;
+    ladder::Rung rung;
+    rung.width = mode.width;
+    rung.height = mode.height;
+    rung.bits = mode.bits;
+    rung.clearHdr = mode.hdr;
+    SensorMode probed;
+    if (probedModeLocked(rung, &probed))
+        mode.binned = probed.binning > 1;
+    else if (const auto *row = apertar::imx585::find(apertar::imx585::classFor(mode.bits, mode.hdr), mode.width, mode.height))
+        mode.binned = row->binned;
+    const double ceiling = maximumFpsForSettings(out, family);
+    const sustained::Cap cap = sustained::capFor(context, mode, ceiling);
+    if (cap.row.found) {
+        out.limitFps = cap.fps;
+        out.limitShortFps = cap.row.fpsShort;
+        out.limitBasis = sustained::labelName(cap.row.label);
+    }
+    out.limitBy = cap.by;
+    out.limitWhy = sustained::whyText(context, mode, cap, ceiling);
+}
+
 // The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
 // ceiling in each compression (0 where the compression cannot run the mode).
 void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const
@@ -11876,6 +11928,21 @@ void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladd
         const ladder::RungState probe = (lossy && rung.clearHdr) ? ladder::RungState{} : ladderStatesLocked(single, settings_).front();
         state.ceilingBy[i] = probe.usable ? probe.modeCeiling : 0.0;
     }
+    SensorMode mode;
+    if (!probedModeLocked(rung, &mode))
+        return;
+    state.rawWidth = mode.size.width;
+    state.rawHeight = mode.size.height;
+    unsigned windowW = 0, windowH = 0;
+    if (std::sscanf(mode.crop.c_str(), "(%*d, %*d)/%ux%u", &windowW, &windowH) == 2) {
+        state.windowWidth = windowW;
+        state.windowHeight = windowH;
+    }
+    state.binning = mode.binning;
+}
+
+bool CameraController::probedModeLocked(const ladder::Rung &rung, SensorMode *found) const
+{
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     // The probe lists what the sensor delivers; a rung is the active picture (the IMX585 16-bit frame has
     // optical-black rows on top and bottom).
@@ -11891,16 +11958,10 @@ void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladd
         if (modeSize.width != wire.width || modeSize.height != wire.height ||
             mode.clearHdr != rung.clearHdr || mode.bitDepth != rung.bits)
             continue;
-        state.rawWidth = mode.size.width;
-        state.rawHeight = mode.size.height;
-        unsigned windowW = 0, windowH = 0;
-        if (std::sscanf(mode.crop.c_str(), "(%*d, %*d)/%ux%u", &windowW, &windowH) == 2) {
-            state.windowWidth = windowW;
-            state.windowHeight = windowH;
-        }
-        state.binning = mode.binning;
-        break;
+        *found = mode;
+        return true;
     }
+    return false;
 }
 
 std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
@@ -11959,6 +12020,18 @@ std::string CameraController::modeLadderJson() const
     std::vector<std::string> errors, warnings;
     ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
     return modeLadderJsonLocked(modeLadder_, errors, warnings);
+}
+
+void CameraController::setLadderContext(const sustained::Context &context)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A fuller card alone is not news: an event goes out when a fact changes or the card crosses 94 percent.
+    sustained::Context before = ladderContext_, after = context;
+    const bool crossed = sustained::cardNearlyFull(before) != sustained::cardNearlyFull(after);
+    before.fillFraction = after.fillFraction = 0.0;
+    ladderContext_ = context;
+    if (crossed || !(before == after))
+        emitSettingsEventLocked();
 }
 
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
@@ -13648,6 +13721,7 @@ CaptureSettings CameraController::settings() const
     result.isoMax = maximumIsoForSettings(result, family);
     result.fpsMax = maximumFpsForSettings(result, family);
     fillCameraIdentity(result);
+    fillLimitFieldsLocked(result);
     fillLadderFieldsLocked(result);
     fillClipNameExampleLocked(result);
     return result;
@@ -13939,6 +14013,7 @@ void CameraController::emitSettingsEventLocked()
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
     fillCameraIdentity(settings_);
+    fillLimitFieldsLocked(settings_);
     fillLadderFieldsLocked(settings_);
     fillClipNameExampleLocked(settings_);
     settings_.cdngLogApplied = cdngLogApplicableLocked();

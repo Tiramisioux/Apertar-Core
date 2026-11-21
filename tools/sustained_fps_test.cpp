@@ -210,6 +210,51 @@ int main()
         check(same(capFor(c, k2kSdr12, 60.0).fps, 60.0), "split on: no flat-folder limit");
     }
 
+    // ---- the sentence for the limit line ----
+    {
+        const auto why = [](const Context &c, const Mode &m, double ceiling) { return whyText(c, m, capFor(c, m, ceiling), ceiling); };
+        check(why(nvme(), k4kHdr16, 30.0) == "4K Clear HDR 16-bit holds 20 fps for 30-minute takes on this NVMe card (unconfirmed). "
+                                             "27 fps holds up to 8 minutes (measured).",
+              "why: 4K Clear HDR 16-bit on the NVMe holds 20 fps, and 27 for 8 minutes");
+        check(why(t7(), k2kSdr12, 60.0) == "2K SDR 12-bit holds 33 fps for 30-minute takes on this USB SSD (measured).",
+              "why: 2K SDR 12-bit on the USB SSD holds 33 fps, measured, no short-take sentence");
+        Context lock = nvme();
+        lock.log = lock.lock = true;
+        check(why(lock, k4kHdr16, 30.0) == "4K Clear HDR 16-bit + Log holds 23 fps for 30-minute takes on this NVMe card (derived). "
+                                           "Phase lock is on: 4K Clear HDR 16-bit + Log holds 23 fps instead of 24.",
+              "why: phase lock names the loss");
+        Context tdn = nvme();
+        tdn.tdn = true;
+        check(why(tdn, k4kSdr12, 60.0) == "Preview temporal denoise is on: 4K SDR 12-bit drops frames at every rate tried (from 23 fps). "
+                                          "Turn it off to use it.",
+              "why: TDN on an unbinned mode");
+        Context flat = nvme();
+        flat.splitOn = false;
+        flat.fatLike = true;
+        check(why(flat, k2kSdr12, 60.0) == "2K SDR 12-bit holds 30 fps for 30-minute takes on this NVMe card (probable). "
+                                           "Split long takes is off: takes over 30 minutes slow down above 32 fps. Turn it on.",
+              "why: split off on exFAT");
+        Context unknown = nvme();
+        unknown.storage = Kind::UsbSsd;
+        unknown.storageMeasured = false;
+        check(why(unknown, k4kSdr12, 60.0) == "4K SDR 12-bit holds 18 fps for 30-minute takes on this USB SSD (unconfirmed). "
+                                              "Storage type not measured: limits are the USB SSD's. Run the speed test.",
+              "why: storage not measured");
+        check(why(nvme(), Mode{ 4096, 2304, true, 16, false }, 25.0) ==
+                  "No measurement for 4096x2304 Clear HDR 16-bit: the sensor's own limit of 25 fps applies.",
+              "why: a mode with no row names the sensor's limit");
+        Context board = nvme();
+        board.board = Board::Other;
+        check(why(board, k4kHdr16, 30.0) == "Limits are not measured on this Raspberry Pi.", "why: another board");
+        Context full = nvme();
+        full.fillFraction = 0.96;
+        check(why(full, k2kHdr16, 30.0) == "2K Clear HDR 16-bit holds 30 fps for 30-minute takes on this NVMe card (probable). "
+                                           "The card is over 94 percent full: it stalled near 96 percent in 4K Clear HDR 16-bit takes.",
+              "why: a nearly full NVMe card");
+        check(modeName(Mode{ 2880, 2160, false, 12, false }) == "2880x2160 SDR 12-bit" && Context{} == Context{},
+              "modeName: sizes other than 4K and 2K are written out; a Context compares by value");
+    }
+
     // ---- the card ----
     {
         Context c = nvme();
