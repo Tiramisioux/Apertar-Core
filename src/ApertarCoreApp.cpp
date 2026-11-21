@@ -3815,28 +3815,6 @@ bootconf::Facts bootConfigFacts()
     return facts;
 }
 
-// The DRM connectors and whether they have modes: a DPI overlay shows a "connected" DPI connector even without a
-// panel, so this is information for the display question, not proof of a panel.
-std::string drmConnectorsJson()
-{
-    std::vector<std::string> items;
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
-        const std::string name = entry.path().filename().string();
-        if (name.rfind("card", 0) != 0 || name.find('-') == std::string::npos)
-            continue;
-        const std::string status = trimAscii(readTextFileRaw(entry.path() / "status"));
-        const std::string modes = readTextFileRaw(entry.path() / "modes");
-        items.push_back("{\"name\":" + bootconf::jsonString(name) + ",\"status\":" + bootconf::jsonString(status) +
-                        ",\"modes\":" + std::to_string(std::count(modes.begin(), modes.end(), '\n')) + "}");
-    }
-    std::sort(items.begin(), items.end());
-    std::string out = "[";
-    for (size_t i = 0; i < items.size(); ++i)
-        out += (i ? "," : "") + items[i];
-    return out + "]";
-}
-
 std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts)
 {
     const std::filesystem::path path = bootConfigPath();
@@ -3853,7 +3831,7 @@ std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts
            ",\"helper\":" + (::access(kBootConfigHelper, X_OK) == 0 ? "true" : "false") +
            ",\"text_editable\":" + (bootConfigTextEnabled() ? "true" : "false") +
            ",\"backup_path\":" + bootconf::jsonString(std::filesystem::exists(backup, ec) ? backup : std::string()) +
-           ",\"state\":" + bootconf::stateJson(state, facts) + ",\"drm\":" + drmConnectorsJson() +
+           ",\"state\":" + bootconf::stateJson(state, facts) +
            ",\"text\":" + bootconf::jsonString(text) + "}";
 }
 
@@ -3968,14 +3946,13 @@ std::string bootConfigSet(const ControlCommand &command)
         ",\"display_changed\":" + (result.displayChanged ? "true" : "false") +
         ",\"text\":" + bootconf::jsonString(result.text) + ",\"state\":" + bootconf::stateJson(result.after, facts);
     if (dryRun)
-        return okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" +
-                                       bootconf::jsonString(current) + ",\"drm\":" + drmConnectorsJson());
+        return okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" + bootconf::jsonString(current));
     if (result.displayChanged && !confirmDisplay)
         return errorReplyBody(command.id,
                               "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
                               "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
                               "Send confirm_display=true to save anyway.",
-                              "\"code\":\"confirm_display\",\"drm\":" + drmConnectorsJson());
+                              "\"code\":\"confirm_display\"");
     if (result.changes.empty())
         return okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current));
 

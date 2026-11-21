@@ -198,7 +198,7 @@ The card edits the file the way its own comments say: it comments and uncomments
 
 Core writes only the lines the card's controls generate. Editing the whole file as text is off, as in Apertar 1.6.0, which has no such card: a `text` request is refused with "config.txt is edited as text over ssh, not here." With `APERTAR_BOOT_CONFIG_TEXT=on` in Core's environment (a systemd drop-in with `Environment=`, so it is set over ssh only) the card adds **Edit file**, for the lines it has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup. With the switch on, anyone who can reach the WebUI can write any `config.txt` as root (`kernel=`, `cmdline=`, `initramfs` included); leave it off on a camera others can reach.
 
-A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included.
+A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included. The page asks with a confirmation box; Core refuses a display change that does not send `confirm_display=true`, so a script cannot darken a DPI camera by forgetting it.
 
 `/boot/firmware` belongs to root. Install the small root helper the card and the fan mode write through:
 

@@ -3945,22 +3945,6 @@ std::string_view webControlPageHtml()
       color: #fcd34d;
     }
 
-    .config-diff .diff-info {
-      margin: 6px 0 0;
-      font-family: inherit;
-      white-space: normal;
-      color: var(--muted);
-    }
-
-    .config-diff .diff-confirm {
-      display: flex;
-      gap: 8px;
-      align-items: flex-start;
-      margin: 8px 0 0;
-      font-family: inherit;
-      white-space: normal;
-    }
-
     .config-diff .diff-actions {
       display: flex;
       gap: 10px;
@@ -22025,7 +22009,7 @@ std::string_view webControlPageHtml()
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
     const bootConfig = {
       linkNote: "",           // the two IMX585 lines differed in config.txt: Save writes Camera 0's rate on both
-      payload: null,          // the last GET: path, revision, state, drm, text, helper, text_editable (Edit file is offered)
+      payload: null,          // the last GET: path, revision, state, text, helper, text_editable (Edit file is offered)
       form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
       loading: false,
       saving: false,
@@ -22938,13 +22922,6 @@ std::string_view webControlPageHtml()
       return line;
     }
 
-    function drmSummary(drm) {
-      if (!Array.isArray(drm) || drm.length === 0)
-        return "";
-      return "DRM now: " + drm.map((c) => c.name + " " + (c.status || "?") + " (" + c.modes + " mode" + (c.modes === 1 ? "" : "s") + ")").join(", ")
-        + ". A DPI overlay reports its connector connected even with no panel attached.";
-    }
-
     // Save shows what changes first: the lines Core would write, then Save and Reboot / Save Only / Back.
     async function reviewBootConfig() {
       if (!bootConfig.form)
@@ -22972,7 +22949,6 @@ std::string_view webControlPageHtml()
         }
       });
 
-      let gate = null;
       if (result.display_changed) {
         const loaded = bootConfigFormFrom(bootConfig.payload.state);
         const leavingDpi = loaded.display !== "hdmi";
@@ -22983,16 +22959,6 @@ std::string_view webControlPageHtml()
         if (toDpi)
           bootConfigDiffLine(box, "diff-note", "With DPI overlays loaded, GPIO 0-27 belong to the panel: I2C bus 1 (GPIO 2/3) and buttons on those pins stop working, "
             + "and the touch UI moves to the panel.");
-        const drm = drmSummary(result.drm);
-        if (drm)
-          bootConfigDiffLine(box, "diff-info", drm);
-        const row = document.createElement("label");
-        row.className = "diff-confirm";
-        gate = document.createElement("input");
-        gate.type = "checkbox";
-        row.appendChild(gate);
-        row.appendChild(document.createTextNode(" Change the display anyway"));
-        box.appendChild(row);
       }
       if (state.snapshot && state.snapshot.recording)
         bootConfigDiffLine(box, "diff-note", "A take is recording: Save and Reboot stops it.");
@@ -23011,14 +22977,8 @@ std::string_view webControlPageHtml()
       const saveReboot = makeButton("Save and Reboot", true, () => { void saveBootConfig(true); });
       const saveOnly = makeButton("Save Only", false, () => { void saveBootConfig(false); });
       makeButton("Back", false, hideBootConfigPanels);
-      const syncGate = () => {
-        const blocked = changes.length === 0 || (gate && !gate.checked);
-        saveReboot.disabled = blocked;
-        saveOnly.disabled = blocked;
-      };
-      if (gate)
-        gate.addEventListener("change", syncGate);
-      syncGate();
+      saveReboot.disabled = changes.length === 0;
+      saveOnly.disabled = changes.length === 0;
       box.appendChild(actions);
       box.hidden = false;
     }
@@ -23027,9 +22987,12 @@ std::string_view webControlPageHtml()
       if (!bootConfig.payload || bootConfigBusy())
         return;
       const review = bootConfig.review;
+      const displayChanged = !!(review && review.display_changed);
+      if (displayChanged && !window.confirm("Change the display overlays and save? A DPI panel that is the camera's only screen stays dark without them."))
+        return;
       bootConfig.saving = true;
       renderBootConfig();
-      const result = await bootConfigPost(bootConfigRequestBody({ confirm_display: !!(review && review.display_changed) }), bootConfig.payload.revision);
+      const result = await bootConfigPost(bootConfigRequestBody({ confirm_display: displayChanged }), bootConfig.payload.revision);
       bootConfig.saving = false;
       if (!result.ok) {
         hideBootConfigPanels();
