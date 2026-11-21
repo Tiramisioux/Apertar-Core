@@ -454,7 +454,7 @@ inline bool knownKey(std::string_view section, std::string_view key)
         return std::find(keys.begin(), keys.end(), key) != keys.end();
     };
     if (section == "gpio_buttons")
-        return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "hold_ms", "double_ms"}) ||
+        return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "invert_on_start", "hold_ms", "double_ms"}) ||
             indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"}) ||
             indexedKey(key, "remote", 15, {"", "_single", "_double", "_triple", "_hold"});   // remote only: no pin
     if (section == "gpio_encoders")
@@ -463,7 +463,7 @@ inline bool knownKey(std::string_view section, std::string_view key)
     if (section == "gpio_switches")
         return key == "enabled" || indexedKey(key, "switch", 15, {"_pins", "_on", "_off", "_position0", "_position1", "_position2"});
     if (section == "pcf8574")
-        return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "hold_ms", "double_ms"}) ||
+        return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "invert_on_start", "hold_ms", "double_ms"}) ||
             indexedKey(key, "pin", 7, {"", "_single", "_double", "_triple", "_hold"});
     if (section == "neorotary4")
         return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "invert_direction", "reset_on_start",

@@ -69,6 +69,7 @@ private:
         bool enabled = false;
         std::string chipPath = "auto";
         bool activeLow = true;
+        bool invertOnStart = false;   // [gpio_buttons] only: a button pressed at start is taken as normally closed (1-0-1)
         std::string pull = "up";
         int pollMs = 12;
         int debounceMs = 60;
@@ -89,7 +90,8 @@ private:
         bool observedPressed = false;
         bool stablePressed = false;
         bool haveSample = false;
-        bool inverted = false;    // read pressed at start: wired the other way round (a 1-0-1 button)
+        bool inverted = false;    // read pressed at start with invert_on_start: wired the other way round (a 1-0-1 button)
+        bool heldAtStart = false; // read pressed at start without it: counted from its release
         std::string seenKey;      // section|base for Listen; gestures add their suffix
         std::string pressSuffix;  // "" for dN, "_press" for an encoder push
         std::chrono::steady_clock::time_point observedChangedAt{};

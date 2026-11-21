@@ -35,6 +35,7 @@ private:
         int pollMs = 40;
         int debounceMs = 60;
         bool activeLow = true;
+        bool invertOnStart = false;   // a mapped pin pressed at start is taken as normally closed (1-0-1)
         std::array<std::string, 8> actions{};   // press (pinN)
         // pinN_single, _double, _triple, _hold, in that order: counted like Cinemate (ButtonGesture)
         std::array<std::array<std::string, 4>, 8> gestureActions{};

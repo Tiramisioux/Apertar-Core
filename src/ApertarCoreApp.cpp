@@ -5264,6 +5264,8 @@ sync_offset_ms=0
 enabled=false
 bus=1
 address=0x20
+# A pin that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
 
 [neorotary4]
 # Optional Adafruit NeoRotary 4 / seesaw quad rotary encoder. Each knob has clockwise, counter-clockwise and press actions.
@@ -5276,6 +5278,8 @@ address=0x49
 # GPIO button actions use the same names as [pcf8574].
 # Example: d17=recindicatorled reserves GPIO17 as the recording LED output.
 enabled=false
+# A button that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
 
 [gpio_encoders]
 # Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].

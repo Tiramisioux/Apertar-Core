@@ -352,6 +352,8 @@ GpioInput::Config GpioInput::loadConfig()
             } else if (key == "debounce_ms") {
                 if (const auto parsed = parseConfigInteger(value))
                     config.debounceMs = std::clamp(*parsed, 0, 1000);
+            } else if (inButtonsSection && key == "invert_on_start") {
+                config.invertOnStart = parseConfigBool(value, config.invertOnStart);
             } else if (inButtonsSection) {
                 std::string base = key;
                 std::string gesture;
@@ -620,11 +622,19 @@ void GpioInput::run()
         for (RuntimeButton &button : buttons) {
             const bool level = (levels & (1ULL << button.lineIndex)) != 0;
             if (!button.haveSample) {
-                // Like Cinemate: a button that already reads pressed at start is wired the other way round (a 1-0-1,
-                // normally closed button), so its levels are swapped from now on.
-                button.inverted = level;
-                if (level)
-                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                // invert_on_start=true, like Cinemate: a button that already reads pressed at start is wired the other way
+                // round (a 1-0-1, normally closed button), so its levels are swapped from now on.
+                if (config_.invertOnStart) {
+                    button.inverted = level;
+                    if (level)
+                        std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                } else if (level) {
+                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; ignored until released. "
+                              << "If it is a normally closed button, set invert_on_start=true in [gpio_buttons].\n";
+                }
+                button.heldAtStart = level != button.inverted;
+                button.observedPressed = button.heldAtStart;
+                button.stablePressed = button.heldAtStart;
                 button.observedChangedAt = now;
                 button.haveSample = true;
             }
@@ -638,6 +648,9 @@ void GpioInput::run()
                 if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed)
                     button.stablePressed = button.observedPressed;
             }
+            button.heldAtStart = button.heldAtStart && button.stablePressed;
+            if (button.heldAtStart)
+                continue;
             for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
                 if (seenCallback_) {
                     static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
