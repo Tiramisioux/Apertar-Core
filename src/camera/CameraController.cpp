@@ -1466,8 +1466,6 @@ unsigned int unsignedEnvValue(const char *name,
     return defaultValue;
 }
 
-#endif // APERTARCORE_HAS_LIBCAMERA
-
 bool boolEnvValue(const char *name, bool defaultValue)
 {
     if (const char *value = std::getenv(name); value && *value) {
@@ -1489,6 +1487,8 @@ bool boolEnvValue(const char *name, bool defaultValue)
     }
     return defaultValue;
 }
+
+#endif // APERTARCORE_HAS_LIBCAMERA
 
 // Pure helpers shared with the build without libcamera (--simulate): the tuning file checks and,
 // further down in the other unguarded spans, the sensor model (families, modes, fps and ISO limits and the
@@ -3487,7 +3487,6 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     case SensorFamily::Imx585:
         // The sensor rows are 2160 tall in every full-height mode (all the 4K-height windows, 4K itself):
         // Clear HDR doubles VMAX, 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
-        // This is the fallback / APERTAR_FPS_LIMIT=table value; the 16-bit 25 is backendMaximumFps().
         if (normalized.height == 2160)
             return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
         return 60.0;
@@ -3498,51 +3497,25 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     return 120.0;
 }
 
-// APERTAR_IMX283_PROBE_FPS=1: the IMX283 fps ceiling is the probe alone; unset, it is min(probe, the driver's
-// crop_vmax=0 floor), because the probe can report more than the sensor delivers.
-bool imx283ProbeFpsOnly()
+// APERTAR_FPS_LIMIT=probe: the fps ceiling is the probe alone. Unset (or "table"), it is min(table, probe).
+bool fpsLimitProbeOnly()
 {
-    static const bool probeOnly = boolEnvValue("APERTAR_IMX283_PROBE_FPS", false);
-    return probeOnly;
+    const char *value = std::getenv("APERTAR_FPS_LIMIT");
+    return value && std::string(value) == "probe";
 }
 
-// APERTAR_FPS_LIMIT=table: the old behaviour, min(table, probed). Default: the probe is the limit.
-bool fpsLimitTableOnly()
-{
-    static const bool tableOnly = [] {
-        const char *value = std::getenv("APERTAR_FPS_LIMIT");
-        const bool table = value && std::string(value) == "table";
-        if (table)
-            std::cerr << "ApertarCore fps limit: APERTAR_FPS_LIMIT=table, using min(table, probed)\n";
-        return table;
-    }();
-    return tableOnly;
-}
-
-// The sensor's maximum fps for the mode: the startup probe when it has a value, else the table.
+// The sensor's maximum fps for the mode: the lower of Core's table and the startup probe, the table alone
+// when the probe has no value.
 double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
                                         bool clearHdr = false)
 {
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    // IMX283: min(probe, the driver's floor) unless APERTAR_IMX283_PROBE_FPS=1, which is the probe alone and wins
-    // over APERTAR_FPS_LIMIT=table.
-    const bool minWithTable = sensorFamily == SensorFamily::Imx283
-        ? !imx283ProbeFpsOnly()
-        : fpsLimitTableOnly();
-    return fpsceiling::resolveSensorMaxFps(probed, table, minWithTable);
-}
-
-// Back-end limits that are not the sensor's, applied after the sensor value; nullopt = none.
-std::optional<double> backendMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
-{
-    // IMX585 Clear HDR 16-bit had a 25 fps cap here in every mode. Removed (User, 2026-11-03): the driver's
-    // maximum applies (4K 30, the height crops up to 42). At 30 in 4K the ISP back end is the limit and frames
-    // are lost under load (KB working/research-30fps-answer.md, working/drop-frames/tests-2026-11/findings-2026-11-03.md).
-    (void)settings;
-    (void)sensorFamily;
-    return std::nullopt;
+    if (!probed)
+        return table;
+    // The IMX283 stays at min(probe, the driver's floor): the probe can report more than it delivers.
+    return fpsLimitProbeOnly() && sensorFamily != SensorFamily::Imx283 ? *probed : std::min(table, *probed);
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -3579,7 +3552,6 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 {
     double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
                                                      settings.clearHdr);
-    maxFps = fpsceiling::applyBackendCap(maxFps, backendMaximumFps(settings, sensorFamily));
     if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
         settings.recordingFormat == RecordingFormat::Cdng &&
         settings.cdngCompression == CdngCompression::Uncompressed) {
@@ -3591,15 +3563,12 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 }
 
 // The storage pre-roll's target: the highest fps the SENSOR delivers for the running mode (resolution, bit depth, Clear
-// HDR: the startup probe, else the table), with only the named back-end cap kept (IMX585 Clear HDR 16-bit at 4K: the
-// back end delivers ~28 at 30 and drops frames, so the pipeline, not a policy, is the limit). Not applied: the
-// lossless-JPEG cap, the mode ladder's rung ceilings and user thresholds, the speed-ramp limits and the IMX477
-// uncompressed-cDNG table (modeMaximumFps has the last one).
+// HDR: the lower of the table and the startup probe). Not applied: the lossless-JPEG cap, the mode ladder's rung
+// ceilings and user thresholds, the speed-ramp limits and the IMX477 uncompressed-cDNG table (modeMaximumFps has the
+// last one).
 double prerollMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
-    return fpsceiling::applyBackendCap(
-        maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth, settings.clearHdr),
-        backendMaximumFps(settings, sensorFamily));
+    return maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth, settings.clearHdr);
 }
 
 // The highest FPS the current mode takes; published as fps_max so the UIs cut their FPS
@@ -4526,6 +4495,8 @@ public:
                   << " sync_ms=" << syncMs
                   << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no")
                   << " frames_per_folder=" << framesPerFolder_;
+        if (fpsLimitProbeOnly())
+            std::cerr << " fps_limit=probe";
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
@@ -9219,12 +9190,10 @@ private:
                     activeRawWidth,
                     activeRawHeight,
                 };
-                const double maxFps = fpsceiling::applyBackendCap(
-                    maximumSupportedFpsForResolution(sensorFamily_,
-                                                     effectiveSettings.resolution,
-                                                     effectiveSettings.rawBitDepth,
-                                                     effectiveSettings.clearHdr),
-                    backendMaximumFps(effectiveSettings, sensorFamily_));
+                const double maxFps = maximumSupportedFpsForResolution(sensorFamily_,
+                                                                       effectiveSettings.resolution,
+                                                                       effectiveSettings.rawBitDepth,
+                                                                       effectiveSettings.clearHdr);
                 if (effectiveSettings.fps > maxFps)
                     effectiveSettings.fps = maxFps;
                 settings_ = effectiveSettings;
