@@ -99,9 +99,9 @@ bool writeFile(const std::string &path, const uint8_t *data, size_t size)
     ::posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     bool ok = writeAll(fd, data, size);
     const int writeErrno = errno;
-    // The same knob as the cDNG writer (APERTAR_DNG_DONTNEED); lossy takes have no sync thread, so "sync" leaves
-    // the pages to the kernel like "off".
-    if (dngPageCacheDrop() == DngPageCacheDrop::Writer)
+    // The same knob as the cDNG writer (APERTAR_DNG_DONTNEED). Lossy takes have no sync thread, so "sync" drops
+    // here too, as 1.6.0 did after every file; only "off" leaves the pages to the kernel.
+    if (dngPageCacheDrop() != DngPageCacheDrop::Off)
         ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
     if (::close(fd) != 0 && ok)
         ok = false;

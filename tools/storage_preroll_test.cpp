@@ -55,10 +55,10 @@ int main()
     // env beats file
     PrerollConf off; off.automatic = false;
     PrerollConf on; on.automatic = true;
-    check(automaticEnabled(nullptr, PrerollConf{}), "default on");
+    check(!automaticEnabled(nullptr, PrerollConf{}), "default off");
     check(!automaticEnabled(nullptr, off) && automaticEnabled(nullptr, on), "file decides without env");
     check(!automaticEnabled("0", on) && automaticEnabled("1", off), "env 0/1 beats the file");
-    check(!automaticEnabled("x", off) && automaticEnabled("", PrerollConf{}), "other env values are unset");
+    check(!automaticEnabled("x", off) && automaticEnabled("x", on) && !automaticEnabled("", PrerollConf{}), "other env values are unset");
 
     // seconds
     PrerollConf five; five.seconds = 5;

@@ -32,4 +32,8 @@ std::string headerGpioChipPath();
 
 GpioChipInfo readGpioChipInfo(const std::string &chipPath, int maxLines);
 
+// Every /dev/gpiochipN there is, lowest number first, without line details. A chip other than the header's is
+// one a driver added: an I2C or USB expander, a microcontroller.
+std::vector<GpioChipInfo> listGpioChips();
+
 } // namespace apertar::hardware

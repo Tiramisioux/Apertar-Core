@@ -16,7 +16,7 @@ namespace apertar::hardware {
 
 struct StoreFlags {
     bool dryRun = false;        // work out everything, write nothing
-    bool force = false;         // save although the new text has errors the current one does not
+    bool force = false;         // key edits only: save although the edit adds errors
     bool backup = false;        // also keep <file>.bak: WebUI and core.py saves only
     bool confirmMerge = false;  // a stale text save that merged onto the current file: write it now
     bool trusted = false;       // Core's own code (the IMU): the easy-mode key checks are skipped

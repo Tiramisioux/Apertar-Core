@@ -840,6 +840,7 @@ unsigned ProresEncoder::inFlightFrames()
 ProresEncoder::ProresEncoder(const Config &config) : impl_(new Impl)
 {
     impl_->cfg = config;
+    impl_->recordingClock = RecordingClock(TimecodeSlot{config.tcOffsetUs, config.tcPeriodNum, config.tcPeriodDen});
     switch (config.transfer) {
     case ProresTransfer::Display:
         impl_->useLut = false;

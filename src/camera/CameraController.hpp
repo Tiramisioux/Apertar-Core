@@ -3,20 +3,57 @@
 #include "camera/FramePhaseLock.hpp"
 #include "camera/ModeLadder.hpp"
 #include <apertar/core/Types.hpp>
+#include "util/ClipName.hpp"
 #include "util/RecordingDropWarning.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <condition_variable>
 #include <functional>
 #include <memory>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace apertar {
+
+// What the running (or last) take tells get_state: its folder name, and for a take with start_us the slots of its
+// first and last frame (design 6.2). The session writes it; reads need no controller lock.
+struct TakeInfo {
+    static constexpr int64_t kNone = INT64_MIN;
+    std::atomic<int64_t> firstSlot{kNone};
+    std::atomic<int64_t> lastSlot{kNone};
+    mutable std::mutex nameMutex;
+    std::string clipName;
+    void begin(const std::string &name)
+    {
+        firstSlot.store(kNone);
+        lastSlot.store(kNone);
+        std::lock_guard<std::mutex> lock(nameMutex);
+        clipName = name;
+    }
+};
+struct TakeSnapshot {
+    std::optional<int64_t> firstSlot;
+    std::optional<int64_t> lastSlot;
+    std::string clipName;
+};
+// The optional fields of record_start (design 6.2). All unset = a take as before: frame 0 is the first frame after
+// the gate arms, the folder is named from the template, the timecode is today's.
+struct TakeOptions {
+    int64_t startUs = 0;          // the first frame is the first with SensorTimestamp >= startUs (CLOCK_MONOTONIC, us)
+    int64_t stopUs = 0;           // armed at the start: no frame at or after it is recorded
+    std::string clipName;         // the folder name verbatim, made with an exclusive create_directory
+    bool hasTcOffset = false;     // tcOffsetUs given: timecode = slot time + tcOffsetUs
+    int64_t tcOffsetUs = 0;
+    bool twoCameras = false;      // cam1 is configured: the {cam} rule applies to a template-made name
+    std::string unsyncedReason;   // not empty: the take is NOT SYNCED from its first frame (slots.txt, journal)
+    TakeInfo *info = nullptr;     // set by the controller
+};
 
 class CameraController {
 public:
@@ -51,9 +88,16 @@ public:
         std::string crop;           // ScalerCropMaximum, empty if the pipeline has none
     };
 
+    using TakeInfo = apertar::TakeInfo;
+    using TakeSnapshot = apertar::TakeSnapshot;
+    using TakeOptions = apertar::TakeOptions;
+
     CameraController(EventCallback eventCallback, PreviewCallback previewCallback);
     ~CameraController();
 
+    // --camera (src/camera/CameraPort.hpp): "" or cam0 = the primary, any other value a secondary. Process-wide; call it
+    // before start().
+    static void selectCamera(const std::string &value);
     bool start(const std::string &mediaRoot, bool simulateCamera);
     void stop();
     bool enterStandby();
@@ -93,16 +137,29 @@ public:
     // The name the NEXT clip would get with `value` (the saved template when empty), real counter and clock.
     // No side effects; false with `error` set when the template is invalid.
     bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
+    // The names in the media root, as the media watcher last listed them. The clip_name_example field is
+    // computed from these, so settings() never touches the medium.
+    void setClipFolderNames(std::set<std::string> names);
+    // The two names of a take with cam1 configured (dual-sensor design 6.2 step 2): one clip number, the lowest free under
+    // both, with {cam} in both. `partner` is cam1's side (cam1names::partnerFrom), `wallMicros` the take's wall-clock
+    // instant. With `templateText` empty the saved template is used. No side effects.
+    apertar::clipname::TwoNames twoCameraClipNames(const apertar::clipname::PartnerNaming &partner, int64_t wallMicros,
+                                                   const std::string &templateText = std::string()) const;
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
     bool setPreviewTdn(bool enabled);
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
-    // T34: the mode ladder. Any of rungs / enabled / rampReady; dryRun only validates. Fills the
-    // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors).
+    // T34: the mode ladder. Any of rungs / enabled / rampReady / aspects; dryRun only validates. Fills the
+    // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
+    // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
+    // saved in a take too, with no check or apply, by replacing the file's aspects= line and putting it last, or
+    // writing the whole file when it is missing or empty (a filter unchanged from Core's copy writes nothing);
+    // refused for a bad label, a file that cannot be read whole, or a failed write.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                       std::optional<bool> rampReady, bool dryRun, std::string *json, std::string *error);
+                       std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
+                       std::string *json, std::string *error);
     std::string modeLadderJson() const;
     // A preset that names a mode (namesMode) must be the one the ladder would pick for its FPS;
     // one that names none follows the ladder. False with *error otherwise.
@@ -142,8 +199,13 @@ public:
     double timelapseIntervalSeconds() const;
     uint64_t timelapseShotCount() const;
     bool startRecording(const AudioRecordingOptions &audioOptions = {},
-                        const GyroRecordingOptions &gyroOptions = {});
-    bool stopRecording();
+                        const GyroRecordingOptions &gyroOptions = {},
+                        const TakeOptions &take = {});
+    // stopUs > 0 (design 6.2): waits, without the controller lock, until the frame gate has seen a frame at or after
+    // stopUs (or stopUs + max(3 T, 100 ms) has passed), so the clip holds the slots up to stopUs; a stopUs already past
+    // stops at once. 0 = stop now, as before.
+    bool stopRecording(int64_t stopUs = 0);
+    TakeSnapshot takeSnapshot() const;
     // Storage pre-roll: a short raw take at the mode's maximum fps through the real write path, then deleted. Not a take
     // (no REC, no recording event, no audio, no gyro, no safety stop). Core's pre-roll thread calls these two only.
     struct StoragePrerollResult {
@@ -171,6 +233,8 @@ public:
     PhaseLockStatus phaseLockStatus() const;
     bool recordingHasDroppedFrames() const { return recordingDropWarning_.dropped(); }
     uint64_t recordingDroppedFrames() const { return recordingDropWarning_.droppedFrames(); }
+    // The take's audio input level, 0-100, as the last audio_level event gave it (0 when no take records sound).
+    int audioInputLevel() const { return audioInputLevel_.load(std::memory_order_relaxed); }
 
 private:
     class CameraSession;
@@ -185,7 +249,11 @@ private:
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;
-    void saveModeLadderLocked() const;
+    bool saveModeLadderLocked() const;   // false (and logged) when atomicWrite failed, also after its rename
+    // The aspect filter's own save: the aspects= line of mode_ladder.conf replaced and put last (a missing or
+    // empty file is written whole). True when the file holds aspects; false with *error when the file could not
+    // be read whole or the write did not reach it.
+    bool saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;
@@ -219,11 +287,13 @@ private:
     std::map<RecordingFormat, CaptureSettings> formatSettings_;
     std::optional<CaptureSettings> stillSettings_;
     std::string mediaRoot_;
+    std::set<std::string> clipFolderNames_;                 // the media root's names (setClipFolderNames; mutex_)
     std::string lastError_;
     bool simulateCamera_ = false;
     bool recording_ = false;
     std::optional<bool> lastEmittedLogApplied_;             // cdng_log_applied as the last settings event carried it (mutex_)
     std::atomic<bool> prerollTake_{false};                  // a storage pre-roll's take runs (recording_ stays false)
+    std::atomic<int> audioInputLevel_{0};                   // the last audio_level of a take, for the WebUI's meter
     std::optional<CaptureSettings> prerollSaved_;
     std::string prerollFolder_;
     double prerollFps_ = 0;
@@ -247,6 +317,7 @@ private:
     bool rampTakeChanged_ = false;
     ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
     bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
+    TakeInfo takeInfo_;
     std::unique_ptr<CameraSession> session_;
 };
 

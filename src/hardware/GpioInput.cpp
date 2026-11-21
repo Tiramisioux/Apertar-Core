@@ -195,9 +195,9 @@ int8_t quadratureDelta(int previousState, int currentState)
 
 } // namespace
 
-GpioInput::GpioInput(ActionCallback actionCallback, ActionCallback rotationCallback)
+GpioInput::GpioInput(PressCallback actionCallback, ActionCallback rotationCallback)
     : actionCallback_(std::move(actionCallback))
-    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : actionCallback_)
+    , rotationCallback_(rotationCallback ? std::move(rotationCallback) : ActionCallback(actionCallback_))
 {
 }
 
@@ -352,6 +352,8 @@ GpioInput::Config GpioInput::loadConfig()
             } else if (key == "debounce_ms") {
                 if (const auto parsed = parseConfigInteger(value))
                     config.debounceMs = std::clamp(*parsed, 0, 1000);
+            } else if (inButtonsSection && key == "invert_on_start") {
+                config.invertOnStart = parseConfigBool(value, config.invertOnStart);
             } else if (inButtonsSection) {
                 std::string base = key;
                 std::string gesture;
@@ -562,11 +564,11 @@ void GpioInput::closeFd(int *fd) const
     }
 }
 
-void GpioInput::emitAction(const std::string &action)
+bool GpioInput::emitAction(const std::string &action)
 {
     if (action.empty() || !actionCallback_)
-        return;
-    actionCallback_(action);
+        return false;
+    return actionCallback_(action);
 }
 
 void GpioInput::setLastError(const std::string &error)
@@ -620,11 +622,19 @@ void GpioInput::run()
         for (RuntimeButton &button : buttons) {
             const bool level = (levels & (1ULL << button.lineIndex)) != 0;
             if (!button.haveSample) {
-                // Like Cinemate: a button that already reads pressed at start is wired the other way round (a 1-0-1,
-                // normally closed button), so its levels are swapped from now on.
-                button.inverted = level;
-                if (level)
-                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                // invert_on_start=true, like Cinemate: a button that already reads pressed at start is wired the other way
+                // round (a 1-0-1, normally closed button), so its levels are swapped from now on.
+                if (config_.invertOnStart) {
+                    button.inverted = level;
+                    if (level)
+                        std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                } else if (level) {
+                    std::cerr << "GPIO input: GPIO " << button.gpio << " reads pressed at start; ignored until released. "
+                              << "If it is a normally closed button, set invert_on_start=true in [gpio_buttons].\n";
+                }
+                button.heldAtStart = level != button.inverted;
+                button.observedPressed = button.heldAtStart;
+                button.stablePressed = button.heldAtStart;
                 button.observedChangedAt = now;
                 button.haveSample = true;
             }
@@ -638,19 +648,25 @@ void GpioInput::run()
                 if (stableForMs >= config_.debounceMs && button.observedPressed != button.stablePressed)
                     button.stablePressed = button.observedPressed;
             }
+            button.heldAtStart = button.heldAtStart && button.stablePressed;
+            if (button.heldAtStart)
+                continue;
             for (const auto event : button.gesture.update(button.stablePressed, nowMs)) {
                 if (seenCallback_) {
                     static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
                     const auto at = static_cast<size_t>(event);
                     seenCallback_(button.seenKey + (at == 0 ? button.pressSuffix : std::string(suffixes[at])));
                 }
+                bool woke = false;
                 switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(button.action); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(button.single); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(button.doubleClick); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(button.triple); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(button.hold); break;
+                case hardware::ButtonGesture::Event::Press: woke = emitAction(button.action); break;
+                case hardware::ButtonGesture::Event::Single: woke = emitAction(button.single); break;
+                case hardware::ButtonGesture::Event::Double: woke = emitAction(button.doubleClick); break;
+                case hardware::ButtonGesture::Event::Triple: woke = emitAction(button.triple); break;
+                case hardware::ButtonGesture::Event::Hold: woke = emitAction(button.hold); break;
                 }
+                if (woke)
+                    button.gesture.consume();   // A wake press does nothing else.
             }
         }
 

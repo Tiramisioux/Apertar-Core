@@ -24,6 +24,9 @@ extern "C" void *apertar_prores_create(const ApertarProresConfig *cfg, char *err
         config.transfer = apertar::ProresTransfer::Display;
         config.colorProfile = static_cast<apertar::ProresColorProfile>(cfg->colorProfile);
         config.timecode = cfg->timecode ? cfg->timecode : "";
+        config.tcOffsetUs = cfg->tcOffsetUs;
+        config.tcPeriodNum = cfg->tcPeriodNum;
+        config.tcPeriodDen = cfg->tcPeriodDen;
         auto encoder = std::make_unique<apertar::ProresEncoder>(config);
         std::string why;
         if (!encoder->openClip(cfg->path, &why)) throw std::runtime_error(why);

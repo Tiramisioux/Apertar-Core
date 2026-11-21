@@ -136,7 +136,7 @@ struct CaptureSettings {
     // camera as a whole, like the timecode mode; nothing derives from it yet.
     double conformFps = 25.0;
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
-    bool previewTdn = false; // Temporal denoise in the preview ISP. Off (default) is much faster; the raw DNGs never change.
+    bool previewTdn = true; // Temporal denoise in the preview ISP of raw takes. Off is much faster; H.264 and ProRes always keep it.
     bool mediaTrimEnabled = true; // Trim the recording drive after big deletes and when it is mounted (APERTAR_MEDIA_TRIM=0 overrides).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
     // numbered by count and the clip keeps the FPS it started with as its timeline rate.
@@ -155,6 +155,8 @@ struct CaptureSettings {
     // One setting for the camera as a whole, like the timecode mode.
     std::string clipNameTemplate = "{format}_{date}_{clip}";
     std::string clipNameExample;   // Runtime: the next clip's name for clipNameTemplate (filled by the controller), not persisted.
+    std::string cameraId;          // Runtime: the libcamera id of the camera this Core opened ("" before and in --simulate), not persisted.
+    std::string cameraPort;        // Runtime: its port, cam0 or cam1 (--camera's, in --simulate), not persisted.
     uint32_t iso = 800;
     bool isoAuto = false;
     bool isoAutoAfterClearHdr = false; // Clear HDR stopped auto ISO; SDR turns it back on.

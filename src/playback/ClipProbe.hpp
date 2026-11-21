@@ -12,6 +12,7 @@
 
 #include "ClipFrames.hpp"
 #include "DngTags.hpp"
+#include "cdng/ClearHdrCcmp.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -131,7 +132,7 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
 
     for (const FrameFile &file : f.frames.files) {         // the first frame with a picture
         if (file.bytes == 0) continue;
-        const int fd = openDngFrame((dir / file.name).string().c_str());
+        const int fd = openClipFrame(dir.string(), file.name);
         std::string err;
         f.haveFirst = readDngInfo(fd, f.first, err);
         closeDngFrame(fd);
@@ -162,8 +163,12 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
     if (f.haveFirst) {
         shotDate(f.first.dateTimeOriginal, f.shotDateText, f.shotMs);
         if (f.first.hasTimecode) f.timecodeStart = timecodeText(f.first.timecode);
-        // FORMAT row (design §4.3): 16-bit = Clear HDR; a LinearizationTable on 12-bit = companded
+        // FORMAT row (design §4.3): 16-bit = Clear HDR; the CCMP expansion table on 12-bit = Clear HDR companded;
+        // any other LinearizationTable is a Log curve's inverse (Log stores 12, 10 or 8 bits).
         const bool table = !f.first.linearization.empty();
+        const auto &ccmpTable = ccmp::expansionTable();
+        const bool ccmpTableOn = f.first.bits == 12 && f.first.linearization.size() == ccmpTable.size()
+            && std::equal(ccmpTable.begin(), ccmpTable.end(), f.first.linearization.begin());
         std::string look;
         // The lossy ratio is told by the clip name: the {format} token (cDNG_3to1) or {comp} (lossy3) may sit
         // anywhere in a custom clip name template, so search, do not anchor.
@@ -172,7 +177,8 @@ inline ClipFacts probeClip(const std::filesystem::path &dir, int64_t coreStartMs
         if (f.first.bits == 16) look = "Clear HDR 16-bit";
         else if (lossy3 && table) { look = "12-bit companded · lossy 3:1"; f.companded = true; }
         else if (lossy5 && table) { look = "12-bit companded · lossy 5:1"; f.companded = true; }
-        else if (table) { look = "Clear HDR 12-bit companded"; f.companded = true; }
+        else if (ccmpTableOn) { look = "Clear HDR 12-bit companded"; f.companded = true; }
+        else if (table) { look = "Log " + std::to_string(f.first.bits) + "-bit"; f.companded = true; }
         else look = "SDR " + std::to_string(f.first.bits) + "-bit";
         const bool lossy = lossy3 || lossy5;
         f.formatText = look + (lossy ? "" : (f.first.compression == 7 ? " · lossless" : " · uncompressed"));
@@ -196,7 +202,9 @@ public:
     // three takes, 2026-10-29); a file written in place does not, and frames are never rewritten. A split clip
     // ([storage] frames_per_folder) gains frames inside its last part_NNN folder, which moves only that folder's
     // mtime: for such a clip the key adds the last part's mtime (one more stat, in a root of a few entries).
-    ClipFacts get(const std::filesystem::path &dir)
+    // merging = the merge worker is moving this clip's frames into its root: every rename moves the root's mtime, but
+    // the frames and their count stay, so the cached facts are kept (openClipFrame finds a frame that has moved).
+    ClipFacts get(const std::filesystem::path &dir, bool merging = false)
     {
         const auto mtimeOf = [](const std::filesystem::path &path, bool &ok) {
             struct stat st {};
@@ -209,6 +217,8 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto it = entries_.find(key);
+            if (it != entries_.end() && merging && it->second.facts.ok)
+                return it->second.facts;
             if (it != entries_.end() && it->second.mtimeNs == mtimeNs && statOk) {
                 bool partOk = true;
                 const std::string &lastPart = it->second.facts.frames.lastPart;

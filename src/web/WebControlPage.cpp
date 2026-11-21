@@ -193,6 +193,25 @@ std::string_view webControlPageHtml()
       z-index: 1;
     }
 
+    /* Clip merge: a faint grey fill in the READY pill while the camera is idle and the merge runs, full at the start
+       and emptying as the clips merge (as the touch UI). */
+    .status-pill.merge-fill::after {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--merge-fill, 0%);
+      background: #ffffff;
+      opacity: 0.18;
+      transition: width 0.4s linear;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .status-pill.merge-fill > * {
+      position: relative;
+      z-index: 1;
+    }
+
     /* After a buffer safety stop: normal READY pill, text and dot hidden (space kept),
        only the green bar draining. */
     .status-pill.buffer-drain::before {
@@ -235,6 +254,89 @@ std::string_view webControlPageHtml()
 
     .status-dot.preroll {
       color: var(--info);
+    }
+
+    /* Dropped frames in the take: an amber badge beside the status pill, the count or "!" (as the touch UI's
+       DroppedFrameWarning). */
+    .drop-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      align-self: stretch;
+      min-width: 40px;
+      box-sizing: border-box;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(170, 121, 55, 0.75);
+      background: rgba(59, 42, 19, 0.9);
+      color: #ffd27a;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .drop-badge[hidden] {
+      display: none;
+    }
+
+    .cam1-badge {
+      display: inline-flex;
+      align-items: center;
+      align-self: stretch;
+      box-sizing: border-box;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      background: rgba(24, 24, 27, 0.9);
+      color: #f4f4f5;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .cam1-badge[hidden] {
+      display: none;
+    }
+
+    .cam1-badge.warn {
+      border-color: rgba(170, 121, 55, 0.75);
+      color: #ffd27a;
+    }
+
+    .cam1-badge.rec {
+      border-color: rgba(255, 77, 77, 0.8);
+      color: #ff8a8a;
+    }
+
+    .record-label {
+      margin-left: auto;
+      align-self: flex-end;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 6px 12px;
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #f4f4f5;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+    }
+
+    .record-label[hidden] {
+      display: none;
+    }
+
+    .record-label-second {
+      font-size: 11px;
+      font-weight: 600;
+      color: #d4d4d8;
+    }
+
+    .record-label.system-value,
+    .record-label.system-value .record-label-second,
+    .dual-found-note.system-value {
+      font-style: italic;
     }
 
     .icon-button {
@@ -324,6 +426,585 @@ std::string_view webControlPageHtml()
       background: #000000;
     }
 
+    /* Dual sensor on: this browser's own view (design §5.3). Each view sets the two panes' boxes as custom properties
+       on the stage (--p0-* CAM0, --p1-* CAM1, % of the stage); the panes, tags and NO SIGNAL read them. Both is two panes
+       of the stage's shape in its middle half, the badges keep the band above, the timecode and REC the band below.
+       Aids stay on CAM0. Below 700 px Both stacks the panes. */
+    .preview-stream-cam1,
+    .preview-cam-tag,
+    .preview-no-signal {
+      display: none;
+    }
+
+    .preview-stage.dual {
+      --p0-l: 0%; --p0-t: 25%; --p0-w: 50%; --p0-h: 50%;
+      --p1-l: 50%; --p1-t: 25%; --p1-w: 50%; --p1-h: 50%;
+    }
+
+    .preview-stage.dual.view-bothleft {
+      --p0-l: 50%; --p1-l: 0%;
+    }
+
+    /* Both views: the panes carry their own pills, timecodes and REC, so the stage is exactly the two 16:9 panes, with
+       no band above or below. Below 700 px the stacked rule wins. */
+    .preview-stage.dual.view-both,
+    .preview-stage.dual.view-bothleft {
+      aspect-ratio: 32 / 9;
+      --p0-t: 0%; --p1-t: 0%; --p0-h: 100%; --p1-h: 100%;
+    }
+
+    /* In the Both views the footer (the VU meter) sits 8 px up, the same as the pane timecodes, so their bottoms line up. */
+    .preview-card:has(.preview-stage.dual.view-both) .preview-footer,
+    .preview-card:has(.preview-stage.dual.view-bothleft) .preview-footer {
+      bottom: 8px;
+    }
+
+    /* The VU meter (16 px in from the stage's bottom-left, 34 px wide) now lies on the left pane: that pane's timecode
+       moves to its right. */
+    @media (min-width: 701px) {
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-both .pane-tc.p0,
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-bothleft .pane-tc.p1 {
+        left: 58px;
+      }
+    }
+
+    .preview-stage.dual.view-cam0 {
+      --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
+    }
+
+    .preview-stage.dual.view-cam1 {
+      --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%;
+    }
+
+    /* PiP: the inset is 28 % of the stage, 3 % from the right and below the badges, top right. */
+    /* PiP: the inset sits top right, 3% in from the right edge and 5% down (about the same distance in pixels). */
+    .preview-stage.dual.view-pip0 {
+      --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%;
+      --p1-l: 69%; --p1-t: 5%; --p1-w: 28%; --p1-h: 28%;
+    }
+
+    .preview-stage.dual.view-pip1 {
+      --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%;
+      --p0-l: 69%; --p0-t: 5%; --p0-w: 28%; --p0-h: 28%;
+    }
+
+    .preview-stage.dual .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual .preview-processed-canvas {
+      left: var(--p0-l);
+      top: var(--p0-t);
+      width: var(--p0-w);
+      height: var(--p0-h);
+      right: auto;
+      bottom: auto;
+      object-fit: contain;
+    }
+
+    .preview-stage.dual .preview-stream-cam1 {
+      display: block;
+      left: var(--p1-l);
+      top: var(--p1-t);
+      width: var(--p1-w);
+      height: var(--p1-h);
+      right: auto;
+      bottom: auto;
+      object-fit: contain;
+    }
+
+    .preview-stage.dual.view-cam1:not(.under) .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam1:not(.under) .preview-processed-canvas,
+    .preview-stage.dual.view-cam0:not(.under) .preview-stream-cam1 {
+      display: none !important;
+    }
+
+    /* Wipe and stack (design v2.5 A5): in a single-camera view the other camera lies underneath, both full frame. The
+       top one is cut away over the first --wipe of the frame, or, stacked, shown at --opacity. */
+    .preview-stage.dual.view-cam0.under { --p1-l: 0%; --p1-t: 0%; --p1-w: 100%; --p1-h: 100%; }
+    .preview-stage.dual.view-cam1.under { --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 100%; }
+    .preview-stage.dual.view-cam0.under .preview-stream-cam1,
+    .preview-stage.dual.view-cam1.under .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam1.under .preview-processed-canvas { z-index: 0; }
+    .preview-stage.dual.view-cam0.under .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under .preview-stream-cam1 { z-index: 1; clip-path: inset(0 0 0 var(--wipe, 0%)); }
+    .preview-stage.dual.view-cam0.under.wipe-v .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.wipe-v .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.wipe-v .preview-stream-cam1 { clip-path: inset(var(--wipe, 0%) 0 0 0); }
+    .preview-stage.dual.view-cam0.under.stacked .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.stacked .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.stacked .preview-stream-cam1 { clip-path: none; }
+    .preview-stage.dual.view-cam0.under.stacked .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-cam0.under.stacked .preview-processed-canvas,
+    .preview-stage.dual.view-cam1.under.stacked .preview-stream-cam1 { opacity: var(--opacity, 0.5); }
+
+    /* Drag on the picture to wipe (or, stacked, to set the opacity): the cursor and touch-action say which way. */
+    .preview-stage.dual.view-cam0, .preview-stage.dual.view-cam1 { cursor: ew-resize; touch-action: pan-y; user-select: none; }
+    .preview-stage.dual.view-cam0.wipe-v:not(.stacked),
+    .preview-stage.dual.view-cam1.wipe-v:not(.stacked) { cursor: ns-resize; touch-action: pan-x; }
+    .wipe-line, .wipe-under { display: none; }
+    .preview-stage.dual.under.wipe-edge .wipe-line {
+      display: block;
+      position: absolute;
+      z-index: 2;
+      background: #ffffff;
+      pointer-events: none;
+      left: var(--wipe); top: 0; bottom: 0; width: 2px; margin-left: -1px;
+    }
+    .preview-stage.dual.under.wipe-edge.wipe-v .wipe-line {
+      left: 0; right: 0; width: auto; top: var(--wipe); bottom: auto; height: 2px; margin-left: 0; margin-top: -1px;
+    }
+    .preview-stage.dual.under .wipe-under {
+      display: block;
+      position: absolute;
+      z-index: 3;
+      left: 8px;
+      top: 46px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #f4f4f5;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+
+    .wipe-row .wipe-ctl { display: flex; align-items: center; gap: 8px; }
+    .wipe-row .wipe-ctl .slider { width: 140px; }
+    .wipe-row .wipe-ctl .wipe-value { min-width: 38px; font-size: 13px; color: #e4e4e7; }
+    .wipe-row .wipe-ctl[hidden] { display: none; }
+    @media (max-width: 700px) {
+      .wipe-row .wipe-ctl .slider { width: 110px; }
+      .preview-stage.dual .wipe-under { top: 74px; }
+    }
+
+    .preview-stage.dual.view-pip0 .preview-stream-cam1,
+    .preview-stage.dual.view-pip1 .preview-stream:not(.preview-stream-cam1),
+    .preview-stage.dual.view-pip1 .preview-processed-canvas {
+      z-index: 1;
+      outline: 1px solid rgba(255, 255, 255, 0.35);
+    }
+
+    .preview-stage.dual .preview-cam-tag {
+      display: block;
+      position: absolute;
+      z-index: 2;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #f4f4f5;
+      font-size: 12px;
+      font-weight: 700;
+      pointer-events: none;
+    }
+
+    .preview-stage.dual .preview-cam-tag.cam0 {
+      left: calc(var(--p0-l) + 8px);
+      top: calc(var(--p0-t) + 8px);
+    }
+
+    .preview-stage.dual .preview-cam-tag.cam1 {
+      left: calc(var(--p1-l) + 8px);
+      top: calc(var(--p1-t) + 8px);
+    }
+
+    /* One camera on the whole stage: the badges already fill its corners, so no tag. */
+    .preview-stage.dual.view-cam0 .preview-cam-tag,
+    .preview-stage.dual.view-cam1 .preview-cam-tag {
+      display: none;
+    }
+
+    .preview-stage.dual .preview-no-signal.shown {
+      display: flex;
+      position: absolute;
+      left: var(--p1-l);
+      top: var(--p1-t);
+      width: var(--p1-w);
+      height: var(--p1-h);
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      color: #a1a1aa;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      background: #000000;
+      pointer-events: none;
+    }
+
+    .preview-stage.dual.view-cam0 .preview-no-signal.shown {
+      display: none;
+    }
+
+    /* Narrow screens: the two panes stacked, exactly two 16:9 pictures (8:9), no band above or below. The VU meter (12 px
+       in) then lies on the lower pane's corner, so that pane's timecode moves right of it while the meter shows. */
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both,
+      .preview-stage.dual.view-bothleft {
+        aspect-ratio: 8 / 9;
+        --p0-l: 0%; --p0-t: 0%; --p0-w: 100%; --p0-h: 50%;
+        --p1-l: 0%; --p1-t: 50%; --p1-w: 100%; --p1-h: 50%;
+      }
+
+      .preview-stage.dual.view-bothleft {
+        --p0-t: 50%; --p1-t: 0%;
+      }
+
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-both .pane-tc.p1,
+      .preview-card:has(#vuMeter:not(.hidden)) .preview-stage.dual.view-bothleft .pane-tc.p0 {
+        left: 54px;
+      }
+    }
+
+    /* Settings for CAM0 | CAM1: the switch, and the controls CAM1 shares with CAM0 (greyed, with their note). */
+    .dual-settings-for {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .dual-settings-for[hidden],
+    .dual-settings-for-card[hidden],
+    .dual-fps-max[hidden] {
+      display: none;
+    }
+
+    .dual-settings-for-label {
+      font-size: 13px;
+      color: #a1a1aa;
+    }
+
+    .dual-tied {
+      position: relative;
+      opacity: 0.42;
+    }
+
+    .dual-tied > :not(.dual-shared-note) {
+      pointer-events: none;
+    }
+
+    .dual-shared-note {
+      display: none;
+    }
+
+    .dual-tied .select-topline > .dual-shared-note {
+      display: inline;
+      margin: 0 0 0 auto;
+      font-size: 12px;
+      font-style: italic;
+      color: #e4e4e7;
+    }
+
+    .dual-tied > .dual-shared-note {
+      display: block;
+      font-size: 12px;
+      font-style: italic;
+      color: #e4e4e7;
+      margin-bottom: 6px;
+    }
+
+    /* Per-pane settings pills, recording frame and REC tag (dual sensor on). The pane boxes are the --p0-* / --p1-* vars. */
+    .pane-pills,
+    .pane-frame,
+    .pane-rec {
+      display: none;
+    }
+
+    .preview-stage.dual .pane-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      position: absolute;
+      z-index: 3;
+      pointer-events: none;
+      max-width: calc(var(--pw) - 16px);
+    }
+
+    .preview-stage.dual .pane-pills.p0 { --pl: var(--p0-l); --pt: var(--p0-t); --pw: var(--p0-w); left: calc(var(--p0-l) + 8px); top: calc(var(--p0-t) + 34px); }
+    .preview-stage.dual .pane-pills.p1 { --pl: var(--p1-l); --pt: var(--p1-t); --pw: var(--p1-w); left: calc(var(--p1-l) + 8px); top: calc(var(--p1-t) + 34px); }
+    .preview-stage.dual.view-cam0 .pane-pills.p0 { top: calc(var(--p0-t) + 12px); }
+    .preview-stage.dual.view-cam1 .pane-pills.p1 { top: calc(var(--p1-t) + 12px); }
+
+    .pane-pills .badge {
+      font-size: 12px;
+      padding: 3px 9px;
+    }
+
+    .pane-pills.dim .badge {
+      opacity: 0.5;
+    }
+
+    /* The main pane carries the pills: not the inset, not a pane that is not shown. */
+    .preview-stage.dual.view-cam0 .pane-pills.p1,
+    .preview-stage.dual.view-pip0 .pane-pills.p1,
+    .preview-stage.dual.view-cam1 .pane-pills.p0,
+    .preview-stage.dual.view-pip1 .pane-pills.p0 {
+      display: none;
+    }
+
+    /* The page's own pills replace the picture's corner badges (left group and WB) while dual is on. */
+    .preview-stage.dual .preview-badges.left,
+    .preview-stage.dual #wbBadge {
+      display: none;
+    }
+
+    .preview-stage.dual.rec0 .pane-frame.p0,
+    .preview-stage.dual.rec1 .pane-frame.p1 {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      border: 3px solid #ff4d4d;
+      box-sizing: border-box;
+    }
+
+    .preview-stage.dual .pane-frame.p0 { left: var(--p0-l); top: var(--p0-t); width: var(--p0-w); height: var(--p0-h); }
+    .preview-stage.dual .pane-frame.p1 { left: var(--p1-l); top: var(--p1-t); width: var(--p1-w); height: var(--p1-h); }
+
+    /* A pane frame follows the card's rounded top corners where its pane meets them (the card frame's radius). */
+    .preview-stage.dual .pane-frame { --frame-r: calc(var(--radius-xl) - 1px); }
+    .preview-stage.dual.view-both .pane-frame.p0,
+    .preview-stage.dual.view-bothleft .pane-frame.p1 { border-top-left-radius: var(--frame-r); }
+    .preview-stage.dual.view-both .pane-frame.p1,
+    .preview-stage.dual.view-bothleft .pane-frame.p0 { border-top-right-radius: var(--frame-r); }
+    .preview-stage.dual.view-cam0 .pane-frame.p0, .preview-stage.dual.view-pip0 .pane-frame.p0,
+    .preview-stage.dual.view-cam1 .pane-frame.p1, .preview-stage.dual.view-pip1 .pane-frame.p1 {
+      border-top-left-radius: var(--frame-r);
+      border-top-right-radius: var(--frame-r);
+    }
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both .pane-frame.p0,
+      .preview-stage.dual.view-bothleft .pane-frame.p1 {
+        border-top-left-radius: var(--frame-r);
+        border-top-right-radius: var(--frame-r);
+      }
+      .preview-stage.dual.view-both .pane-frame.p1,
+      .preview-stage.dual.view-bothleft .pane-frame.p0 { border-radius: 0; }
+    }
+
+    .preview-stage.dual.rec0 .pane-rec.p0,
+    .preview-stage.dual.rec1 .pane-rec.p1 {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #ff4d4d;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    .preview-stage.dual .pane-rec.p0 { left: calc(var(--p0-l) + var(--p0-w) - 8px); top: calc(var(--p0-t) + 8px); transform: translateX(-100%); }
+    .preview-stage.dual .pane-rec.p1 { left: calc(var(--p1-l) + var(--p1-w) - 8px); top: calc(var(--p1-t) + 8px); transform: translateX(-100%); }
+
+    /* Each pane's own timecode, lower left: red while that camera is in the take, dimmed while it is not, so two
+       cameras recording read at a glance. Both read the one slot timecode (design 6.3). */
+    .pane-tc {
+      display: none;
+    }
+
+    .preview-stage.dual .pane-tc {
+      display: block;
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      padding: 2px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #e4e4e7;
+      font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      opacity: 0.55;
+      transform: translateY(-100%);
+    }
+
+    .preview-stage.dual.rec0 .pane-tc.p0,
+    .preview-stage.dual.rec1 .pane-tc.p1 {
+      background: #ff4d4d;
+      color: #ffffff;
+      opacity: 1;
+    }
+
+    .preview-stage.dual .pane-tc.p0 { left: calc(var(--p0-l) + 8px); top: calc(var(--p0-t) + var(--p0-h) - 8px); }
+    .preview-stage.dual .pane-tc.p1 { left: calc(var(--p1-l) + 8px); top: calc(var(--p1-t) + var(--p1-h) - 8px); }
+    .preview-stage.dual.view-pip0 .pane-tc.p1,
+    .preview-stage.dual.view-pip1 .pane-tc.p0 { font-size: 11px; padding: 1px 6px; }
+    .preview-stage.dual.photo .pane-tc { display: none; }
+    /* One picture on the stage (Cam 0, Cam 1, PiP): the card's own timecode is the one; pane timecodes are for Both. */
+    .preview-stage.dual:not(.view-both):not(.view-bothleft) .pane-tc { display: none; }
+
+    /* Both views: a REC button on each pane. While the take (or the next one) is both cameras, the two are linked: one
+       press starts or stops both, and a LINKED tag joins them; otherwise each records its own camera. The card's
+       shared REC button steps aside in these views. */
+    .pane-rec-button,
+    .pane-link {
+      display: none;
+    }
+
+    .preview-stage.dual.view-both .pane-rec-button,
+    .preview-stage.dual.view-bothleft .pane-rec-button {
+      display: flex;
+      position: absolute;
+      z-index: 6;
+      width: 46px;
+      height: 46px;
+      transform: translate(-100%, -100%);
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 3px solid #ef4444;
+      background: rgba(0, 0, 0, 0.55);
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .preview-stage.dual .pane-rec-button.p0 { left: calc(var(--p0-l) + var(--p0-w) - 10px); top: calc(var(--p0-t) + var(--p0-h) - 10px); }
+    .preview-stage.dual .pane-rec-button.p1 { left: calc(var(--p1-l) + var(--p1-w) - 10px); top: calc(var(--p1-t) + var(--p1-h) - 10px); }
+
+    .pane-rec-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: #ef4444;
+    }
+
+    .pane-rec-button.recording { background: #ef4444; border-color: #fca5a5; }
+    .pane-rec-button.recording .pane-rec-icon { border-radius: 4px; background: #ffffff; width: 16px; height: 16px; }
+    .pane-rec-button:disabled { filter: grayscale(1); opacity: 0.4; cursor: not-allowed; }
+    .pane-rec-button:active:not(:disabled) { transform: translate(-100%, -100%) scale(0.94); }
+
+    .preview-stage.dual.view-both.linked .pane-link,
+    .preview-stage.dual.view-bothleft.linked .pane-link {
+      display: block;
+      position: absolute;
+      z-index: 6;
+      left: 50%;
+      top: calc(var(--p0-t) + var(--p0-h) - 80px);
+      transform: translate(-50%, -50%);
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(239, 68, 68, 0.7);
+      background: rgba(0, 0, 0, 0.75);
+      color: #fca5a5;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      pointer-events: none;
+    }
+
+    .preview-stage.dual.view-both.linked .pane-rec-button,
+    .preview-stage.dual.view-bothleft.linked .pane-rec-button {
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+    }
+
+    .preview-card:has(.preview-stage.dual.view-both) #recordButton,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #recordButton,
+    .preview-card:has(.preview-stage.dual.view-both) #recordLabel,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #recordLabel,
+    /* each pane carries its own timecode in the Both views; the VU meter stays */
+    .preview-card:has(.preview-stage.dual.view-both) #timecodeBlock,
+    .preview-card:has(.preview-stage.dual.view-bothleft) #timecodeBlock {
+      display: none;
+    }
+
+    @media (max-width: 700px) {
+      .preview-stage.dual.view-both.linked .pane-link,
+      .preview-stage.dual.view-bothleft.linked .pane-link {
+        top: 50%;
+      }
+    }
+
+    .preview-stage.dual.view-cam0 .pane-frame.p1, .preview-stage.dual.view-cam0 .pane-rec.p1,
+    .preview-stage.dual.view-cam0 .pane-tc.p1,
+    .preview-stage.dual.view-cam1 .pane-frame.p0, .preview-stage.dual.view-cam1 .pane-rec.p0,
+    .preview-stage.dual.view-cam1 .pane-tc.p0 {
+      display: none;
+    }
+
+    /* The card's own frame stays for a single camera and with no dual; the panes carry theirs in Both and PiP. */
+    .preview-stage.dual.view-both.recording-frame::after,
+    .preview-stage.dual.view-bothleft.recording-frame::after,
+    .preview-stage.dual.view-pip0.recording-frame::after,
+    .preview-stage.dual.view-pip1.recording-frame::after {
+      display: none;
+    }
+
+    /* Dual sensor on: the preview card spans the page and the System column moves below it. */
+    @media (min-width: 1121px) {
+      .main-grid.dual-wide > .column:first-child {
+        display: contents;
+      }
+
+      .main-grid.dual-wide .preview-card { grid-column: 1 / -1; grid-row: 1; }
+      .main-grid.dual-wide #cameraSettingsCard { grid-column: 1; grid-row: 2; }
+      .main-grid.dual-wide #remoteControlsCard { grid-column: 1; grid-row: 3; }
+      .main-grid.dual-wide > aside.column { grid-column: 2; grid-row: 2 / span 2; }
+      .main-grid.dual-wide.dual-cols #cameraSettingsCard { grid-column: 1 / -1; }
+      .main-grid.dual-wide.dual-cols > aside.column { grid-row: 3; }
+    }
+
+    /* Settings not in unison: two columns, CAM0 left, CAM1 right (the clone of the stack is CAM1's). */
+    .cam1-stack,
+    .dual-col-head {
+      display: none;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .card-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px 28px;
+      align-items: start;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .section-head {
+      grid-column: 1 / -1;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .cam1-stack {
+      display: flex;
+    }
+
+    .main-grid.dual-cols #cameraSettingsCard .dual-col-head {
+      display: block;
+      font-size: 15px;
+      font-weight: 700;
+      color: #f4f4f5;
+      margin-bottom: -8px;
+    }
+
+    @media (max-width: 700px) {
+      .main-grid.dual-cols #cameraSettingsCard .card-body {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .dual-view-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #000000;
+    }
+
+    .dual-view-row[hidden] {
+      display: none;
+    }
+
+    .dual-view-row .pill-button {
+      padding: 7px 12px;
+      font-size: 13px;
+    }
+
+    .dual-view-row .dual-view-swap {
+      margin-left: auto;
+    }
+
     .preview-processed-canvas {
       position: absolute;
       inset: 0;
@@ -339,7 +1020,8 @@ std::string_view webControlPageHtml()
       display: block;
     }
 
-    .preview-stage.processed-active .preview-stream {
+    /* The canvas draws cam0's processed picture over cam0's stream; CAM1's stream is not processed and stays shown. */
+    .preview-stage.processed-active .preview-stream:not(.preview-stream-cam1) {
       opacity: 0;
     }
 
@@ -563,6 +1245,61 @@ std::string_view webControlPageHtml()
       display: none;
     }
 
+    /* The audio meter left of the timecode (as the touch UI's AudioMeterOverlay, standing): shown while sound is
+       recorded with the clips or the Sound Recorder runs; its segments fill the card's height. A faint red outline
+       while it records sound (Settings > Live preview > Audio recording outline). */
+    .footer-left {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .vu-meter {
+      display: flex;
+      padding: 9px 9px;
+      border-radius: 18px;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid transparent;
+      transition: border-color 0.18s ease;
+    }
+
+    .vu-meter.hidden {
+      display: none;
+    }
+
+    .vu-meter.recording {
+      border-color: rgba(251, 44, 54, 0.45);
+    }
+
+    .vu-bars {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 2px;
+      width: 14px;
+    }
+
+    .vu-bars span {
+      flex: 1 1 0;
+      min-height: 2px;
+      border-radius: 1px;
+      background: rgba(255, 255, 255, 0.14);
+      transition: background 0.11s ease-out;
+    }
+
+    .vu-bars span.on {
+      background: #42df86;
+    }
+
+    .vu-bars span.mid.on {
+      background: #ffd55a;
+    }
+
+    .vu-bars span.high.on {
+      background: #ff6262;
+    }
+
     .time-card.recording {
       background: rgba(255, 68, 68, 0.1);
       border-color: rgba(255, 68, 68, 0.3);
@@ -590,6 +1327,7 @@ std::string_view webControlPageHtml()
       position: absolute;
       inset: 0;
       border: 4px solid #ff4d4d;
+      border-radius: calc(var(--radius-xl) - 1px);   /* the card's corner, inside its 1px border */
       pointer-events: none;
       z-index: 6;
     }
@@ -856,7 +1594,15 @@ std::string_view webControlPageHtml()
       font-style: italic;
     }
 
-    /* Mode Ladder, Speed Ramp and Activated sensor modes (Settings > Record), and the ladder in Camera settings */
+    /* Speed Ramp (Settings > Controls, under Frame Rate), Mode Ladder and Activated sensor modes (Settings > Modes), and the ladder in Camera settings */
+    /* Speed Ramp in Settings > Controls, a row of the Value Lists under Frame Rate: its options below its On/Off. */
+    .speed-ramp-option {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
     .switch-field {
       display: flex;
       align-items: center;
@@ -1569,9 +2315,50 @@ std::string_view webControlPageHtml()
       color: var(--muted);
     }
 
+    .clip-pill.required {
+      opacity: 0.7;
+      border-style: dashed;
+    }
+
     .settings-card.locked .clip-pill {
       cursor: not-allowed;
       opacity: 0.6;
+    }
+
+    /* The Dual Sensor card with one sensor: its own options greyed (phase lock stays usable). */
+    #settingsDualSensorCard.locked .select-block,
+    #settingsDualSensorCard.dual-off .select-block {
+      opacity: 0.6;
+    }
+
+    /* Its Controls: Unison, then one tie switch per control (greyed while Unison is on). */
+    .dual-tie-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .dual-tie-label {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .dual-ties {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+      padding-left: 14px;
+      border-left: 1px solid #3f3f46;
+    }
+
+    .dual-ties .dual-tie-label {
+      font-weight: 500;
+    }
+
+    .dual-tie-note {
+      margin-top: -4px;
     }
 
     .clip-example {
@@ -1703,6 +2490,16 @@ std::string_view webControlPageHtml()
       border-radius: 999px;
       background: #ffffff;
       transition: width 0.22s ease;
+    }
+
+    /* Clip merge progress: the READY pill's faint grey, a little stronger on the dark track. */
+    .progress-fill.merge {
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .progress-track.merge-track {
+      margin-top: 6px;
+      height: 4px;
     }
 
     .capture-list {
@@ -3361,8 +4158,9 @@ std::string_view webControlPageHtml()
     }
 
     .controls-row.new .controls-row-head,
-    .controls-row[data-output] .controls-row-head {
-      padding-top: 0;
+    .controls-row[data-output] .controls-row-head,
+    .controls-row-head:has(> .controls-pin-select:first-child) {
+      padding-top: 0;   /* a head that starts with a pin dropdown lines up with the first line's dropdown */
     }
 
     .controls-row-title {
@@ -4125,6 +4923,10 @@ std::string_view webControlPageHtml()
         gap: 12px;
       }
 
+      .footer-left {
+        flex: 1;
+      }
+
       .time-card {
         flex: 1;
         min-width: 0;
@@ -4416,6 +5218,8 @@ std::string_view webControlPageHtml()
           <span class="status-dot" id="statusDot">●</span>
             <span id="recordingStatus">READY</span>
           </div>
+          <span class="drop-badge" id="droppedFrameBadge" role="status" hidden></span>
+          <span class="cam1-badge" id="cam1Badge" role="status" hidden></span>
         </div>
         <button class="icon-button" id="mediaBrowserButton" aria-label="Open clip browser">
           <img class="icon-image" src="/icons/folder.png" alt="">
@@ -4432,6 +5236,25 @@ std::string_view webControlPageHtml()
           <div class="preview-stage" id="previewStage">
             <img class="preview-stream" id="previewStream" alt="Live preview">
             <canvas class="preview-processed-canvas" id="previewProcessedCanvas"></canvas>
+            <!-- Dual sensor on: CAM1's picture from its own Core (:8001), beside CAM0's (design §5.3). -->
+            <img class="preview-stream preview-stream-cam1" id="previewStream1" alt="CAM1 live preview">
+            <span class="preview-cam-tag cam0" id="previewCamTag0">CAM0</span>
+            <span class="preview-cam-tag cam1" id="previewCamTag1">CAM1</span>
+            <span class="preview-no-signal" id="previewNoSignal1">NO SIGNAL · CAM1</span>
+            <!-- Dual sensor on: each pane's own settings pills, recording frame and REC tag. -->
+            <div class="pane-pills p0" id="panePills0"></div>
+            <div class="pane-pills p1" id="panePills1"></div>
+            <div class="pane-frame p0" id="paneFrame0"></div>
+            <div class="pane-frame p1" id="paneFrame1"></div>
+            <span class="pane-rec p0" id="paneRec0">REC</span>
+            <span class="pane-rec p1" id="paneRec1">REC</span>
+            <span class="pane-tc p0" id="paneTc0">00:00:00:00</span>
+            <span class="pane-tc p1" id="paneTc1">00:00:00:00</span>
+            <button class="pane-rec-button p0" id="paneRecButton0" type="button" data-cam="cam0" aria-label="Record CAM0"><span class="pane-rec-icon"></span></button>
+            <button class="pane-rec-button p1" id="paneRecButton1" type="button" data-cam="cam1" aria-label="Record CAM1"><span class="pane-rec-icon"></span></button>
+            <span class="pane-link" id="paneLink">LINKED</span>
+            <span class="wipe-line" id="wipeLine"></span>
+            <span class="wipe-under" id="wipeUnder">UNDER: CAM1</span>
             <div id="stillExposureOverlay" style="display:none;position:absolute;inset:0;background:#000;z-index:20;align-items:center;justify-content:center;pointer-events:none">
               <div style="text-align:center"><div id="stillExposureCountdown" style="font-size:24px;color:white"></div><div style="font-size:11px;color:#999;letter-spacing:1.5px;margin-top:6px">EXPOSING</div></div>
             </div>
@@ -4491,18 +5314,42 @@ std::string_view webControlPageHtml()
             </div>
 
             <div class="preview-footer">
-              <div class="time-card" id="timecodeBlock">
-                <div class="timecode-value" id="timecodeValue">00:00:00:00</div>
+              <div class="footer-left">
+                <div class="vu-meter hidden" id="vuMeter" role="meter" aria-label="Audio input level"
+                     aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="vu-bars" id="vuBars"></div></div>
+                <div class="time-card" id="timecodeBlock">
+                  <div class="timecode-value" id="timecodeValue">00:00:00:00</div>
+                </div>
               </div>
 
+              <div class="record-label" id="recordLabel" hidden><span id="recordLabelMain"></span><span class="record-label-second" id="recordLabelSecond"></span></div>
               <button class="record-button" id="recordButton" aria-label="Toggle record">
                 <div class="record-icon-dot" id="recordIcon"></div>
               </button>
             </div>
           </div>
+          <!-- Dual sensor on: this browser's own view of the two pictures (design §5.3). Kept in localStorage, never sent to Core. -->
+          <div class="dual-view-row" id="dualViewRow" hidden>
+            <div class="dual-view-pills" id="dualViewOptions" style="display:contents"></div>
+            <button class="pill-button dual-view-swap" id="dualViewSwap" type="button" title="Swap the two pictures in this page only">Swap</button>
+          </div>
+          <!-- Cam 0 / Cam 1 view: wipe or stack the other camera underneath (design v2.5 A5); sent as set_preview_source, so the HDMI follows. -->
+          <div class="dual-view-row wipe-row" id="wipeRow" hidden>
+            <div class="wipe-ctl"><span class="dual-settings-for-label">Wipe</span>
+              <input class="slider" id="wipeRange" type="range" min="0" max="100" step="1" value="0" aria-label="Wipe"><span class="wipe-value" id="wipeValue">0%</span></div>
+            <div class="wipe-ctl" id="wipeDirGroup"><span class="dual-settings-for-label">Direction</span><div id="wipeDirOptions" style="display:contents"></div></div>
+            <div class="wipe-ctl"><span class="dual-settings-for-label">Stack</span><div id="wipeStackOptions" style="display:contents"></div></div>
+            <div class="wipe-ctl" id="wipeOpacityGroup" hidden><span class="dual-settings-for-label">Opacity</span>
+              <input class="slider" id="opacityRange" type="range" min="0" max="100" step="1" value="50" aria-label="Opacity"><span class="wipe-value" id="opacityValue">50%</span></div>
+          </div>
+          <!-- NEXT TAKE: what this page's REC press records; reset after the stop. Hidden in Sound Recorder mode. -->
+          <div class="dual-view-row" id="nextTakeRow" hidden>
+            <span class="dual-settings-for-label">Next take</span>
+            <div id="nextTakeOptions" style="display:contents"></div>
+          </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="cameraSettingsCard">
           <div class="card-body">
             <div class="section-head">
               <div class="section-icon">
@@ -4512,8 +5359,8 @@ std::string_view webControlPageHtml()
               <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
             </div>
 
-            <div class="stack">
-              <section class="select-block">
+            <div class="stack" id="cameraStack">
+              <section class="select-block" data-dual-tie="fps">
                 <div class="select-topline">
                   <span>Frame rate</span>
                   <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder"></span>
@@ -4521,35 +5368,36 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="iso">
                 <div class="select-topline">
                   <span>ISO</span>
                 </div>
                 <div class="pill-grid" id="isoOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="shutter">
                 <div class="select-topline">
                   <span id="shutterSectionLabel">Shutter angle</span>
                 </div>
                 <div class="pill-grid" id="shutterOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="resolution">
                 <div class="select-topline">
                   <span id="quickResolutionLabel">Resolution</span>
+                  <span class="select-note dual-fps-max" id="dualFpsMax" hidden></span>
                 </div>
                 <div class="pill-grid three-col" id="resolutionOptions"></div>
               </section>
 
-              <section class="select-block hidden" id="cropRatioBlock">
+              <section class="select-block hidden" id="cropRatioBlock" data-dual-tie="resolution">
                 <div class="select-topline">
                   <span id="quickCropLabel">Crop mode</span>
                 </div>
                 <div class="pill-grid three-col" id="cropRatioOptions"></div>
               </section>
 
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="wb">
                 <div class="select-topline">
                   <span>White balance</span>
                   <span class="select-value select-value-pill" id="whiteBalanceValue">5600K</span>
@@ -4566,7 +5414,7 @@ std::string_view webControlPageHtml()
           </div>
         </div>
 
-        <div class="card" data-search="remote controls simulate press click hold turn knob button switch from afar">
+        <div class="card" id="remoteControlsCard" data-search="remote controls simulate press click hold turn knob button switch from afar">
           <div class="card-body">
             <div class="section-head">
               <div class="section-icon">
@@ -4664,6 +5512,7 @@ std::string_view webControlPageHtml()
                   <div class="telemetry-label">Space left</div>
                   <div class="telemetry-sublabel" id="storageSub">Media root</div>
                   <div class="progress-track"><div class="progress-fill" id="storageProgress"></div></div>
+                  <div class="progress-track merge-track" id="storageMergeTrack" hidden><div class="progress-fill merge" id="storageMergeBar"></div></div>
                 </div>
               </div>
 
@@ -4679,6 +5528,37 @@ std::string_view webControlPageHtml()
                   <div class="telemetry-label" id="timeLeftLabel">Time left</div>
                   <div class="telemetry-sublabel" id="timeLeftSub">Current format estimate</div>
                   <div class="progress-track"><div class="progress-fill" id="timeLeftProgress"></div></div>
+                </div>
+              </div>
+
+              <!-- The media card's write rate and temperature: only when the media is NVMe (a CFexpress card, an M.2 SSD). -->
+              <div class="telemetry-card" id="cardWriteCard" hidden>
+                <div class="telemetry-inner">
+                  <div class="telemetry-top">
+                    <div class="section-icon">
+                      <img class="icon-image" src="/icons/media.png" alt="">
+                    </div>
+                    <span class="telemetry-progress-text" id="cardWriteProgressText">--%</span>
+                  </div>
+                  <div class="telemetry-value" id="cardWriteValue">--</div>
+                  <div class="telemetry-label" id="cardWriteLabel">CFE write</div>
+                  <div class="telemetry-sublabel" id="cardWriteSub">--</div>
+                  <div class="progress-track"><div class="progress-fill" id="cardWriteProgress"></div></div>
+                </div>
+              </div>
+
+              <div class="telemetry-card" id="cardTempCard" hidden>
+                <div class="telemetry-inner">
+                  <div class="telemetry-top">
+                    <div class="section-icon">
+                      <img class="icon-image" src="/icons/thermal.png" alt="">
+                    </div>
+                    <span class="telemetry-progress-text" id="cardTempProgressText">--%</span>
+                  </div>
+                  <div class="telemetry-value" id="cardTempValue">--</div>
+                  <div class="telemetry-label" id="cardTempLabel">CFE temp</div>
+                  <div class="telemetry-sublabel" id="cardTempSub">--</div>
+                  <div class="progress-track"><div class="progress-fill" id="cardTempProgress"></div></div>
                 </div>
               </div>
             </div>
@@ -4759,6 +5639,10 @@ std::string_view webControlPageHtml()
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/media.png" alt=""></span>
             <span>Media</span>
           </button>
+          <button class="settings-nav-item" data-panel="controls" type="button">
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
+            <span>Controls</span>
+          </button>
           <button class="settings-nav-item" data-panel="system" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/system.png" alt=""></span>
             <span>System</span>
@@ -4766,10 +5650,6 @@ std::string_view webControlPageHtml()
           <button class="settings-nav-item" data-panel="presets" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/levels.png" alt=""></span>
             <span>Presets</span>
-          </button>
-          <button class="settings-nav-item" data-panel="controls" type="button">
-            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
-            <span>Controls</span>
           </button>
           <button class="settings-nav-item" data-panel="config" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/config.png" alt=""></span>
@@ -4795,7 +5675,8 @@ std::string_view webControlPageHtml()
 
         <div class="settings-panels">
           <section class="settings-panel" data-panel="record">
-            <div class="settings-card">
+            <div class="settings-card dual-settings-for-card" id="dualSettingsForRecord" hidden></div>
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Still Mode</h3>
@@ -4842,7 +5723,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Sound Recorder</h3>
@@ -4853,7 +5734,7 @@ std::string_view webControlPageHtml()
               <div class="pill-grid" id="settingsSoundRecorderOptions"></div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="resolution">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Recording format</h3>
@@ -4946,6 +5827,7 @@ std::string_view webControlPageHtml()
               <div class="field-stack">
                 <span class="input-label">Name</span>
                 <div class="clip-row" id="clipNameRow"></div>
+                <span class="subtle-note hidden" id="clipNameCamNote">Two sensors: the camera name keeps their takes apart.</span>
               </div>
               <div class="field-stack">
                 <span class="input-label">Pills</span>
@@ -4959,7 +5841,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="iso">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Exposure Compensation</h3>
@@ -4977,36 +5859,7 @@ std::string_view webControlPageHtml()
               <p class="settings-card-copy" id="settingsExposureCompensationNote">Enable Auto ISO or Auto Shutter to adjust exposure.</p>
             </div>
 
-            <div class="settings-card" id="settingsSpeedRampCard">
-              <div class="settings-card-head wrap-head">
-                <div>
-                  <h3 class="settings-card-title">Speed Ramp</h3>
-                  <p class="settings-card-copy">Change the frame rate during recording. The clip keeps the rate it started at, so the faster parts play back as slow motion.</p>
-                  <p class="settings-card-copy hidden" id="settingsSpeedRampNote"></p>
-                </div>
-                <div class="switch-field">
-                  <span>Allow speed ramping</span>
-                  <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
-                </div>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Shutter Sync</span>
-                <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
-                <p class="settings-card-copy">Angle keeps the motion blur. Exposure keeps the brightness.</p>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">Audio (experimental)</span>
-                <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
-                <p class="settings-card-copy">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</p>
-              </div>
-              <div class="field-stack">
-                <span class="input-label">After the take</span>
-                <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
-                <p class="settings-card-copy">Stay: the FPS you ramped to stays when you stop. Return: the FPS goes back to what it was when you pressed record. If that FPS is not available in the current mode, it returns to the start FPS.</p>
-              </div>
-            </div>
-
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Gyro Data</h3>
@@ -5017,7 +5870,7 @@ std::string_view webControlPageHtml()
               <div class="pill-grid" id="settingsGyroDataOptions"></div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="cam0only">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Gyro Calibration</h3>
@@ -5077,24 +5930,24 @@ std::string_view webControlPageHtml()
               <span class="subtle-note" id="settingsImuCalibrationStatus"></span>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="shared">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
-                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
+                  <p class="settings-card-copy">Mode sets the timecode of the screens and the clips. Files can set the clips' and the audio's timecode apart. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
                 </div>
               </div>
               <div class="field-stack">
-                <span class="input-label">UI timecode</span>
+                <span class="input-label">Mode</span>
                 <div class="pill-grid ladder-pair" id="settingsTimecodeOptions"></div>
               </div>
               <div class="field-stack">
-                <span class="input-label">File timecode (DNG, MLV, ProRes, H.264, WAV)</span>
+                <span class="input-label">Files (DNG, MLV, ProRes, H.264, WAV)</span>
                 <div class="pill-grid ladder-pair" id="settingsFileTimecodeOptions"></div>
               </div>
             </div>
 
-            <div class="settings-card">
+            <div class="settings-card" data-dual-tie="resolution">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Autofocus</h3>
@@ -5149,6 +6002,7 @@ std::string_view webControlPageHtml()
           </section>
 
           <section class="settings-panel" data-panel="modes">
+            <div class="settings-card dual-settings-for-card" id="dualModesFor" hidden></div>
             <div class="settings-card" id="settingsSensorModesCard">
               <div class="settings-card-head">
                 <div>
@@ -5270,6 +6124,10 @@ std::string_view webControlPageHtml()
                   <span class="capture-key">Preview source</span>
                   <span class="capture-value" id="settingsPreviewSourceValue">--</span>
                 </div>
+                <div class="capture-row" id="settingsHdmi0Row" hidden>
+                  <span class="capture-key">HDMI 0</span>
+                  <span class="capture-value" id="settingsHdmi0Value">--</span>
+                </div>
               </div>
               <div class="field-stack">
                 <span class="input-label">Recording frame</span>
@@ -5310,6 +6168,16 @@ std::string_view webControlPageHtml()
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorModeSelect">Mode</label>
                   <select class="settings-select" id="settingsExternalMonitorModeSelect"></select>
+                </div>
+                <!-- Hidden until a cam1 is configured (design 5.1); T63 has no way to know, so it stays hidden. -->
+                <div class="field-stack">
+                  <span class="input-label">Outputs</span>
+                  <span class="subtle-note" id="settingsHdmiOutputsNote">The preview goes out on both HDMI ports. With Dual sensor on, each port's view is set in System &gt; Dual Sensor.</span>
+                </div>
+                <div class="field-stack" id="hdmiCam1Row" hidden>
+                  <span class="input-label">CAM1</span>
+                  <span class="subtle-note" id="hdmiCam1Text"></span>
+                  <button class="secondary-button" id="hdmiSwapButton" type="button" title="Swap the cameras on the HDMI ports (HDMI 1 too, unless Off)">Swap CAM0 and CAM1</button>
                 </div>
                 <div class="field-stack">
                   <label class="input-label" for="settingsExternalMonitorInfoOverlaySelect">Info Overlay</label>
@@ -5718,6 +6586,28 @@ std::string_view webControlPageHtml()
                 <button class="secondary-button" id="ejectMediaButton" type="button">Eject Media</button>
                 <span class="subtle-note">Unmounts current media and prepares removable media for safe removal.</span>
               </div>
+              <div class="settings-action-row" id="clipSplitRow" hidden>
+                <span class="input-label">Split long takes (frames per folder)</span>
+                <div class="pill-grid" id="clipSplitOptions"></div>
+                <span class="subtle-note" id="clipSplitNote"></span>
+              </div>
+              <div class="settings-action-row" id="clipMergeRow" hidden>
+                <span class="input-label">Merge split clips</span>
+                <div class="pill-grid" id="clipMergeOptions"></div>
+                <span class="subtle-note" id="clipMergeNote"></span>
+              </div>
+              <section class="select-block" id="clipMergeProgress" hidden>
+                <div class="select-topline">
+                  <span>Current clip</span>
+                  <span class="select-value" id="clipMergeClipValue">--</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill merge" id="clipMergeClipBar"></div></div>
+                <div class="select-topline" style="margin-top:12px;">
+                  <span>All clips</span>
+                  <span class="select-value" id="clipMergeAllValue">--</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill merge" id="clipMergeAllBar"></div></div>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsFormatMediaCard" data-search="format card ssd storage erase exfat">
@@ -5789,7 +6679,7 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Preview temporal denoise</span>
                 </div>
-                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Recordings are raw and never affected.</span>
+                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Raw recordings and photos are never affected; H.264 and ProRes always keep it.</span>
                 <div class="pill-grid" id="settingsPreviewTdnOptions"></div>
               </section>
               <section class="select-block">
@@ -5799,7 +6689,7 @@ std::string_view webControlPageHtml()
                 <span class="subtle-note" id="settingsMediaTrimNote">Tells the drive which space is free after deletes and when it is mounted, so it never has to erase while you record. Deleted takes cannot be recovered afterwards.</span>
                 <div class="pill-grid" id="settingsMediaTrimOptions"></div>
               </section>
-              <section class="select-block">
+              <section class="select-block" data-dual-tie="shared">
                 <div class="select-topline">
                   <span>Frame-rate phase lock</span>
                 </div>
@@ -5856,7 +6746,7 @@ std::string_view webControlPageHtml()
               </div>
             </div>
 
-            <div class="settings-card" id="settingsBootConfigCard" data-search="boot config config.txt firmware sensor camera overlay dtoverlay imx477 imx577 imx585 imx294 mono link frequency csi lane rp1 overclock clock i2c i2s spi audio dpi display waveshare hyperpixel hdmi reboot">
+            <div class="settings-card" id="settingsBootConfigCard" data-search="boot config config.txt firmware sensor camera overlay dtoverlay imx477 imx577 imx585 imx294 imx283 oneincheye mono link frequency csi lane rp1 overclock clock i2c i2s spi audio dpi display waveshare hyperpixel hdmi reboot">
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Boot Config</h3>
@@ -5889,6 +6779,7 @@ std::string_view webControlPageHtml()
                   <select class="settings-select" id="bootConfigCam1LinkSelect"></select>
                   <span class="subtle-note" id="bootConfigCam1LinkNote">CSI-2 lane rate: sets the frame-rate ceiling.</span>
                 </div>
+                <span class="subtle-note hidden" id="bootConfigCam1DualNote">CAM1 runs its own Core. Its picture is in Monitoring; its ties and the shooting mode are in the Dual Sensor card, after this one; its own settings are on the camera and recording panels (Settings for: CAM1).</span>
                 <div class="field-stack" id="bootConfigRp1Field">
                   <span class="input-label">RP1 overclock</span>
                   <div class="pill-grid two-col" id="bootConfigRp1Options"></div>
@@ -5947,6 +6838,56 @@ std::string_view webControlPageHtml()
                   <button class="secondary-button" id="closeBootConfigEditorButton" type="button">Close</button>
                 </div>
               </div>
+            </div>
+
+            <!-- Dual Sensor (design §5.3, T67's card brought forward): what CAM1 shares with CAM0, which cameras record,
+                 and the phase lock. Greyed while config.txt names no Camera 1 sensor; the stored values stay. -->
+            <div class="settings-card dual-sensor-card" id="settingsDualSensorCard" data-search="dual sensor enable on off unison tie two cameras cam1 camera 1 second sensor share shared follow iso shutter fps wb white balance resolution record both phase lock sync">
+              <div class="settings-card-head wrap-head">
+                <div>
+                  <h3 class="settings-card-title">Dual Sensor</h3>
+                  <p class="settings-card-copy" id="dualSensorNote"></p>
+                </div>
+                <div class="switch-field">
+                  <span>Dual sensor</span>
+                  <div class="pill-grid ladder-pair" id="dualSensorEnabledOptions"></div>
+                </div>
+              </div>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Controls</span>
+                </div>
+                <div class="dual-tie-row dual-unison">
+                  <span class="dual-tie-label">Unison</span>
+                  <div class="pill-grid ladder-pair" id="dualSensorUnisonOptions"></div>
+                </div>
+                <span class="subtle-note">On: CAM1 follows CAM0 in every control. Off: tie each control below; an untied one is set on CAM1.</span>
+                <div class="dual-ties" id="dualSensorTies"></div>
+                <span class="subtle-note system-value dual-found-note" id="dualSensorFoundNote" hidden></span>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Output</span>
+                </div>
+                <div class="settings-field-grid">
+                  <div class="field-stack">
+                    <label class="input-label" for="settingsPreviewSourceSelect">HDMI 0 view</label>
+                    <select class="settings-select" id="settingsPreviewSourceSelect"></select>
+                  </div>
+                  <div class="field-stack">
+                    <label class="input-label" for="settingsHdmi1SourceSelect">HDMI 1 view</label>
+                    <select class="settings-select" id="settingsHdmi1SourceSelect"></select>
+                  </div>
+                </div>
+                <span class="subtle-note">Each port: one camera, both side by side, or one inside the other (PiP). HDMI 1 is the board's FFC connector. Saved now; the monitors follow it once the dual HDMI view is built (until then both show CAM0).</span>
+              </section>
+              <section class="select-block">
+                <div class="select-topline">
+                  <span>Record</span>
+                </div>
+                <div class="pill-grid" id="dualSensorRecordOptions"></div>
+                <span class="subtle-note">Follow preview records the cameras the HDMI views show.</span>
+              </section>
             </div>
 
             <div class="settings-card" id="settingsPowerActionsCard">
@@ -6166,6 +7107,28 @@ std::string_view webControlPageHtml()
                 </div>
               </div>
               <div class="field-stack" id="settingsValueLists"></div>
+              <!-- Speed Ramp, under the frame-rate list (renderValueListsEditor puts it after the Frame Rate row). -->
+              <div class="field-stack value-list-row speed-ramp-block" id="settingsSpeedRampCard" data-dual-tie="shared">
+                <span class="input-label">Speed Ramp</span>
+                <span class="subtle-note hidden" id="settingsSpeedRampNote"></span>
+                <div class="pill-grid ladder-pair" id="settingsSpeedRampOptions"></div>
+                <span class="subtle-note">Change the frame rate during a take. The clip keeps the rate it started at, so the faster parts play back as slow motion.</span>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Shutter sync</span>
+                  <div class="pill-grid" id="settingsSpeedRampShutterOptions"></div>
+                  <span class="subtle-note">Angle keeps the motion blur. Exposure keeps the brightness.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">Audio (experimental)</span>
+                  <div class="pill-grid" id="settingsSpeedRampAudioOptions"></div>
+                  <span class="subtle-note">The WAV always runs in real time. Stretched also writes a _stretched.wav that follows the clip's slow motion, pitch kept.</span>
+                </div>
+                <div class="speed-ramp-option">
+                  <span class="input-label">After the take</span>
+                  <div class="pill-grid" id="settingsSpeedRampAfterOptions"></div>
+                  <span class="subtle-note">Stay: the ramped FPS stays when you stop. Return: back to the FPS you pressed record at (or the start FPS when that one is not available in the mode).</span>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -6532,6 +7495,7 @@ std::string_view webControlPageHtml()
     const stillTimelapseIntervalOptions = ["1s", "2s", "3s", "5s", "10s", "15s", "30s", "60s", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "10m"];
     const stillTimelapseOptions = ["Off", ...stillTimelapseIntervalOptions];
     const externalMonitorModeOptions = ["Clean Feed", "Assist Feed"];
+    const previewSourceOptions = ["Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"];
     const externalMonitorInfoOverlayOptions = ["On", "Off"];
     const externalMonitorOrientationOptions = ["Landscape", "Upside Down"];
     const focusPeakingThresholdOptions = ["Low", "Medium", "High"];
@@ -6609,6 +7573,7 @@ std::string_view webControlPageHtml()
       batteryInfo: { title: "Battery Info", section: "System" },
       autoPowerOff: { title: "Auto Power Off", section: "System" },
       thermal: { title: "Thermal", section: "System" },
+      dualSensor: { title: "Dual Sensor", section: "System" },
       powerActions: { title: "Power Actions", section: "System" },
       media: { title: "Media", section: "Media" },
       mediaSpeed: { title: "Media Speed", section: "Media" },
@@ -6671,6 +7636,8 @@ std::string_view webControlPageHtml()
       snapshot: null,
       valueListsSignature: "",
       fpsSwitchingTo: 0,       // the resolution a set_fps in flight switches to
+      modesCam: "cam0",        // the camera the Modes cards edit; the other camera's ladder state waits in ladderStash
+      ladderStash: null,
       ladderServer: null,      // Core's last mode_ladder reply
       ladderError: "",
       ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
@@ -6682,7 +7649,11 @@ std::string_view webControlPageHtml()
       ladderFetching: false,
       ladderFetchedMs: -10000,
       ladderSeenActive: null,
-      ladderAspects: [],       // the aspect filter of Activated sensor modes; empty = All
+      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (mode_ladder.conf) when Core keeps it; empty = All
+      ladderAspectsPending: false,   // a filter click not saved yet: Core's replies leave ladderAspects alone
+      ladderAspectsTimer: 0,
+      ladderAspectsSaving: false,
+      ladderAspectsSaveAgain: false,
       ladderOpen: { chdr: true, "4k": true, crop: false, "2k": false },
       fetchInFlight: false,
       fetchQueued: false,
@@ -7628,8 +8599,8 @@ std::string_view webControlPageHtml()
     // ---- Mode Ladder (T34) -----------------------------------------------------------------------
     // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
     // its max. Core owns the ladder (get_mode_ladder, set_mode_ladder). The editor keeps a draft of
-    // the resolutions, refuses a change that would make it illegal, asks Core about the draft
-    // (dry_run) and saves it with Save ladder. A resolution: Core's mode identity (width, height,
+    // the resolutions, refuses a change that would make it illegal and saves it on the camera
+    // 200 ms after the last edit. A resolution: Core's mode identity (width, height,
     // bits, clear_hdr), its compression (comp) and its max FPS (thr, "" = its ceiling).
     const ladderCompressions = [
       { value: "none", label: "Uncompressed", factor: 1 },
@@ -7640,7 +8611,138 @@ std::string_view webControlPageHtml()
     const ladderMaxResolutions = 8;
     const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
+    // The readout area a crop is measured against: the IMX283's is its 5472-wide active area.
+    function ladderCropAreaFor() {
+      return sensorNameLower(modesSnapshot()).indexOf("imx283") !== -1 ? { width: 5472, height: 3648 } : ladderCropArea;
+    }
     const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K SDR"], ["crop", "4K SDR crops"], ["2k", "2K SDR binned"]];
+    // The IMX283's groups (design §5.3): by binning, the 1x1 readout split into the full frame and its windows.
+    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K SDR 2×2 binned"],
+      ["bin3", "1.8K SDR 3×3 binned"]];
+
+    // The Modes cards edit one camera. state.ladder* holds that camera's ladder; the other's waits in state.ladderStash.
+    // modesSnapshot() is the snapshot whose sensor names the modes: cam0's (never the CAM1 projection), or cam1's.
+    function modesIsCam1() {
+      return state.modesCam === "cam1";
+    }
+
+    function modesSnapshot() {
+      const base = dualBaseSnapshot(state.snapshot);
+      return modesIsCam1() && dualCam1(base) ? dualProjectSnapshot(base) : base;
+    }
+
+    function ladderServerFor(cam) {
+      return cam === state.modesCam ? state.ladderServer : (state.ladderStash ? state.ladderStash.server : null);
+    }
+
+    // IMX283 binning: the pool entry's, else the table the size belongs to.
+    function imx283Binning(mode, info) {
+      if (info && Number(info.binning) >= 2)
+        return Number(info.binning);
+      const size = mode.width + "x" + mode.height;
+      const base = (imx283Bases[mode.bits === 10 ? 10 : 12] || []).find((item) => imx283Sizes(item).indexOf(size) !== -1);
+      return base && base.value === "2736x1824" ? 2 : (base && base.value === "1824x1216" ? 3 : 1);
+    }
+
+    function imx283LadderGroup(mode) {
+      const binning = imx283Binning(mode, ladderModeInfo(mode));
+      if (binning >= 3)
+        return "bin3";
+      if (binning === 2)
+        return "bin2";
+      return mode.width === 5472 && mode.height === 3648 ? "full" : "win";
+    }
+
+    function imx283LadderModeName(mode) {
+      const info = ladderModeInfo(mode);
+      const binning = imx283Binning(mode, info);
+      const aspect = ladderAspectText(mode);
+      return ladderSizeText(mode) + " SDR" + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
+        + (ladderCropIn(info) ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + mode.bits + "-bit";
+    }
+
+    function ladderBlankBank() {
+      return { server: null, draft: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
+    }
+
+    function switchModesCamera(cam) {
+      const target = cam === "cam1" ? "cam1" : "cam0";
+      if (target === state.modesCam)
+        return;
+      if (state.ladderSaving || state.ladderAspectsSaving || ladderDirty()) {
+        showToast("Wait for the modes to be saved.", true);
+        return;
+      }
+      clearTimeout(state.ladderCheckTimer);
+      clearTimeout(state.ladderAspectsTimer);
+      const out = { server: state.ladderServer, draft: state.ladderDraft, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
+        error: state.ladderError, fetchedMs: state.ladderFetchedMs, open: state.ladderOpen };
+      const incoming = state.ladderStash || ladderBlankBank();
+      state.ladderStash = out;
+      state.modesCam = target;
+      state.ladderServer = incoming.server;
+      state.ladderAspects = incoming.aspects;
+      state.ladderAspectsPending = incoming.aspectsPending;
+      state.ladderError = incoming.error;
+      state.ladderFetchedMs = incoming.fetchedMs;
+      state.ladderOpen = incoming.open;
+      state.ladderDraft = incoming.draft || (incoming.server ? ladderDraftFromServer(incoming.server) : []);
+      renderLadderEditor();
+      renderModesSwitch();
+      if (!state.ladderServer && !state.ladderFetching)
+        void fetchModeLadder(true);
+    }
+
+    // CAM0 | CAM1 on the Activated sensor modes card: shown when the sensors are of different kinds, or CAM1's resolution is untied.
+    function modesSwitchVisible(snapshot) {
+      const cam1 = dualCam1(snapshot);
+      if (!cam1 || !dualActive(snapshot))
+        return false;
+      const kind0 = String(snapshot.capture && snapshot.capture.sensor || snapshot.sensor || "").toLowerCase();
+      const kind1 = String(cam1.sensor || "").toLowerCase();
+      return (kind0 !== "" && kind1 !== "" && kind0 !== kind1) || !dualTiedControls(snapshot).includes("resolution");
+    }
+
+    function renderModesSwitch() {
+      const host = document.getElementById("dualModesFor");
+      if (!host)
+        return;
+      const base = dualBaseSnapshot(state.snapshot);
+      const visible = !!base && modesSwitchVisible(base);
+      if (!visible && modesIsCam1())
+        switchModesCamera("cam0");
+      host.hidden = !visible;
+      if (!visible)
+        return;
+      const cam1 = dualCam1(base);
+      const key = state.modesCam + "|" + String(cam1.sensor || "");
+      if (host.dataset.built === key)
+        return;
+      host.dataset.built = key;
+      host.innerHTML = "";
+      host.appendChild(createDomElement("span", "dual-settings-for-label", "Modes for"));
+      const grid = createDomElement("div", "pill-grid two-col");
+      host.appendChild(grid);
+      buildOptionButtonsInto(grid, [{ value: "cam0", label: "CAM0", enabled: true }, { value: "cam1", label: "CAM1", enabled: true }],
+        state.modesCam, switchModesCamera, 2);
+    }
+
+    // The Mode Ladder card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
+    function renderLadderCardGrey() {
+      const card = document.getElementById("settingsModeLadderCard");
+      if (!card)
+        return;
+      const grey = modesIsCam1();
+      card.classList.toggle("dual-tied", grey);
+      card.inert = grey;
+      let note = card.querySelector(":scope > .dual-shared-note");
+      if (grey && !note) {
+        note = createDomElement("span", "dual-shared-note");
+        card.insertBefore(note, card.firstChild);
+      }
+      if (note)
+        note.textContent = "CAM1's ladder is off: the Mode Ladder runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
+    }
     const ladderIcons = {
       handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
       up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
@@ -7662,8 +8764,15 @@ std::string_view webControlPageHtml()
     }
 
     function ladderAspectText(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585RatioLabel(mode.width, mode.height);
+      // An IMX283 size is named as the Record pane names it ("3:2", "1.37:1"); a size outside its tables keeps the decimal.
+      if (sensorNameLower(shown).indexOf("imx283") !== -1) {
+        const imx283Label = imx283CropRatioLabel(mode.width + "x" + mode.height);
+        if (imx283Label)
+          return imx283Label;
+      }
       const ratio = mode.height > 0 ? mode.width / mode.height : 16 / 9;
       return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
     }
@@ -7683,19 +8792,22 @@ std::string_view webControlPageHtml()
 
     // The sensor window narrower than the readout area: a real crop-in.
     function ladderCropIn(info) {
-      return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropArea.width;
+      return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropAreaFor().width;
     }
 
     function ladderClassName(mode) {  // "Clear HDR", "SDR", "SDR 2×2 binned"
       const info = ladderModeInfo(mode);
-      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR 2×2 binned" : "SDR");
+      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR " + Number(info.binning) + "×" + Number(info.binning) + " binned" : "SDR");
     }
 
     // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
     // "4K SDR 12-bit", "4K SDR 2.39:1 12-bit", "2K SDR binned 12-bit", "2K SDR binned 2.39:1 12-bit".
     function ladderModeName(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585LadderModeName(mode);
+      if (sensorNameLower(shown).indexOf("imx283") !== -1)
+        return imx283LadderModeName(mode);
       const info = ladderModeInfo(mode);
       const bits = mode.bits + "-bit";
       const aspect = ladderAspectText(mode);
@@ -7710,8 +8822,11 @@ std::string_view webControlPageHtml()
     }
 
     function ladderModeGroup(mode) {
-      if (imx585Selected(state.snapshot))
+      const shown = modesSnapshot();
+      if (imx585Selected(shown))
         return imx585LadderGroup(mode);
+      if (sensorNameLower(shown).indexOf("imx283") !== -1)
+        return imx283LadderGroup(mode);
       const info = ladderModeInfo(mode);
       if (mode.clear_hdr)
         return "chdr";
@@ -7810,8 +8925,18 @@ std::string_view webControlPageHtml()
         + (rung.comp ? ":" + rung.comp : "")).join(",");
     }
 
+    // CAM1 keeps mode keys only (no max, no compression: its ladder is off, the activated modes are closest()'s candidates).
+    function ladderDraftTextFor(list) {
+      return modesIsCam1() ? list.map(ladderKey).join(",") : ladderDraftText(list);
+    }
+
     function ladderDirty() {
-      return !!state.ladderServer && ladderDraftText(state.ladderDraft) !== ladderDraftText(ladderDraftFromServer(state.ladderServer));
+      return !!state.ladderServer && ladderDraftTextFor(state.ladderDraft) !== ladderDraftTextFor(ladderDraftFromServer(state.ladderServer));
+    }
+
+    // The camera field of get_mode_ladder / set_mode_ladder: cam1 only on the CAM1 side.
+    function ladderCameraFields() {
+      return modesIsCam1() ? { camera: "cam1" } : {};
     }
 
     // Each resolution serves (from, top]: from = where the ones above stop. An empty max at a
@@ -7902,7 +9027,7 @@ std::string_view webControlPageHtml()
     // reads 3840×2200 but is the same 3840×2160 picture: the window is cut to the area.
     function ladderCrop(mode) {
       const info = ladderModeInfo(mode) || {};
-      const area = ladderCropArea;
+      const area = ladderCropAreaFor();
       const binning = Math.max(1, Number(info.binning) || 1);
       const known = Number(info.window_w) > 0 && Number(info.window_h) > 0;
       const width = Math.min(area.width, known ? Number(info.window_w) : mode.width * binning);
@@ -8001,7 +9126,8 @@ std::string_view webControlPageHtml()
         window.requestAnimationFrame(() => card.scrollIntoView({ behavior: "smooth", block: "start" }));
     }
 
-    // get_mode_ladder and dry runs change nothing, so they skip sendCommand's snapshot patching.
+    // get_mode_ladder and the aspect filter change no camera setting, so they skip sendCommand's snapshot
+    // patching.
     async function ladderRequest(payload) {
       const response = await fetch("/api/command", {
         method: "POST",
@@ -8019,27 +9145,45 @@ std::string_view webControlPageHtml()
         return;
       state.ladderFetching = true;
       state.ladderFetchedMs = performance.now();
+      const cam = state.modesCam;
       try {
-        const result = await ladderRequest({ cmd: "get_mode_ladder" });
-        applyModeLadder(result.mode_ladder, resetDraft);
+        const result = await ladderRequest(Object.assign({ cmd: "get_mode_ladder" }, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, resetDraft, cam);
       } catch (error) {
-        state.ladderError = "Mode Ladder unavailable: " + error.message;
-        renderLadderEditor();
+        if (cam === state.modesCam) {
+          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Mode Ladder unavailable: ") + error.message;
+          renderLadderEditor();
+        }
       } finally {
         state.ladderFetching = false;
       }
     }
 
-    // A dirty draft survives a refetch; Save and Revert replace it.
-    function applyModeLadder(modeLadder, resetDraft) {
+    // The aspect filter Core saved: the labels as ladderAspectText writes them, [] = All.
+    function ladderAspectsFromServer(server) {
+      return server && Array.isArray(server.aspects) ? server.aspects.map(String) : [];
+    }
+
+    // A draft not yet saved survives a refetch; a refetch after a failed save replaces it. The aspect
+    // filter follows Core, except while a click on it waits to be saved, and only from a reply that has it:
+    // an older Core's reply has no aspects field and leaves the screen-only filter as it is.
+    function applyModeLadder(modeLadder, resetDraft, cam) {
       if (!modeLadder || typeof modeLadder !== "object")
         return;
+      if (cam && cam !== state.modesCam) {
+        // A reply for the camera whose ladder is stashed: keep its server copy; its draft is rebuilt when it comes back.
+        if (state.ladderStash)
+          Object.assign(state.ladderStash, { server: modeLadder, draft: null, error: "" });
+        return;
+      }
       const keepDraft = !resetDraft && ladderDirty();
       state.ladderServer = modeLadder;
       state.ladderError = "";
       if (!keepDraft) {
         state.ladderDraft = ladderDraftFromServer(modeLadder);
       }
+      if (!state.ladderAspectsPending && Array.isArray(modeLadder.aspects))
+        state.ladderAspects = ladderAspectsFromServer(modeLadder);
       renderLadderEditor();
     }
 
@@ -8068,11 +9212,23 @@ std::string_view webControlPageHtml()
     }
 
     // Every local edit goes through here: refused (with the reason) when the result is illegal, else
-    // saved on the camera a moment later. The ladder on screen is always the saved one.
-    function commitLadderDraft(next, notice) {
+    // saved on the camera a moment later. The ladder on screen is always the saved one. A removal is never
+    // refused: it makes no rung unreachable, and a saved ladder that already breaks a rule (Core keeps one
+    // the page would refuse, e.g. Full HD rungs after a 4K one that reaches 60 fps) must be able to shrink.
+    function commitLadderDraft(next, notice, removal) {
+      if (modesIsCam1()) {
+        // No ladder rules on CAM1: mode keys, best first, at most 8.
+        state.ladderDraft = next.slice().sort(ladderQualityCompare);
+        if (notice)
+          showToast(notice, false);
+        clearTimeout(state.ladderCheckTimer);
+        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
+        renderLadderEditor();
+        return;
+      }
       const arranged = ladderArranged(next);
       const normalized = normalizeLadderDraft(arranged);
-      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalized);
+      const problem = removal ? "" : (ladderOrderProblem(arranged) || ladderDraftProblem(normalized));
       if (problem) {
         showToast(problem, true);
       } else {
@@ -8233,8 +9389,8 @@ std::string_view webControlPageHtml()
       return item;
     }
 
-    // Rows are rebuilt only here: after Core's ladder arrives, Save, Revert or a local edit. The
-    // 1 s poll never rebuilds them, so typing a max keeps its focus.
+    // Rows are rebuilt only here: after Core's ladder arrives or a local edit. The 1 s poll never
+    // rebuilds them, so typing a max keeps its focus.
     function renderLadderRows() {
       const list = document.getElementById("settingsModeLadderList");
       if (!list)
@@ -8258,11 +9414,15 @@ std::string_view webControlPageHtml()
       const server = state.ladderServer;
       const pool = server && Array.isArray(server.pool) ? server.pool : [];
       const draft = state.ladderDraft;
-      const sensor = (sensorNameLower(state.snapshot) || "sensor").toUpperCase();
+      const shown = modesSnapshot();
+      const sensor = (sensorNameLower(shown) || "sensor").toUpperCase();
       setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
-        : (pool.length === 0 ? "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…)."
-          : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
-            + ". Activate the ones you want on the ladder. Ceilings are Core's."));
+        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…).")
+          : (modesIsCam1()
+            ? "From CAM1's sensor probe at start: " + pool.length + " modes on CAM1's " + sensor
+              + ". CAM1 takes the activated mode closest to CAM0's. Ceilings are Core's."
+            : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
+              + ". Activate the ones you want on the ladder. Ceilings are Core's.")));
       // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
       const aspects = [];
       pool.forEach((entry) => {
@@ -8271,30 +9431,34 @@ std::string_view webControlPageHtml()
           aspects.push({ text, ratio: entry.width / entry.height });
       });
       aspects.sort((a, b) => a.ratio - b.ratio);
-      state.ladderAspects = state.ladderAspects.filter((text) => aspects.some((aspect) => aspect.text === text));
+      // Only the display is cut to this pool: the saved filter stays whole. When none of its ratios is
+      // offered (an empty or late pool, another sensor) every mode is listed, as with All, and it is kept.
+      const shownAspects = state.ladderAspects.filter((text) => aspects.some((aspect) => aspect.text === text));
       const filters = document.getElementById("settingsSensorModeAspectFilters");
       filters.classList.toggle("hidden", pool.length === 0);
-      // Several ratios at once: a click turns one on or off, All clears the choice.
+      // Several ratios at once: a click turns one on or off, All clears the choice. Saved on the camera when
+      // Core keeps it, in a take too: the filter changes only this list.
       const aspectOptions = [{ value: "all", label: "All", enabled: true }]
         .concat(aspects.map((aspect) => ({ value: aspect.text, label: aspect.text, enabled: true })));
       buildOptionButtons("settingsSensorModeAspectFilters", aspectOptions,
-        state.ladderAspects.length === 0 ? "all" : "", (value) => {
+        shownAspects.length === 0 ? "all" : "", (value) => {
           if (value === "all")
-            state.ladderAspects = [];
+            setLadderAspects([]);
           else if (state.ladderAspects.includes(value))
-            state.ladderAspects = state.ladderAspects.filter((text) => text !== value);
+            setLadderAspects(state.ladderAspects.filter((text) => text !== value));
           else
-            state.ladderAspects = state.ladderAspects.concat([value]);
-          renderSensorModes();
+            setLadderAspects(state.ladderAspects.concat([value]));
         });
+      // All is lit when no offered ratio is chosen; a ratio pill when it is one of the chosen.
       Array.from(filters.children).forEach((button, index) =>
-        button.classList.toggle("active", index > 0 && state.ladderAspects.includes(aspectOptions[index].value)));
+        button.classList.toggle("active", index === 0 ? shownAspects.length === 0
+          : shownAspects.includes(aspectOptions[index].value)));
 
       const groups = document.getElementById("settingsSensorModeGroups");
       groups.innerHTML = "";
-      (imx585Selected(state.snapshot) ? imx585LadderGroups : ladderGroups).forEach(([groupKey, title]) => {
+      (imx585Selected(shown) ? imx585LadderGroups : (sensorNameLower(shown).indexOf("imx283") !== -1 ? imx283LadderGroups : ladderGroups)).forEach(([groupKey, title]) => {
         const entries = pool.filter((entry) => ladderModeGroup(entry) === groupKey
-          && (state.ladderAspects.length === 0 || state.ladderAspects.includes(ladderAspectText(entry))))
+          && (shownAspects.length === 0 || shownAspects.includes(ladderAspectText(entry))))
           .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
@@ -8307,7 +9471,7 @@ std::string_view webControlPageHtml()
         head.innerHTML = ladderIcons.chevron;
         head.appendChild(createDomElement("span", "", title));
         head.appendChild(createDomElement("span", "ladder-group-count",
-          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + " on the ladder"));
+          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + (modesIsCam1() ? " activated" : " on the ladder")));
         head.addEventListener("click", () => {
           state.ladderOpen[groupKey] = !open;
           renderSensorModes();
@@ -8326,6 +9490,8 @@ std::string_view webControlPageHtml()
     function ladderWithMode(draft, candidate) {
       if (draft.length >= ladderMaxResolutions)
         return { problem: "At most " + ladderMaxResolutions + " resolutions." };
+      if (modesIsCam1())
+        return { list: draft.concat([candidate]) };
       const arranged = ladderArranged(draft.concat([candidate]));
       const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalizeLadderDraft(arranged));
       return problem ? { problem: problem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") } : { list: arranged };
@@ -8362,7 +9528,7 @@ std::string_view webControlPageHtml()
         remove.type = "button";
         remove.disabled = locked;
         remove.setAttribute("aria-label", "Deactivate " + name);
-        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), ""));
+        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), "", true));
         actions.appendChild(remove);
         item.appendChild(actions);
         return item;
@@ -8378,7 +9544,9 @@ std::string_view webControlPageHtml()
     }
 
     function renderLadderEditor() {
-      renderLadderRows();
+      renderLadderCardGrey();
+      if (!modesIsCam1())
+        renderLadderRows();
       renderSensorModes();
       if (state.snapshot)
         renderModeLadder(state.snapshot);
@@ -8386,6 +9554,12 @@ std::string_view webControlPageHtml()
 
     // Every snapshot (the 1 s poll too): the buttons, Running now, the draft line and the coverage.
     function renderModeLadder(snapshot) {
+      if (modesIsCam1()) {
+        // CAM1's modes: only the first fetch; the ladder card is CAM0's and greyed.
+        if (!state.ladderServer && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
+          void fetchModeLadder(false);
+        return;
+      }
       const server = state.ladderServer;
       const enabled = typeof snapshot.ladder_enabled === "boolean" ? snapshot.ladder_enabled : !!(server && server.enabled);
       const active = snapshot.ladder_active === true;
@@ -8437,11 +9611,21 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
     }
 
+    // Core applied the ladder but could not write mode_ladder.conf: its reply warns that the ladder is lost
+    // when Core restarts. That warning is shown as an error; the ladder's other warnings are left as they are.
+    function showLadderWriteWarning(modeLadder) {
+      const warnings = modeLadder && Array.isArray(modeLadder.warnings) ? modeLadder.warnings.map(String) : [];
+      const lost = warnings.find((warning) => warning.startsWith("Could not write mode_ladder.conf"));
+      if (lost)
+        showToast(lost, true);
+    }
+
     async function setModeLadderEnabled(enabled) {
       state.ladderToggling = true;
       try {
         const result = await sendCommand({ cmd: "set_mode_ladder", enabled: enabled ? "true" : "false" });
         applyModeLadder(result.mode_ladder, false);
+        showLadderWriteWarning(result.mode_ladder);
       } catch (error) {
         showToast(error.message, true);
       } finally {
@@ -8460,8 +9644,10 @@ std::string_view webControlPageHtml()
       }
       state.ladderSaving = true;
       try {
-        const result = await sendCommand({ cmd: "set_mode_ladder", resolutions: ladderDraftText(state.ladderDraft) });
-        applyModeLadder(result.mode_ladder, false);
+        const cam = state.modesCam;
+        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder", resolutions: ladderDraftTextFor(state.ladderDraft) }, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, false, cam);
+        showLadderWriteWarning(result.mode_ladder);
       } catch (error) {
         showToast(error.message, true);
         await fetchModeLadder(true);
@@ -8470,6 +9656,70 @@ std::string_view webControlPageHtml()
         if (state.ladderSaveAgain) {
           state.ladderSaveAgain = false;
           void saveModeLadder();
+        }
+      }
+    }
+
+    // The aspect filter is saved on the camera (set_mode_ladder aspects, its own line in mode_ladder.conf):
+    // a click shows at once and is sent 200 ms after the last one, as a ladder edit is. Core takes the
+    // filter alone in a take too, and leaves the resolutions as they are. Only a Core whose ladder has an
+    // aspects field keeps it: an older one (a tab left open while Core restarted on another branch) would
+    // run the click as a ladder save, so there the filter only changes the screen.
+    function setLadderAspects(next) {
+      state.ladderAspects = next;
+      if (state.ladderServer && Array.isArray(state.ladderServer.aspects)) {
+        state.ladderAspectsPending = true;
+        clearTimeout(state.ladderAspectsTimer);
+        state.ladderAspectsTimer = window.setTimeout(saveLadderAspects, 200);
+      }
+      renderSensorModes();
+    }
+
+    async function saveLadderAspects() {
+      // A reply without the field may have landed since the click: that Core keeps no filter.
+      if (!(state.ladderServer && Array.isArray(state.ladderServer.aspects))) {
+        state.ladderAspectsPending = false;
+        return;
+      }
+      if (state.ladderAspectsSaving) {
+        state.ladderAspectsSaveAgain = true;
+        return;
+      }
+      state.ladderAspectsSaving = true;
+      const sent = state.ladderAspects.join(",");
+      try {
+        const result = await ladderRequest(Object.assign({ cmd: "set_mode_ladder", aspects: sent }, ladderCameraFields()));
+        if (!state.ladderAspectsSaveAgain && state.ladderAspects.join(",") === sent)
+          state.ladderAspectsPending = false;   // no newer click: Core's filter is the one on screen
+        // Core changed only the filter: take just that from its reply and redraw only this card, so the
+        // Mode Ladder draft is left as it is and a row being typed in is not rebuilt.
+        if (result.mode_ladder && Array.isArray(result.mode_ladder.aspects)) {
+          state.ladderServer = Object.assign({}, state.ladderServer, { aspects: result.mode_ladder.aspects });
+          if (!state.ladderAspectsPending)
+            state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
+        } else {
+          // An older Core, without the field: it kept no filter. The click stays on screen, and from now
+          // on clicks only change the screen; one made while this save was on its way is not sent.
+          delete state.ladderServer.aspects;
+          clearTimeout(state.ladderAspectsTimer);
+          state.ladderAspectsSaveAgain = false;
+          state.ladderAspectsPending = false;
+        }
+        renderSensorModes();
+      } catch (error) {
+        // Not saved: back to the filter Core has, and the clicks after it are dropped.
+        clearTimeout(state.ladderAspectsTimer);
+        state.ladderAspectsSaveAgain = false;
+        state.ladderAspectsPending = false;
+        state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
+        renderSensorModes();
+        showToast(error.message, true);
+        await fetchModeLadder(false);
+      } finally {
+        state.ladderAspectsSaving = false;
+        if (state.ladderAspectsSaveAgain) {
+          state.ladderAspectsSaveAgain = false;
+          void saveLadderAspects();
         }
       }
     }
@@ -8513,6 +9763,7 @@ std::string_view webControlPageHtml()
       if (signature === state.valueListsSignature || typing)
         return;
       state.valueListsSignature = signature;
+      const rampBlock = document.getElementById("settingsSpeedRampCard");   // held across the redraw, put back after Frame Rate
       container.innerHTML = "";
       for (const list of valueListDefinitions) {
         const steps = (ui[list.steps] || []).map(Number);
@@ -8654,6 +9905,8 @@ std::string_view webControlPageHtml()
           row.appendChild(flickerNote);
         }
         container.appendChild(row);
+        if (list.name === "fps" && rampBlock)
+          container.appendChild(rampBlock);
       }
     }
 
@@ -8913,9 +10166,9 @@ std::string_view webControlPageHtml()
     // pool (state.ladderServer.pool); the strings below are the fallback until it has arrived. Active sizes,
     // "b" = 2x2 binned, widths under 1280 left out as in Core.
     const imx585ClassModes = {
-      s12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
-      s10: "3840x2160 1920x1080b 1440x1080b 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
-      h12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080",
+      s12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080 1488x1080b 1920x1038b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      s10: "3840x2160 1920x1080b 1440x1080b 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1488x1080b 1920x1038b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      h12: "3840x2160 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080",
       h16: "3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1016 1920x1008 1920x960 1920x872 1920x864 1920x816 1920x800 1920x768 1920x752 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x800 1920x1080b",
     };
     // The resolution pills; each also has a Clear HDR version ("<key>-hdr") where the class has rows for it.
@@ -8953,7 +10206,9 @@ std::string_view webControlPageHtml()
     // The sizes of a class as {width, height, binned}: the probed pool, else the table above. A mono sensor
     // offers less than the table, so without a pool it shows only the size it has.
     function imx585ClassRows(snapshot, classKey) {
-      const pool = state.ladderServer && Array.isArray(state.ladderServer.pool) ? state.ladderServer.pool : [];
+      // CAM1's panels (the projection) read cam1's pool, never cam0's.
+      const poolServer = ladderServerFor(snapshot && snapshot.dual_projected ? "cam1" : "cam0");
+      const pool = poolServer && Array.isArray(poolServer.pool) ? poolServer.pool : [];
       if (pool.length > 0) {
         return pool.filter((entry) => imx585ClassKeyFor(Number(entry.bits), entry.clear_hdr === true) === classKey)
           .map((entry) => ({ width: Number(entry.width), height: Number(entry.height), binned: Number(entry.binning) >= 2 }));
@@ -9056,8 +10311,10 @@ std::string_view webControlPageHtml()
       return match ? match.value : "";
     }
 
-    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size; Core takes the
-    // nearest row of the new class on its own, the size sent is the one of the same ratio.
+    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size of the same ratio.
+    // Core enters Clear HDR at 3840x2160, which caps the FPS at that mode's, so turning it on sends the FPS again
+    // after the size, unless the Mode Ladder is on: it owns the FPS, and set_fps would end a Clear HDR override.
+    // Turning it off takes the nearest row of the new class on its own.
     function imx585BaseCommands(snapshot, value) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return [h264ResolutionCommandPayload(h264ResolutionFromBaseSelection(snapshot, value))];
@@ -9065,7 +10322,11 @@ std::string_view webControlPageHtml()
       const commands = clearHdr === !!snapshot.clear_hdr ? [] : [{ cmd: "set_clear_hdr", enabled: clearHdr ? "true" : "false" }];
       const current = resolutionLabelFromSnapshot(snapshot).split("x");
       const size = imx585ResolutionForBaseAndRatio(snapshot, value, imx585RatioLabel(Number(current[0]), Number(current[1])));
-      return size ? commands.concat([resolutionCommandPayload(size)]) : commands;
+      if (!size)
+        return commands;
+      const fps = Number(snapshot.fps);
+      const fpsAgain = clearHdr && !snapshot.clear_hdr && snapshot.ladder_enabled !== true && Number.isFinite(fps) && fps > 0;
+      return commands.concat([resolutionCommandPayload(size)], fpsAgain ? [{ cmd: "set_fps", value: fps }] : []);
     }
 
     // The sizes of the current class, widest picture first.
@@ -9075,14 +10336,14 @@ std::string_view webControlPageHtml()
         .map((row) => formatResolutionValue(row.width, row.height));
     }
 
-    // What Core reports, with the old driver's 1.85:1 sizes (3840x2076, 1920x1038) and the other sensors' sizes a
-    // saved preset or an old client may still send mapped to the sizes the IMX585 has.
+    // What Core reports, with the other sensors' sizes a saved preset or an old client may still send mapped
+    // to the sizes the IMX585 has.
     function imx585NormalizedResolution(snapshot, resolutionValue) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return forcedH264CaptureResolutionForSnapshot(snapshot);
       const value = String(resolutionValue || "").trim();
       const aliases = {
-        "3840x2076": "3840x2072", "1920x1038": "1920x1036", "1928x1090": "1920x1080", "3856x2180": "3840x2160",
+        "1928x1090": "1920x1080", "3856x2180": "3840x2160",
         "1332x990": "1920x1080", "2028x1080": "1920x1080", "2028x1520": "1920x1080",
         "4056x2160": "3840x2160", "4056x3040": "3840x2160",
       };
@@ -9096,7 +10357,7 @@ std::string_view webControlPageHtml()
       const info = ladderModeInfo(mode);
       // A pool entry without a probe mode has binning 0: then the class table says if the size is binned.
       const row = info && Number(info.binning) >= 2 ? { width: mode.width, height: mode.height, binned: true }
-        : imx585ClassRows(state.snapshot, imx585ClassKeyFor(mode.bits, mode.clear_hdr))
+        : imx585ClassRows(modesSnapshot(), imx585ClassKeyFor(mode.bits, mode.clear_hdr))
           .find((other) => other.width === mode.width && other.height === mode.height) || { width: mode.width, height: mode.height, binned: false };
       return imx585Families.find((family) => family.key === imx585FamilyKey(row));
     }
@@ -9380,8 +10641,10 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 3840, height: 2160 };
       if (label === "1920x1012")
         return { cmd: "set_resolution", width: 1920, height: 1012 };
-      if (label === "1920x1036" || label === "1920x1038")
+      if (label === "1920x1036")
         return { cmd: "set_resolution", width: 1920, height: 1036 };
+      if (label === "1920x1038")
+        return { cmd: "set_resolution", width: 1920, height: 1038 };
       if (label === "1920x960")
         return { cmd: "set_resolution", width: 1920, height: 960 };
       if (label === "1920x872")
@@ -9396,8 +10659,10 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 1920, height: 768 };
       if (label === "1920x752")
         return { cmd: "set_resolution", width: 1920, height: 752 };
-      if (label === "3840x2072" || label === "3840x2076")
+      if (label === "3840x2072")
         return { cmd: "set_resolution", width: 3840, height: 2072 };
+      if (label === "3840x2076")
+        return { cmd: "set_resolution", width: 3840, height: 2076 };
       if (label === "3840x2024")
         return { cmd: "set_resolution", width: 3840, height: 2024 };
       if (label === "3840x1920")
@@ -9806,14 +11071,30 @@ std::string_view webControlPageHtml()
     }
 
     // The UI timecode (what the screens show, UI.conf) and the file timecode (Core's timecode_mode:
-    // DNG, MLV, ProRes, H.264 and the WAV) are set apart; set_timecode_mode takes target=ui|files.
+    // DNG, MLV, ProRes, H.264 and the WAV). Mode sets both, as the single control of 1.6.0; the file
+    // timecode is set apart only after Files is given a fixed value (ui.file_timecode_separate), and then
+    // set_timecode_mode takes target=ui|files.
     function uiTimecodeLabel(snapshot) {
       const ui = (snapshot && snapshot.ui) || {};
-      return timecodeModeLabel(ui.timecode_mode || (snapshot && snapshot.timecode_mode));
+      // ui.timecode_mode is UI.conf's "Rec Run", timecode_mode is Core's "rec_run"
+      return timecodeModeLabel(String(ui.timecode_mode || (snapshot && snapshot.timecode_mode) || "").replace(" ", "_"));
     }
 
     function fileTimecodeLabel(snapshot) {
       return timecodeModeLabel(snapshot && snapshot.timecode_mode);
+    }
+
+    function fileTimecodeSeparate(snapshot) {
+      const ui = (snapshot && snapshot.ui) || {};
+      return ui.file_timecode_separate === true;
+    }
+
+    function timecodeFilesChoices() {
+      return [{ value: "Same as Mode", label: "Same as Mode", enabled: true }].concat(timecodeChoices());
+    }
+
+    function timecodeFilesLabel(snapshot) {
+      return fileTimecodeSeparate(snapshot) ? fileTimecodeLabel(snapshot) : "Same as Mode";
     }
 
     function timecodeSummaryLabel(snapshot) {
@@ -9823,7 +11104,20 @@ std::string_view webControlPageHtml()
     }
 
     function timecodeCommand(value, target) {
-      return { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run", target };
+      const command = { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run" };
+      if (target)
+        command.target = target;
+      return command;
+    }
+
+    // Mode: no target, so Core sets both; while the files are set apart it sets the UI timecode only.
+    function timecodeModeCommand(value) {
+      return timecodeCommand(value, fileTimecodeSeparate(state.snapshot) ? "ui" : "");
+    }
+
+    // Files: Same as Mode sets both again (Core writes fileTimecodeSeparate=false), a fixed value sets the files apart.
+    function timecodeFilesCommand(value) {
+      return value === "Same as Mode" ? timecodeCommand(uiTimecodeLabel(state.snapshot)) : timecodeCommand(value, "files");
     }
 
     function autofocusModeLabel(modeValue) {
@@ -11174,12 +12468,12 @@ std::string_view webControlPageHtml()
             break;
           }
           case "timecode": {
-            card.appendChild(createFavoriteSelectBlock("UI Timecode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "ui"));
+            card.appendChild(createFavoriteSelectBlock("Mode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeModeCommand(value));
             }));
-            card.appendChild(createFavoriteSelectBlock("File Timecode", timecodeDisplayName(fileTimecodeLabel(snapshot)), timecodeChoices(), fileTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "files"));
-            }));
+            card.appendChild(createFavoriteSelectBlock("Files", fileTimecodeSeparate(snapshot) ? timecodeDisplayName(fileTimecodeLabel(snapshot)) : "Same as Mode", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeFilesCommand(value));
+            }, 3));
             break;
           }
           case "autofocus": {
@@ -12140,6 +13434,7 @@ std::string_view webControlPageHtml()
       const preview = document.getElementById("previewStream");
       if (preview)
         preview.removeAttribute("src");
+      stopCam1Preview();
     }
 
     function pbResumeLive() {
@@ -12340,7 +13635,7 @@ std::string_view webControlPageHtml()
       document.getElementById("pbvPlay").setAttribute("aria-label", v.playing ? "Pause" : "Play");
     }
 
-    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone, stale.
+    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone (410), stale (404).
     async function pbvFetchFrame(number, width) {
       const v = state.pb.viewer;
       const url = "/api/media/frame?kind=folder&id=" + encodeURIComponent(v.item.id) + "&n=" + number + "&w=" + width
@@ -12356,10 +13651,10 @@ std::string_view webControlPageHtml()
         return { outcome: "hold" };
       if (response.status === 503)
         return { outcome: "busy" };
-      if (response.status === 404) {
-        const body = await response.json().catch(() => ({}));
-        return { outcome: body.gone ? "gone" : "stale" };
-      }
+      if (response.status === 410)
+        return { outcome: "gone" };
+      if (response.status === 404)
+        return { outcome: "stale" };
       if (!response.ok)
         return { outcome: "busy" };
       try {
@@ -12800,7 +14095,16 @@ std::string_view webControlPageHtml()
         const response = await fetch("/api/media/clip?kind=folder&id=" + encodeURIComponent(item.id), { cache: "no-store" });
         clip = await response.json();
         if (response.status === 409) {
-          pbvApplyHold(clip.hold || state.pb.snapshotHold || "recording");
+          // The poll may be a second old: ask Core which hold it is (GET /api/state takes no lock).
+          let hold = "recording";
+          try {
+            const snapshot = await (await fetch("/api/state", { cache: "no-store" })).json();
+            hold = String(snapshot.playback_hold || "") || hold;
+          } catch (error) {
+            hold = state.pb.snapshotHold || hold;
+          }
+          if (state.pb.viewer === v)
+            pbvApplyHold(hold);
           return;
         }
         if (!response.ok || !clip.ok)
@@ -13609,8 +14913,9 @@ std::string_view webControlPageHtml()
         return;
       }
 
-      const rawWidth = Math.max(1, Math.round(stage.clientWidth || preview.clientWidth || 1));
-      const rawHeight = Math.max(1, Math.round(stage.clientHeight || preview.clientHeight || 1));
+      const box = stage.classList.contains("dual") ? preview : stage;   // dual: CAM0's pane, not the whole stage
+      const rawWidth = Math.max(1, Math.round(box.clientWidth || preview.clientWidth || 1));
+      const rawHeight = Math.max(1, Math.round(box.clientHeight || preview.clientHeight || 1));
       const processScale = Math.min(1, 1280 / rawWidth, 720 / rawHeight);
       const targetWidth = Math.max(1, Math.round(rawWidth * processScale));
       const targetHeight = Math.max(1, Math.round(rawHeight * processScale));
@@ -13743,6 +15048,414 @@ std::string_view webControlPageHtml()
       state.previewProcessingLastFrameMs = now;
     }
 
+    // ---- Dual sensor: "active", and this browser's own view -------------------------------------------------
+    // "Active" = snapshot.cam1 exists. Core sends it only with the Dual sensor switch on and a sensor on cam0 and on
+    // cam1 (or cam1's Core answering); with one sensor the page is the single-camera page, whatever config.txt names.
+    function dualCam1(snapshot) {
+      const cam1 = snapshot && snapshot.cam1;
+      return cam1 && typeof cam1 === "object" ? cam1 : null;
+    }
+
+    function dualActive(snapshot) {
+      return !!dualCam1(snapshot);
+    }
+
+    // The WebUI's own view: the six labels of previewSource, per browser (a viewer's choice that changes nothing on
+    // the camera: two phones may watch different cameras). localStorage can be missing or throw: Both then.
+    const dualViewLabels = ["Both", "Cam 0", "Cam 1", "PiP Cam 0", "PiP Cam 1", "Both (Cam 1 left)"];
+    const dualViewClass = { "Both": "both", "Cam 0": "cam0", "Cam 1": "cam1", "PiP Cam 0": "pip0", "PiP Cam 1": "pip1",
+      "Both (Cam 1 left)": "bothleft" };
+    // The same mapping as Core's Swap: Cam 0 <-> Cam 1, PiP Cam 0 <-> PiP Cam 1, Both <-> Both (Cam 1 left).
+    const dualViewSwapped = { "Both": "Both (Cam 1 left)", "Both (Cam 1 left)": "Both", "Cam 0": "Cam 1", "Cam 1": "Cam 0",
+      "PiP Cam 0": "PiP Cam 1", "PiP Cam 1": "PiP Cam 0" };
+    const dualViewStorageKey = "apertar.webui.dualView";
+    const dualView = { label: "Both", cam1Frame: false };
+
+    try {
+      const stored = window.localStorage.getItem(dualViewStorageKey);
+      if (stored && dualViewLabels.includes(stored))
+        dualView.label = stored;
+    } catch (error) {
+      // no storage: the default stands
+    }
+
+    function setDualViewLabel(label) {
+      if (!dualViewLabels.includes(label))
+        return;
+      dualView.label = label;
+      try {
+        window.localStorage.setItem(dualViewStorageKey, label);
+      } catch (error) {
+        // not kept; it still applies to this page
+      }
+      if (state.snapshot)
+        updateDualPreview(state.snapshot);
+    }
+
+    // A view of cam1 without a frame falls back to cam0 (Cam 1 -> Cam 0, PiP Cam 1 -> PiP Cam 0).
+    function dualEffectiveView() {
+      if (dualView.cam1Frame)
+        return dualView.label;
+      if (dualView.label === "Cam 1")
+        return "Cam 0";
+      if (dualView.label === "PiP Cam 1")
+        return "PiP Cam 0";
+      return dualView.label;
+    }
+
+    function dualViewShowsCam1(label) {
+      return label !== "Cam 0";
+    }
+
+    // Per pane: its settings pills and its recording state. CAM0's pills are the picture's own badges' text; CAM1's come
+    // from cam1.settings ("-" and dimmed before they exist). The pane frames show only with the recording-frame option on.
+    function panePillTexts(settings) {
+      const bits = rawBitDepthNumber(settings.raw_bit_depth);
+      const resolution = String(settings.resolution || "") + (bits > 0 ? " · " + bits + "-bit" : "") + (settings.clear_hdr ? " · Clear HDR" : "");
+      const isoInUse = settings.iso_auto && Number(settings.iso_actual) > 0 ? Number(settings.iso_actual) : 0;
+      const wbInUse = settings.wb_auto && settings.wb_measured && Number(settings.wb_actual_kelvin) > 0
+        ? Math.round(Number(settings.wb_actual_kelvin)) + "K" : (settings.wb_auto ? "Auto" : Math.round(Number(settings.wb_kelvin)) + "K");
+      return [
+        { text: resolution },
+        { text: Math.round(Number(settings.fps)) + " FPS" },
+        { text: "ISO " + (settings.iso_auto ? (isoInUse > 0 ? isoInUse : "Auto") : settings.iso), system: settings.iso_auto_after_clear_hdr === true },
+        { text: "WB " + wbInUse, system: settings.wb_auto_after_clear_hdr === true },
+      ];
+    }
+
+    function fillPanePills(id, items, dim) {
+      const host = document.getElementById(id);
+      if (!host)
+        return;
+      host.classList.toggle("dim", dim);
+      const key = JSON.stringify(items);
+      if (host.dataset.built === key)
+        return;
+      host.dataset.built = key;
+      host.innerHTML = "";
+      items.forEach((item) => host.appendChild(createDomElement("span", "badge" + (item.system ? " system-value" : ""), item.text)));
+    }
+
+    function renderPanes(base, shown) {
+      const stage = document.getElementById("previewStage");
+      if (!stage)
+        return;
+      const dual = dualActive(base);
+      if (!dual) {
+        stage.classList.remove("rec0", "rec1");
+        return;
+      }
+      const cam1 = dualCam1(base);
+      const projected = !!(shown && shown.dual_projected);
+      const cam0Items = projected ? panePillTexts(base) : ["resolutionBadge", "fpsBadge", "isoBadge", "wbBadge"].map((id) => ({
+        text: document.getElementById(id).textContent, system: document.getElementById(id).classList.contains("system-value") }));
+      fillPanePills("panePills0", cam0Items, false);
+      const settings = cam1 && cam1.settings && Number(cam1.settings.width) > 0 ? cam1.settings : null;
+      fillPanePills("panePills1", settings ? panePillTexts(settings) : ["—", "—", "—", "—"].map((text) => ({ text })), !settings);
+      // The cameras in the take: record_cameras (cam0, cam1, both) while recording; the card's flag for CAM0 without it.
+      const recording = !!base.recording;
+      const cameras = typeof base.record_cameras === "string" ? base.record_cameras : "";
+      const rec0 = recording && (cameras === "" || cameras === "cam0" || cameras === "both" || cameras === "none");
+      const rec1 = recording && (cameras === "cam1" || cameras === "both");
+      stage.classList.toggle("rec0", rec0);
+      stage.classList.toggle("rec1", rec1);
+      renderPaneRecButtons(base, rec0, rec1);
+    }
+
+    // The two pane REC buttons (Both views). Linked while the running take is both cameras, or, idle, while the next
+    // take would be (NEXT TAKE, else Core's record_cameras): then each press is the card's REC. Unlinked, a press records
+    // that pane's camera alone; during a take the other camera's button is greyed (a take's cameras are fixed).
+    const paneRec = { cameras: "" };
+    function paneRecLinked(base) {
+      if (base.recording)
+        return base.record_cameras === "both";
+      if (nextTake.value !== "Auto")
+        return nextTake.value === "both";
+      return base.record_cameras === "both";
+    }
+
+    function renderPaneRecButtons(base, rec0, rec1) {
+      const stage = document.getElementById("previewStage");
+      const recordButton = document.getElementById("recordButton");
+      const linked = paneRecLinked(base);
+      stage.classList.toggle("linked", linked);
+      const shared = recordButton ? recordButton.disabled : false;
+      [["paneRecButton0", rec0], ["paneRecButton1", rec1]].forEach(([id, inTake]) => {
+        const button = document.getElementById(id);
+        if (!button)
+          return;
+        const recordingNow = !!base.recording;
+        button.classList.toggle("recording", linked ? recordingNow : inTake);
+        button.disabled = shared || (recordingNow && !linked && !inTake);
+        button.setAttribute("aria-label", (inTake || (linked && recordingNow) ? "Stop " : "Record ")
+          + (linked ? "both cameras" : (button.dataset.cam === "cam1" ? "CAM1" : "CAM0")));
+      });
+    }
+
+    function paneRecPress(cam) {
+      const base = dualBaseSnapshot(state.snapshot);
+      if (!base || !dualActive(base))
+        return;
+      paneRec.cameras = !base.recording && !paneRecLinked(base) ? cam : "";
+      toggleRecord().finally(() => { paneRec.cameras = ""; });
+    }
+
+    function renderDualViewRow(active) {
+      const row = document.getElementById("dualViewRow");
+      if (!row)
+        return;
+      row.hidden = !active;
+      if (!active)
+        return;
+      const key = dualView.label + "|" + dualView.cam1Frame;
+      if (row.dataset.built === key)
+        return;
+      row.dataset.built = key;
+      buildOptionButtonsInto(document.getElementById("dualViewOptions"),
+        dualViewLabels.map((value) => ({ value, label: value, enabled: true })), dualView.label,
+        (value) => setDualViewLabel(value));
+      const swap = document.getElementById("dualViewSwap");
+      if (!swap.dataset.wired) {
+        swap.dataset.wired = "1";
+        swap.addEventListener("click", () => setDualViewLabel(dualViewSwapped[dualView.label] || "Both"));
+      }
+    }
+
+    // CAM1's picture: an <img> on cam1's own Core (:8001). An image request sends no Origin, so it passes Core's
+    // check; its src is dropped while not shown (view Cam 0, MJPEG encodes only while viewed) and while playback is open.
+    // Test hook: ?cam1port=8000 points it at cam0's own stream (JavaScript only; digits only).
+    const cam1Preview = { on: false, nonce: 0, retryTimer: 0 };
+    const cam1PreviewPort = (() => {
+      try {
+        const value = new URLSearchParams(window.location.search).get("cam1port");
+        return value && /^[0-9]{2,5}$/.test(value) ? value : "8001";
+      } catch (error) {
+        return "8001";
+      }
+    })();
+
+    function stopCam1Preview() {
+      clearTimeout(cam1Preview.retryTimer);
+      const img = document.getElementById("previewStream1");
+      if (img)
+        img.removeAttribute("src");
+      cam1Preview.on = false;
+      dualView.cam1Frame = false;
+    }
+
+    function startCam1Preview() {
+      const img = document.getElementById("previewStream1");
+      if (!img)
+        return;
+      clearTimeout(cam1Preview.retryTimer);
+      cam1Preview.nonce += 1;
+      img.src = window.location.protocol + "//" + window.location.hostname + ":" + cam1PreviewPort + "/preview.mjpeg?stream=" + cam1Preview.nonce;
+      cam1Preview.on = true;
+    }
+
+    // Wipe and stack: this page shows the rig's previewWipe / previewStack / previewOpacity / previewWipeDirection in its own
+    // Cam 0 / Cam 1 view. Local changes apply at once; the snapshot is followed again once the sends have settled.
+    const wipeUi = { wipe: 0, stack: false, opacity: 50, dir: "horizontal", dual: false, dragging: false, timer: 0, holdUntil: 0, pending: {} };
+
+    function wipeSingleView() {
+      return wipeUi.dual && (dualView.label === "Cam 0" || dualView.label === "Cam 1");
+    }
+
+    function wipeUnderActive() {
+      return wipeSingleView() && (wipeUi.wipe > 0 || wipeUi.stack);
+    }
+
+    function wipeFollow(snapshot) {
+      if (wipeUi.dragging || wipeUi.timer || performance.now() < wipeUi.holdUntil)
+        return;
+      const ui = snapshot && snapshot.ui && typeof snapshot.ui === "object" ? snapshot.ui : {};
+      if (typeof ui.preview_wipe === "number")
+        wipeUi.wipe = Math.max(0, Math.min(100, ui.preview_wipe));
+      if (typeof ui.preview_stack === "boolean")
+        wipeUi.stack = ui.preview_stack;
+      if (typeof ui.preview_opacity === "number")
+        wipeUi.opacity = Math.max(0, Math.min(100, ui.preview_opacity));
+      if (ui.preview_wipe_direction === "horizontal" || ui.preview_wipe_direction === "vertical")
+        wipeUi.dir = ui.preview_wipe_direction;
+    }
+
+    // At most one send per 120 ms, the latest values merged, so the HDMI follows a drag while it moves. A quiet POST, as
+    // user_activity's: sendCommand would re-render the page twice per send and hold REC disabled while each is in flight,
+    // so REC blinked during a drag. The wipe keeps its own state (wipeUi) and follows the snapshot once the sends settle.
+    function wipeSend(fields) {
+      Object.assign(wipeUi.pending, fields);
+      if (wipeUi.timer)
+        return;
+      wipeUi.timer = window.setTimeout(async () => {
+        const body = Object.assign({ cmd: "set_preview_source" }, wipeUi.pending);
+        wipeUi.pending = {};
+        wipeUi.timer = 0;
+        wipeUi.holdUntil = performance.now() + 1500;
+        try {
+          const response = await fetch("/api/command", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const result = await response.json();
+          if (!result.ok)
+            showToast(result.error || "Command failed.", true);
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 120);
+    }
+
+    function wipeSet(fields) {
+      const sent = {};
+      if ("wipe" in fields) { wipeUi.wipe = fields.wipe; sent.wipe = fields.wipe; }
+      if ("opacity" in fields) { wipeUi.opacity = fields.opacity; sent.opacity = fields.opacity; }
+      if ("dir" in fields) { wipeUi.dir = fields.dir; sent.wipe_direction = fields.dir; }
+      if ("stack" in fields) { wipeUi.stack = fields.stack; sent.stack = fields.stack ? "true" : "false"; }
+      wipeSend(sent);
+      wipeRender();
+      if (state.snapshot)
+        updateDualPreview(dualBaseSnapshot(state.snapshot));
+    }
+
+    function wipeRender() {
+      const stage = document.getElementById("previewStage");
+      const row = document.getElementById("wipeRow");
+      if (!stage || !row)
+        return;
+      const single = wipeSingleView();
+      const under = wipeUnderActive();
+      stage.classList.toggle("under", under);
+      stage.classList.toggle("stacked", under && wipeUi.stack);
+      stage.classList.toggle("wipe-v", wipeUi.dir === "vertical");
+      stage.classList.toggle("wipe-edge", under && !wipeUi.stack && wipeUi.wipe > 0 && wipeUi.wipe < 100);
+      stage.style.setProperty("--wipe", wipeUi.wipe + "%");
+      stage.style.setProperty("--opacity", String(wipeUi.opacity / 100));
+      const topIsCam1 = dualEffectiveView() === "Cam 1";
+      document.getElementById("wipeUnder").textContent = "UNDER: " + (topIsCam1 ? "CAM0" : "CAM1");
+      row.hidden = !single;
+      if (!single)
+        return;
+      const setRange = (id, valueId, value) => {
+        const range = document.getElementById(id);
+        if (!wipeUi.dragging || document.activeElement !== range)
+          range.value = String(value);
+        document.getElementById(valueId).textContent = value + "%";
+      };
+      setRange("wipeRange", "wipeValue", wipeUi.wipe);
+      setRange("opacityRange", "opacityValue", wipeUi.opacity);
+      document.getElementById("wipeDirGroup").hidden = wipeUi.stack;
+      document.getElementById("wipeOpacityGroup").hidden = !wipeUi.stack;
+      const key = wipeUi.dir + "|" + wipeUi.stack;
+      if (row.dataset.built !== key) {
+        row.dataset.built = key;
+        buildOptionButtonsInto(document.getElementById("wipeDirOptions"),
+          [{ value: "horizontal", label: "Horizontal", enabled: true }, { value: "vertical", label: "Vertical", enabled: true }],
+          wipeUi.dir, (value) => wipeSet({ dir: value }));
+        buildOptionButtonsInto(document.getElementById("wipeStackOptions"),
+          [{ value: "false", label: "Off", enabled: true }, { value: "true", label: "On", enabled: true }],
+          String(wipeUi.stack), (value) => wipeSet({ stack: value === "true" }));
+      }
+    }
+
+    (function wireWipeRanges() {
+      [["wipeRange", "wipe"], ["opacityRange", "opacity"]].forEach(([id, field]) => {
+        const range = document.getElementById(id);
+        range.addEventListener("pointerdown", () => { wipeUi.dragging = true; });
+        ["pointerup", "pointercancel", "blur", "change"].forEach((type) => range.addEventListener(type, () => { wipeUi.dragging = false; }));
+        range.addEventListener("input", () => wipeSet({ [field]: Number(range.value) }));
+      });
+    })();
+
+    // Drag on the picture to wipe (the User, 2026-11-11): in a Cam 0 / Cam 1 view the edge follows the pointer along the
+    // wipe direction, across the stage as the clip-path is; while stacked, a sideways drag sets the opacity instead.
+    // A tap does nothing (the drag starts after 6 px), and buttons or inputs over the picture keep their own clicks.
+    (function wireWipeDrag() {
+      const stage = document.getElementById("previewStage");
+      if (!stage)
+        return;
+      let drag = null;
+      const percentAt = (event) => {
+        const rect = stage.getBoundingClientRect();
+        const across = wipeUi.stack || wipeUi.dir !== "vertical";
+        const f = across ? (event.clientX - rect.left) / rect.width : (event.clientY - rect.top) / rect.height;
+        return Math.round(Math.max(0, Math.min(1, f)) * 100);
+      };
+      stage.addEventListener("dragstart", (event) => {
+        if (wipeSingleView())
+          event.preventDefault();
+      });
+      stage.addEventListener("pointerdown", (event) => {
+        if (!wipeSingleView() || event.button > 0 || event.target.closest("button, input, select, a, label, [role='button']"))
+          return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, on: false };
+      });
+      stage.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id)
+          return;
+        if (!drag.on) {
+          if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6)
+            return;
+          drag.on = true;
+          wipeUi.dragging = true;
+          try { stage.setPointerCapture(event.pointerId); } catch (_) {}
+        }
+        const value = percentAt(event);
+        if (wipeUi.stack) {
+          if (value !== wipeUi.opacity)
+            wipeSet({ opacity: value });
+        } else if (value !== wipeUi.wipe) {
+          wipeSet({ wipe: value });
+        }
+      });
+      const end = (event) => {
+        if (!drag || event.pointerId !== drag.id)
+          return;
+        if (drag.on)
+          wipeUi.dragging = false;
+        drag = null;
+      };
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((type) => stage.addEventListener(type, end));
+    })();
+
+    function updateDualPreview(snapshot) {
+      const stage = document.getElementById("previewStage");
+      const img = document.getElementById("previewStream1");
+      if (!stage || !img)
+        return;
+      const dual = dualActive(snapshot);
+      if (!img.dataset.wired) {
+        img.dataset.wired = "1";
+        img.addEventListener("load", () => {
+          document.getElementById("previewNoSignal1").classList.remove("shown");
+          if (!dualView.cam1Frame) {
+            dualView.cam1Frame = true;
+            if (state.snapshot)
+              updateDualPreview(state.snapshot);
+          }
+        });
+        img.addEventListener("error", () => {
+          document.getElementById("previewNoSignal1").classList.add("shown");
+          clearTimeout(cam1Preview.retryTimer);
+          if (cam1Preview.on)
+            cam1Preview.retryTimer = window.setTimeout(startCam1Preview, 3000);
+          if (dualView.cam1Frame) {
+            dualView.cam1Frame = false;
+            if (state.snapshot)
+              updateDualPreview(state.snapshot);
+          }
+        });
+      }
+      const view = dualEffectiveView();
+      stage.classList.toggle("dual", dual);
+      Object.keys(dualViewClass).forEach((label) => stage.classList.toggle("view-" + dualViewClass[label], dual && label === view));
+      renderDualViewRow(dual);
+      wipeUi.dual = dual;
+      wipeFollow(snapshot);
+      wipeRender();
+      const wanted = dual && !state.previewPausedForPlayback && (dualViewShowsCam1(dualView.label) || wipeUnderActive());
+      if (wanted && !cam1Preview.on)
+        startCam1Preview();
+      else if (!wanted && cam1Preview.on)
+        stopCam1Preview();
+    }
+
     function loadPreviewStream() {
       const preview = document.getElementById("previewStream");
       clearTimeout(state.previewRetryTimer);
@@ -13858,6 +15571,20 @@ std::string_view webControlPageHtml()
         snapshot.storage_preroll_last = source.storage_preroll_last;
       if (typeof source.buffer_note === "string")
         snapshot.buffer_note = source.buffer_note;
+      if (typeof source.frames_per_folder === "number")
+        snapshot.frames_per_folder = source.frames_per_folder;
+      if (typeof source.frames_per_folder_env === "boolean")
+        snapshot.frames_per_folder_env = source.frames_per_folder_env;
+      if (typeof source.clip_merge_enabled === "boolean")
+        snapshot.clip_merge_enabled = source.clip_merge_enabled;
+      if (typeof source.clip_merge_env_off === "boolean")
+        snapshot.clip_merge_env_off = source.clip_merge_env_off;
+      if (typeof source.clip_merge_pending === "number")
+        snapshot.clip_merge_pending = source.clip_merge_pending;
+      if (typeof source.clip_merge_active === "string")
+        snapshot.clip_merge_active = source.clip_merge_active;
+      if (typeof source.clip_merge_last === "string")
+        snapshot.clip_merge_last = source.clip_merge_last;
       if (source.recording_capabilities)
         snapshot.recording_capabilities = source.recording_capabilities;
       if (typeof source.lossy_dng_ratio === "string")
@@ -14030,6 +15757,12 @@ std::string_view webControlPageHtml()
         case "set_storage_preroll":
           snapshot.storage_preroll_auto = payload.value === "on";
           break;
+        case "set_frames_per_folder":
+          snapshot.frames_per_folder = Number(payload.value) || 0;
+          break;
+        case "set_clip_merge":
+          snapshot.clip_merge_enabled = payload.enabled === true;
+          break;
         case "set_prores_profile":
           snapshot.prores_profile = payload.value;
           snapshot.capture.codec = captureCodecLabel(snapshot.recording_format);
@@ -14072,6 +15805,10 @@ std::string_view webControlPageHtml()
             snapshot.timecode_mode = mode;
           if (payload.target !== "files")
             uiState.timecode_mode = timecodeModeLabel(mode);
+          if (payload.target === "ui" || payload.target === "files")
+            uiState.file_timecode_separate = true;
+          else if (uiState.file_timecode_separate)
+            uiState.file_timecode_separate = false;
           break;
         }
         case "set_af_mode":
@@ -14218,6 +15955,25 @@ std::string_view webControlPageHtml()
           break;
         case "set_external_monitor_mode":
           uiState.external_monitor_mode = String(payload.value || "Clean Feed");
+          break;
+        case "set_preview_source":
+          if (payload.value)
+            uiState.preview_source = String(payload.value);
+          break;
+        case "set_record_cameras":
+          uiState.record_cameras = String(payload.value || "Both");
+          break;
+        case "set_dual_sensor_enabled":
+          uiState.dual_sensor_enabled = boolValue;
+          break;
+        case "set_hdmi1_source":
+          uiState.hdmi1_source = String(payload.value || "Cam 1");
+          break;
+        case "set_cam1_settings":
+          uiState.cam1_settings = String(payload.value || "");
+          break;
+        case "set_cam1_mode":
+          uiState.cam1_mode = String(payload.value || "Closest to Cam 0");
           break;
         case "set_external_monitor_info_overlay":
           uiState.external_monitor_info_overlay = String(payload.value || "On");
@@ -14414,6 +16170,7 @@ std::string_view webControlPageHtml()
     }
 
     async function sendCommand(payload) {
+      payload = dualRoutePayload(payload);   // CAM1's panels send their setters with camera=cam1
       const previousSnapshot = cloneSnapshot(state.snapshot);
       const hadSnapshot = !!state.snapshot;
       const refreshDelayMs = payload && payload.cmd === "record_start" ? 80 : 140;
@@ -14424,7 +16181,8 @@ std::string_view webControlPageHtml()
       state.deferFetchUntilMs = Math.max(state.deferFetchUntilMs, gateUntilMs);
 
       try {
-        if (hadSnapshot && applyCommandSnapshotPatch(payload, null, true))
+        const cam1Command = !!payload && payload.camera === "cam1" && !(state.snapshot && state.snapshot.dual_projected);
+        if (hadSnapshot && !cam1Command && applyCommandSnapshotPatch(payload, null, true))
           renderSnapshot(state.snapshot);
 
         const response = await fetch("/api/command", {
@@ -14439,7 +16197,7 @@ std::string_view webControlPageHtml()
           throw new Error(result.error || "Command failed.");
         }
 
-        if (hadSnapshot && applyCommandSnapshotPatch(payload, result, false))
+        if (hadSnapshot && !cam1Command && applyCommandSnapshotPatch(payload, result, false))
           renderSnapshot(state.snapshot);
 
         state.deferFetchUntilMs = performance.now() + refreshDelayMs;
@@ -14455,6 +16213,7 @@ std::string_view webControlPageHtml()
     // Touch / pen: long-press a pill to pick it up (pointer events); tap a palette pill to add it; x removes.
     const CLIP_DEFAULT_TEMPLATE = "{format}_{date}_{clip}";
     const CLIP_PRESETS = [
+      { value: "{format}_{date}_{clip}_{tc}", label: "Standard" },   // clipname::kStandardTemplate
       { value: "{format}_{date}_{clip}", label: "Original" },
       { value: "{format}_{date_}_{tc-}_{clip}", label: "Time of day, dashes" },
       { value: "{format}_{date_}_{tc}_{clip}", label: "Time of day, compact" }
@@ -14557,7 +16316,9 @@ std::string_view webControlPageHtml()
       preview.appendChild(document.createTextNode("Next clip: "));
       const code = document.createElement("span");
       code.className = "clip-example";
-      code.textContent = clipUi.error ? "--" : (example || "--");
+      // With two sensors both names: ..._cam0 and ..._cam1.
+      const twoNames = clipDualActive() && example.indexOf("cam0") !== -1 ? example + " and " + example.replace(/cam0/g, "cam1") : example;
+      code.textContent = clipUi.error ? "--" : (twoNames || "--");
       preview.appendChild(code);
       saved.classList.toggle("hidden", !(clipUi.dirty && savedExample));
       saved.textContent = "Saved name: " + savedExample;
@@ -14692,6 +16453,8 @@ std::string_view webControlPageHtml()
         return;
       if (src.from === "palette") {
         const item = { t: src.item.t, v: src.item.v };
+        if (item.t === "tok" && item.v === "cam" && clipDualActive() && clipUi.items.some((other) => other.t === "tok" && other.v === "cam"))
+          return;
         clipUi.items.splice(at, 0, item);
         if (item.t === "txt") {
           clipUi.editing = at;
@@ -14705,8 +16468,25 @@ std::string_view webControlPageHtml()
       clipChanged();
     }
 
+    // With two sensors the Camera pill is required: it stays in the name (a drag out of the row puts it back), is
+    // appended at the end when the template lacks it, and can be moved anywhere.
+    function clipDualActive() {
+      return dualActive(dualBaseSnapshot(state.snapshot));
+    }
+
+    function clipEnsureCam(items) {
+      if (!clipDualActive() || items.some((item) => item.t === "tok" && item.v === "cam"))
+        return items;
+      if (items.length && items[items.length - 1].t !== "sep")
+        items.push({ t: "sep", v: "_" });
+      items.push({ t: "tok", v: "cam" });
+      return items;
+    }
+
     function clipRemove(index) {
       if (clipUi.recording || index < 0 || index >= clipUi.items.length)
+        return;
+      if (clipDualActive() && clipUi.items[index].t === "tok" && clipUi.items[index].v === "cam")
         return;
       clipUi.items.splice(index, 1);
       clipChanged();
@@ -14821,6 +16601,9 @@ std::string_view webControlPageHtml()
     function clipMakePill(item, index, inRow) {
       const element = document.createElement("span");
       element.className = "clip-pill " + (item.t === "tok" ? "token" : (item.t === "txt" ? "text" : "sep"));
+      const required = inRow && item.t === "tok" && item.v === "cam" && clipDualActive();
+      if (required)
+        element.classList.add("required");
       element.draggable = !clipUi.recording && !(inRow && clipUi.editing === index);
       if (item.t === "tok" && CLIP_TOKEN_INFO[item.v])
         element.title = "{" + item.v + "}  e.g. " + CLIP_TOKEN_INFO[item.v].sample;
@@ -14869,7 +16652,7 @@ std::string_view webControlPageHtml()
       label.textContent = clipPillLabel(item);
       element.appendChild(label);
       if (inRow) {
-        if (!clipUi.recording) {
+        if (!clipUi.recording && !required) {
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "clip-x";
@@ -14956,12 +16739,17 @@ std::string_view webControlPageHtml()
       clipBindRow();
       card.classList.toggle("locked", clipUi.recording);
       const current = clipSerialize(clipUi.items);
-      let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === current);
+      const dualNames = clipDualActive();
+      const camNote = document.getElementById("clipNameCamNote");
+      if (camNote)
+        camNote.classList.toggle("hidden", !dualNames);
+      // The presets match with a trailing _{cam} taken off while two sensors are in use.
+      let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === (dualNames ? current.replace(/_\{cam\}$/, "") : current));
       setText("settingsClipNamesValue", activeIndex >= 0 ? CLIP_PRESETS[activeIndex].label : "Custom");
       const options = CLIP_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, enabled: !clipUi.recording }));
       options.push({ value: "", label: "Custom", enabled: false });
       buildOptionButtons("clipNamePresets", options, activeIndex >= 0 ? CLIP_PRESETS[activeIndex].value : "", (value) => {
-        clipUi.items = clipParse(value);
+        clipUi.items = clipEnsureCam(clipParse(value));
         clipUi.editing = -1;
         clipChanged();
       }, 4);
@@ -15009,9 +16797,16 @@ std::string_view webControlPageHtml()
         return;
       }
       let rebuild = recordingChanged || clipUi.sig === "";
+      const dualNow = clipDualActive();
+      if (clipUi.dualSeen !== dualNow) {
+        clipUi.dualSeen = dualNow;
+        rebuild = true;
+        if (!clipUi.dirty)
+          clipUi.items = clipEnsureCam(clipParse(template));   // shown with the Camera pill; saved only when the user edits
+      }
       if (!clipUi.dirty && clipUi.savedTemplate !== template) {
         clipUi.savedTemplate = template;
-        clipUi.items = clipParse(template);
+        clipUi.items = clipEnsureCam(clipParse(template));
         rebuild = true;
       }
       if (rebuild) {
@@ -15049,6 +16844,22 @@ std::string_view webControlPageHtml()
           onClick(option.value);
         });
         container.appendChild(button);
+      }
+    }
+
+    // Dual sensor: each pane carries the card's timecode; renderPanes' rec0/rec1 classes colour the recording ones.
+    function updatePaneTimecodes() {
+      const stage = document.getElementById("previewStage");
+      if (!stage || !stage.classList.contains("dual"))
+        return;
+      const block = document.getElementById("timecodeBlock");
+      stage.classList.toggle("photo", !!(block && block.classList.contains("hidden")));
+      const value = document.getElementById("timecodeValue");
+      const text = value ? value.textContent : "";
+      for (const id of ["paneTc0", "paneTc1"]) {
+        const element = document.getElementById(id);
+        if (element && element.textContent !== text)
+          element.textContent = text;
       }
     }
 
@@ -15099,12 +16910,16 @@ std::string_view webControlPageHtml()
       if (state.snapshot.recording) {
         const elapsedMs = performance.now() - state.recordingBasePerfMs;
         elapsedSeconds = state.recordingBaseElapsedSeconds + elapsedMs / 1000;
+        state.lastTakeElapsedSeconds = elapsedSeconds;
+      } else if (state.lastTakeElapsedSeconds > 0) {
+        elapsedSeconds = state.lastTakeElapsedSeconds;   // a stopped take keeps its last timecode until the next one starts
       }
       setText("timecodeValue", formatTimecode(elapsedSeconds * fpsInt, fpsInt));
     }
 
     function updateLiveReadouts() {
       updateTimecodeDisplay();
+      updatePaneTimecodes();
       renderProcessedPreviewFrame();
     }
 
@@ -15211,12 +17026,58 @@ std::string_view webControlPageHtml()
       await queueNextPhotoInSequence();
     }
 
-    function renderSnapshot(snapshot) {
-      // /api/state carries the write-buffer and storage pre-roll fields under "system"; the page reads them at the top level.
+    // The merge progress from Core's clip_merge_* fields, for the Media card and the Storage tile (KB
+    // clip-merge-progress-plan.md). active: a clip waits or is being merged; the bars show then.
+    function clipMergeProgress(snapshot) {
+      const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+      const on = snapshot.clip_merge_enabled === true;
+      const clipDone = num(snapshot.clip_merge_clip_done), clipTotal = num(snapshot.clip_merge_clip_total);
+      const allDone = num(snapshot.clip_merge_all_done), allTotal = num(snapshot.clip_merge_all_total);
+      const clips = num(snapshot.clip_merge_all_clips), pending = num(snapshot.clip_merge_pending);
+      const eta = num(snapshot.clip_merge_eta_s);
+      const paused = typeof snapshot.clip_merge_paused === "string" ? snapshot.clip_merge_paused : "";
+      const clipName = typeof snapshot.clip_merge_active === "string" ? snapshot.clip_merge_active : "";
+      const pct = (done, total) => (total > 0 ? Math.min(100, Math.floor(100 * done / total)) : 0);
+      const etaText = eta < 60 ? "under a minute" : (eta < 5400 ? "about " + Math.round(eta / 60) + " min"
+        : "about " + Math.floor(eta / 3600) + " h " + Math.round((eta % 3600) / 60) + " min");
+      const active = on && clips > 0 && allTotal > 0;
+      const clipsText = clips + " clip" + (clips === 1 ? "" : "s");
+      return {
+        on, active, paused,
+        clipPercent: pct(clipDone, clipTotal),
+        allPercent: pct(allDone, allTotal),
+        clipText: clipName ? clipName + " · " + pct(clipDone, clipTotal) + " % (" + clipDone.toLocaleString() + " / " + clipTotal.toLocaleString() + ")" : "Waiting",
+        allText: clipsText + " · " + pct(allDone, allTotal) + " %" + (paused ? " · paused (" + paused + ")" : " · " + etaText + " left"),
+        summary: !on ? (pending > 0 ? pending + " split clip" + (pending === 1 ? "" : "s") + ", merge off" : "")
+          : (active ? (paused ? "Merge paused (" + paused + ")" : "Merging " + clipsText + " · " + etaText) : "")
+      };
+    }
+
+    // 200 s -> "3 min 20 s"; 45 s -> "45 s".
+    function formatFolderDuration(seconds) {
+      const total = Math.round(seconds);
+      const minutes = Math.floor(total / 60);
+      const rest = total % 60;
+      return minutes > 0 ? minutes + " min" + (rest > 0 ? " " + rest + " s" : "") : rest + " s";
+    }
+
+    function renderSnapshot(snapshot, options) {
+      const columnPass = !!(options && options.columnPass);
+      if (!columnPass) {
+        snapshot = dualShownSnapshot(snapshot);
+        const base = dualBaseSnapshot(snapshot);
+        const columns = !!base && dualColumnsActive(base);
+        dualLayoutClasses(base, columns);
+        if (columns)
+          renderCam1Column(base);   // CAM1's column first; this pass then draws the page's own values over everything else
+        scheduleDualColumnAlign(columns);
+      }
+      // /api/state carries the write-buffer, storage pre-roll, split and merge fields under "system"; the page reads them at the top level.
       const systemFields = snapshot && snapshot.system && typeof snapshot.system === "object" ? snapshot.system : null;
       if (systemFields) {
         for (const key of Object.keys(systemFields)) {
-          if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_")) && snapshot[key] === undefined)
+          if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_") || key.startsWith("frames_per_folder")
+               || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
             snapshot[key] = systemFields[key];
         }
       }
@@ -15307,6 +17168,7 @@ std::string_view webControlPageHtml()
       const grayscaleEnabled = !!uiState.grayscale_enabled;
       const externalMonitorEnabled = !!uiState.external_monitor_enabled;
       const externalMonitorMode = uiState.external_monitor_mode || "Clean Feed";
+      const previewSource = uiState.preview_source || "Both";
       const externalMonitorInfoOverlay = uiState.external_monitor_info_overlay || "On";
       const externalMonitorOrientation = uiState.external_monitor_orientation || "Landscape";
       const uiOrientation = uiState.ui_orientation || "Landscape";
@@ -15376,6 +17238,13 @@ std::string_view webControlPageHtml()
       setPreviewSmpteEnabled(smpteEnabled);
       setFalseColorLegend(falseColorMode, falseColorEnabled && !smpteEnabled);
       setPreviewAspectForSnapshot(snapshot);
+      updateDualPreview(dualBaseSnapshot(snapshot));
+      renderDualSettingsFor(snapshot);
+      renderModesSwitch();
+      renderPanes(dualBaseSnapshot(snapshot), snapshot);
+      renderCam1Badge(dualBaseSnapshot(snapshot));
+      renderRecordControls(dualBaseSnapshot(snapshot));
+      applyDualTies(snapshot, columnPass);
       if (smpteEnabled)
         setPreviewOverlay(false, "", false);
 
@@ -15390,6 +17259,16 @@ std::string_view webControlPageHtml()
       const pillRecording = isRecording && !bufferStopped;
       const prerollShown = snapshot.storage_preroll_active === true && !pillRecording && !isTimelapse;
       setText("recordingStatus", prerollShown ? "PRE-ROLL" : !hasMedia ? (snapshot.media_state === "removed" ? "MEDIA REMOVED" : "NO MEDIA") : (isTimelapse ? "TIMELAPSE" : (isSoundRecording ? "SOUND REC" : (pillRecording ? "REC" : snapshot.media_writes_pending && snapshot.buffer_safety_stop !== true ? "WRITING" : "READY"))));
+      // Dropped frames in the take (as the touch UI): the count, or "!" when Core gives no count.
+      const dropBadge = document.getElementById("droppedFrameBadge");
+      if (dropBadge) {
+        const dropCount = Number(snapshot.recording_dropped_frames) || 0;
+        dropBadge.hidden = snapshot.recording_has_dropped_frames !== true;
+        dropBadge.textContent = dropCount > 0 ? String(dropCount) : "!";
+        dropBadge.title = dropCount > 0 ? dropCount + " dropped frames in the take" : "Dropped frames in the take";
+        dropBadge.setAttribute("aria-label", dropBadge.title);
+      }
+      updateVuMeter(snapshot);
       // Raw takes say what the sensor delivers on the resolution line: "4K · 16-bit · Clear HDR".
       const rawBits = rawBitDepthNumber(snapshot.raw_bit_depth);
       const rawResolutionDetail = speedRampFormatSupported(snapshot) && rawBits > 0
@@ -15590,6 +17469,7 @@ std::string_view webControlPageHtml()
       ensureSelectOptions("settingsImuDriverSelect", imuDriverOptions);
       ensureSelectOptions("settingsImuOrientationSelect", imuOrientationOptions);
       ensureSelectOptions("settingsExternalMonitorModeSelect", externalMonitorModeOptions);
+      ensureSelectOptions("settingsPreviewSourceSelect", previewSourceOptions);
       ensureSelectOptions("settingsExternalMonitorInfoOverlaySelect", externalMonitorInfoOverlayOptions);
       ensureSelectOptions("settingsExternalMonitorOrientationSelect", externalMonitorOrientationOptions);
       ensureSelectOptions("settingsFocusPeakingThresholdSelect", focusPeakingThresholdOptions);
@@ -15648,6 +17528,7 @@ std::string_view webControlPageHtml()
       setFormValue("settingsImuDriverSelect", imuDriverText);
       setFormValue("settingsImuOrientationSelect", imuOrientation);
       setFormValue("settingsExternalMonitorModeSelect", externalMonitorMode);
+      setFormValue("settingsPreviewSourceSelect", previewSource);
       setFormValue("settingsExternalMonitorInfoOverlaySelect", externalMonitorInfoOverlay);
       setFormValue("settingsExternalMonitorOrientationSelect", externalMonitorOrientation);
       setFormValue("settingsFocusPeakingThresholdSelect", focusPeakingThreshold);
@@ -15853,6 +17734,87 @@ std::string_view webControlPageHtml()
             : "On: runs when Core starts and when a card is inserted or formatted. Off: only the button runs it.");
         }
       }
+      // Split long takes: [storage] frames_per_folder (0 = one folder, else frames per part folder). Merge: [storage]
+      // clip_merge, which joins the parts when the camera is idle. Both from the env are shown but locked, like the pre-roll.
+      const clipSplitRow = document.getElementById("clipSplitRow");
+      if (clipSplitRow) {
+        const splitKnown = typeof snapshot.frames_per_folder === "number";
+        clipSplitRow.hidden = !splitKnown;
+        if (splitKnown) {
+          const perFolder = snapshot.frames_per_folder;
+          // Off, the presets, and a value from the config file that is not a preset (Core takes 0 or 100-100000).
+          const presets = [1000, 2000, 5000, 10000];
+          if (perFolder > 0 && !presets.includes(perFolder))
+            presets.push(perFolder), presets.sort((a, b) => a - b);
+          const splitContainer = document.getElementById("clipSplitOptions");
+          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 ? String(perFolder) : "Off", async (value) => {
+            const wanted = value === "Off" ? 0 : Number(value);
+            if (wanted === perFolder)
+              return;
+            try {
+              await sendCommand({ cmd: "set_frames_per_folder", value: wanted });
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 3);
+          const splitFromEnv = snapshot.frames_per_folder_env === true;
+          if (splitFromEnv && splitContainer)
+            for (const button of splitContainer.querySelectorAll("button"))
+              button.disabled = true;
+          const fps = Number(snapshot.fps);
+          const perFolderTime = perFolder > 0 && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
+          setText("clipSplitNote", (splitFromEnv ? "Set by APERTAR_CDNG_FRAMES_PER_FOLDER. " : "")
+            + (perFolder > 0
+              ? "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
+              : "All frames of a take in one folder. On exFAT, writing slows down as the folder grows, and long takes can drop frames."));
+        }
+      }
+      const clipMergeRow = document.getElementById("clipMergeRow");
+      if (clipMergeRow) {
+        const mergeKnown = typeof snapshot.clip_merge_enabled === "boolean";
+        clipMergeRow.hidden = !mergeKnown;
+        if (mergeKnown) {
+          const mergeOn = snapshot.clip_merge_enabled;
+          const mergeContainer = document.getElementById("clipMergeOptions");
+          buildOptionButtonsInto(mergeContainer, ["On", "Off"], mergeOn ? "On" : "Off", async (value) => {
+            if ((value === "On") === mergeOn)
+              return;
+            try {
+              await sendCommand({ cmd: "set_clip_merge", enabled: value === "On" });
+            } catch (error) {
+              showToast(error.message, true);
+            }
+          }, 2);
+          const mergeEnvOff = snapshot.clip_merge_env_off === true;
+          if (mergeEnvOff && mergeContainer)
+            for (const button of mergeContainer.querySelectorAll("button"))
+              button.disabled = true;
+          const active = typeof snapshot.clip_merge_active === "string" ? snapshot.clip_merge_active : "";
+          const pending = typeof snapshot.clip_merge_pending === "number" ? snapshot.clip_merge_pending : 0;
+          const last = typeof snapshot.clip_merge_last === "string" ? snapshot.clip_merge_last : "";
+          const status = active
+            ? "Merging " + active + (pending > 1 ? " (" + pending + " clips waiting)" : "") + "."
+            : (pending > 0 ? pending + " split clip" + (pending === 1 ? "" : "s") + " waiting." : (last ? "Last: " + last + "." : ""));
+          setText("clipMergeNote", (mergeEnvOff ? "Turned off by APERTAR_CLIP_MERGE. " : "")
+            + (mergeOn
+              ? "Joins the parts into one folder when the camera is idle; pauses when a take starts. A 30-minute take takes a few minutes."
+              : "Split clips stay in their part folders.")
+            + (status ? " " + status : ""));
+          const progress = clipMergeProgress(snapshot);
+          const progressBlock = document.getElementById("clipMergeProgress");
+          if (progressBlock) {
+            progressBlock.hidden = !progress.active;
+            if (progress.active) {
+              setText("clipMergeClipValue", progress.clipText);
+              setText("clipMergeAllValue", progress.allText);
+              document.getElementById("clipMergeClipBar").style.width = progress.clipPercent + "%";
+              document.getElementById("clipMergeAllBar").style.width = progress.allPercent + "%";
+            }
+          }
+          if (mergeOn && !progress.active && !active && pending === 0)
+            setText("clipMergeNote", document.getElementById("clipMergeNote").textContent + " Nothing to merge.");
+        }
+      }
       const prerollLast = document.getElementById("storagePrerollLast");
       if (prerollLast) {
         const lastText = prerollKnown && typeof snapshot.storage_preroll_last === "string" ? snapshot.storage_preroll_last : "";
@@ -15909,7 +17871,8 @@ std::string_view webControlPageHtml()
           const resolution = fpsResolution(fpsEntries[index].value);
           button.classList.toggle("ladder-switch", !button.classList.contains("active") && resolution !== ladderCurrent);
           button.appendChild(createDomElement("span", "pill-sub", "Resolution " + resolution));
-          const mode = state.ladderServer && Array.isArray(state.ladderServer.resolutions) ? state.ladderServer.resolutions[resolution - 1] : null;
+          const ladder0 = ladderServerFor("cam0");
+          const mode = ladder0 && Array.isArray(ladder0.resolutions) ? ladder0.resolutions[resolution - 1] : null;
           if (mode)
             button.appendChild(createDomElement("span", "pill-sub", ladderSizeText(mode) + " · " + ladderClassText(mode)));
         });
@@ -16024,6 +17987,7 @@ std::string_view webControlPageHtml()
       }, 3);
 
       renderSpeedRamp(snapshot);
+      renderDualSensorCard(snapshot);
       renderValueListsEditor(snapshot);
       renderModeLadder(snapshot);
       pbSnapshotChanged(snapshot);
@@ -16085,17 +18049,21 @@ std::string_view webControlPageHtml()
         await applyStillTimelapseToggle(value === "On");
       }, 2);
 
-      for (const [id, target, current] of [["settingsTimecodeOptions", "ui", uiTimecodeLabel(snapshot)],
-                                           ["settingsFileTimecodeOptions", "files", fileTimecodeLabel(snapshot)]]) {
-        buildOptionButtons(id, timecodeChoices(),
-          current, async (value) => {
-            try {
-              await sendCommand(timecodeCommand(value, target));
-            } catch (error) {
-              showToast(error.message, true);
-            }
-          }, 2);
-      }
+      buildOptionButtons("settingsTimecodeOptions", timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeModeCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      buildOptionButtons("settingsFileTimecodeOptions", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeFilesCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 3);
 
       buildOptionButtons("settingsAutofocusModeOptions", autofocusModeOptions, autofocusModeText, async (value) => {
         try {
@@ -16154,7 +18122,7 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       });
-      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled !== false), async (value) => {
+      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled === true), async (value) => {
         try {
           await sendCommand({ cmd: "set_audio_recorded_outline_enabled", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
@@ -16351,12 +18319,31 @@ std::string_view webControlPageHtml()
                 formatVolts(snapshot.system.battery_voltage_v),
                 batteryInputPresent ? batteryType : snapshot.system.battery_label,
                 isFinite(profileBatteryPercent) ? profileBatteryPercent : 0);
+      const storageMerge = clipMergeProgress(snapshot);
       setMetric(
         "storage",
         hasMedia ? formatStorage(snapshot.system.media_free_bytes) : "No Media",
-        snapshot.system.media_label,
+        hasMedia && storageMerge.summary ? storageMerge.summary : snapshot.system.media_label,
         hasMedia ? snapshot.system.media_used_percent : 0
       );
+      const storageMergeTrack = document.getElementById("storageMergeTrack");
+      if (storageMergeTrack) {
+        storageMergeTrack.hidden = !(hasMedia && storageMerge.active);
+        document.getElementById("storageMergeBar").style.width = storageMerge.allPercent + "%";
+      }
+      // The READY pill shows in grey what is left to merge of all clips (full at the start, emptying as they merge),
+      // only while the camera is idle: not during a take (the frame buffer bar has the pill then), the pre-roll or
+      // anything else that pauses the merge.
+      const mergePill = document.querySelector(".status-pill");
+      if (mergePill) {
+        const label = document.getElementById("recordingStatus");
+        const mergeFillOn = hasMedia && storageMerge.active && !storageMerge.paused && !!label && label.textContent === "READY";
+        mergePill.classList.toggle("merge-fill", mergeFillOn);
+        if (mergeFillOn)
+          mergePill.style.setProperty("--merge-fill", (100 - storageMerge.allPercent) + "%");
+        else
+          mergePill.style.removeProperty("--merge-fill");
+      }
       setMetric(
         "timeLeft",
         mediaRemainingText,
@@ -16364,6 +18351,24 @@ std::string_view webControlPageHtml()
         hasMedia ? snapshot.system.time_left_percent : 0
       );
       setText("timeLeftLabel", mediaRemainingLabel);
+
+      // The media card (NVMe only): write rate and temperature, labelled CFE with the CFexpress hat, else NVMe.
+      const cardKind = hasMedia ? String(snapshot.system.media_card_label || "") : "";
+      const cardWriteCard = document.getElementById("cardWriteCard");
+      const cardTempCard = document.getElementById("cardTempCard");
+      if (cardWriteCard)
+        cardWriteCard.hidden = cardKind === "";
+      if (cardTempCard)
+        cardTempCard.hidden = cardKind === "";
+      if (cardKind !== "") {
+        const writeMBps = snapshot.system.media_write_mb_s;
+        setText("cardWriteLabel", cardKind + " write");
+        setText("cardTempLabel", cardKind + " temp");
+        setMetric("cardWrite", typeof writeMBps === "number" ? Math.round(writeMBps) + " MB/s" : "--",
+          snapshot.system.media_write_label || "", snapshot.system.media_write_percent);
+        setMetric("cardTemp", formatDegrees(snapshot.system.media_temp_c), snapshot.system.media_temp_label || "",
+          snapshot.system.media_temp_percent);
+      }
 
       renderFavoritesPanel(snapshot);
 
@@ -16488,6 +18493,50 @@ std::string_view webControlPageHtml()
       }
     }
 
+    // The audio meter beside the timecode: its level comes with /api/state, and with the 250 ms /api/buffer poll
+    // while a take records sound (the poll keeps running for it with the bar option off).
+    const vuMeter = { segments: 10, wanted: false };
+
+    function vuPollWanted() {
+      return vuMeter.wanted;
+    }
+
+    function setVuLevel(level) {
+      const meter = document.getElementById("vuMeter");
+      const bars = document.getElementById("vuBars");
+      if (!meter || !bars)
+        return;
+      if (bars.children.length !== vuMeter.segments) {
+        bars.innerHTML = "";
+        for (let index = 0; index < vuMeter.segments; index++) {
+          const threshold = (index + 1) / vuMeter.segments;   // the touch UI's colours: red above 0.8, yellow above 0.55
+          const segment = document.createElement("span");
+          segment.className = threshold > 0.8 ? "high" : (threshold > 0.55 ? "mid" : "");
+          bars.appendChild(segment);
+        }
+      }
+      const normalized = Math.max(0, Math.min(100, Number(level) || 0)) / 100;
+      Array.from(bars.children).forEach((segment, index) =>
+        segment.classList.toggle("on", normalized >= (index + 1) / vuMeter.segments));
+      meter.setAttribute("aria-valuenow", String(Math.round(normalized * 100)));
+    }
+
+    function updateVuMeter(snapshot) {
+      const meter = document.getElementById("vuMeter");
+      if (!meter)
+        return;
+      const uiState = snapshot.ui || {};
+      const recordAudio = uiState.record_audio_enabled === true && uiState.photo_mode_enabled !== true;
+      const soundTake = snapshot.sound_recording === true || (snapshot.recording === true && recordAudio);
+      meter.classList.toggle("hidden", !(recordAudio || soundTake));
+      meter.classList.toggle("recording", soundTake && uiState.audio_recorded_outline_enabled !== false);
+      meter.title = soundTake ? "Recording sound" : "Audio input (moves while sound is recorded)";
+      vuMeter.wanted = soundTake;
+      setVuLevel(soundTake ? snapshot.audio_input_level : 0);
+      if (soundTake)
+        startFrameBufferTimer();
+    }
+
     function pollFrameBufferBar() {
       if (frameBufferBar.inFlight)
         return;
@@ -16497,6 +18546,8 @@ std::string_view webControlPageHtml()
       fetch("/api/buffer", { cache: "no-store", signal: controller.signal })
         .then((response) => response.json())
         .then((payload) => {
+          if (vuMeter.wanted && payload && typeof payload.audio_input_level === "number")
+            setVuLevel(payload.audio_input_level);
           if (payload && typeof payload.storage_preroll_active === "boolean") {
             frameBufferBar.preroll = payload.storage_preroll_active;
             frameBufferBar.prerollAtMs = performance.now();
@@ -16533,7 +18584,7 @@ std::string_view webControlPageHtml()
           window.clearTimeout(timeout);
           frameBufferBar.inFlight = false;
           if (frameBufferBar.timer && !frameBufferBar.recording && !frameBufferBar.safetyStop && frameBufferBar.fill <= 0
-              && !prerollPollWanted())
+              && !prerollPollWanted() && !vuPollWanted())
             stopFrameBufferPolling();
         });
     }
@@ -16566,7 +18617,7 @@ std::string_view webControlPageHtml()
         const watchStop = (mode === "frames" || mode === "ram") && (snapshot.recording === true || frameBufferBar.safetyStop);
         if (watchStop)
           startFrameBufferTimer();
-        else if (!prerollPollWanted())
+        else if (!prerollPollWanted() && !vuPollWanted())
           stopFrameBufferPolling();
         if (!watchStop)
           frameBufferBar.fill = 0;
@@ -16612,10 +18663,13 @@ std::string_view webControlPageHtml()
       const editor = document.getElementById("settingsConfigEditor");
       const reloadButton = document.getElementById("reloadConfigButton");
       const saveButton = document.getElementById("saveConfigButton");
+      const checkButton = document.getElementById("checkConfigButton");
       if (reloadButton)
         reloadButton.disabled = loading || saving;
       if (saveButton)
         saveButton.disabled = loading || saving || !state.configDirty;
+      if (checkButton)
+        checkButton.disabled = !state.configRevision;
       if (editor)
         editor.disabled = loading || saving;
 
@@ -16645,7 +18699,8 @@ std::string_view webControlPageHtml()
       buses: [],             // the Pi's I2C buses: { bus, name }
       scans: {},             // bus -> { loading } or { found } or { error }: the Hardware card's Scan
       dpiLines: [],          // config.txt lines that load a DPI display
-      apply: null,           // get_controls apply: { state, detail, pending }
+      gpioChips: [],         // the GPIO chips there are: { path, label, lines, header }; header = the one chip=auto means
+      apply: null,           // /api/config apply: { state, detail, pending }
       history: [],           // saved versions, newest first
       listening: false,
     };
@@ -17188,6 +19243,42 @@ std::string_view webControlPageHtml()
       return null;
     }
 
+    // The GPIO chip a section's pins are on, as the page has it now (an unsaved edit first). "auto" is the Pi's
+    // own header; anything else is the path of another chip (an expander, a microcontroller).
+    function controlsGpioChipSetting(section) {
+      const edit = controlsState.settingEdits.get(section + "|chip");
+      if (edit)
+        return String(edit.value || "").trim() || "auto";
+      const peripheral = controlsState.peripherals.find((candidate) => candidate.section === section);
+      const setting = peripheral && (peripheral.settings || []).find((candidate) => candidate.key === "chip");
+      return (setting && String(setting.value).trim()) || "auto";
+    }
+    function controlsGpioChipInfo(chip) {
+      return controlsState.gpioChips.find((candidate) => chip === "auto" ? candidate.header : candidate.path === chip) || null;
+    }
+    function controlsGpioChipOnHeader(chip) {
+      const info = controlsGpioChipInfo(chip);
+      return chip === "auto" || (!!info && info.header);
+    }
+    // Buttons, encoders and switches share one chip: the GPIO input's, [gpio_buttons] chip=.
+    function controlsInputGpioChip() {
+      return controlsGpioChipSetting("gpio_buttons");
+    }
+    // The lines of a chip a control can sit on: on the Pi's header the model's list (it leaves out the I2C, power
+    // and reserved pins), on another chip every line it has.
+    function controlsGpioLines(chipSetting) {
+      if (controlsGpioChipOnHeader(chipSetting))
+        return (controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [];
+      const chip = controlsGpioChipInfo(chipSetting);
+      return Array.from({ length: chip ? chip.lines : 0 }, (unused, line) => line);
+    }
+    // Is the tally's GPIO line on the chip the buttons are on? Only then can the two collide.
+    function controlsTallyOnInputChip() {
+      const input = controlsInputGpioChip();
+      const tally = controlsGpioChipSetting(controlsTallySection);
+      return input === tally || (controlsGpioChipOnHeader(input) && controlsGpioChipOnHeader(tally));
+    }
+
     // Pins something else holds: held outside Core, picked by another row (new or moved here), or the tally's
     // GPIO. skipRow / skipTally leave out the row asking.
     function controlsPinsTaken(skipRow, skipTally) {
@@ -17195,16 +19286,16 @@ std::string_view webControlPageHtml()
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
-      if (controlsState.dpiLines.length > 0)
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
-          taken.add(pin);                                // the DPI display holds them
+          taken.add(pin);                                // the DPI display holds the header's
       (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
         const info = row === skipRow ? null : controlsRowPinInfo(row);
         if (info)
           info.now.forEach((pin) => { if (pin !== null) taken.add(pin); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !skipTally && tallyShown(tally, "target") === "gpio") {
+      if (tally && !skipTally && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0)
           taken.add(pin);
@@ -17257,8 +19348,9 @@ std::string_view webControlPageHtml()
             owners.set(line.pin, { kind: "outside", text: line.consumer || "another program" });
         });
       });
-      // A DPI display (a Hyperpixel) holds GPIO 0 to 27: greyed and not to be picked, like a pin held outside Core.
-      if (controlsState.dpiLines.length > 0)
+      // A DPI display (a Hyperpixel) holds the header's GPIO 0 to 27: greyed and not to be picked, like a pin held
+      // outside Core. Another chip's lines are free of it.
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
           if (!owners.has(pin))
             owners.set(pin, { kind: "outside", text: "the DPI display" });
@@ -17272,7 +19364,7 @@ std::string_view webControlPageHtml()
           entry.pins.forEach((pin) => { if (pin !== null && !owners.has(pin)) owners.set(pin, { kind: "entry", entry: entry, text: controlsNewTitles[entry.kind] + " (not saved)" }); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio") {
+      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0 && !owners.has(pin))
           owners.set(pin, { kind: "tally", tally: tally, text: "Tally light" });
@@ -17280,11 +19372,13 @@ std::string_view webControlPageHtml()
       return owners;
     }
     // Every pin a dropdown lists: the model's free and used pins, whoever holds one now, and the extra pins asked for.
-    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones).
-    function controlsPinChoices(owners, extra) {
-      const pins = ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [])
-        .concat((((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || [])).map((used) => used.pin))
-        .concat(Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
+    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones). chipSetting is the chip the
+    // dropdown is for: the GPIO input's when not given.
+    function controlsPinChoices(owners, extra, chipSetting) {
+      const setting = chipSetting || controlsInputGpioChip();
+      const used = controlsGpioChipOnHeader(setting)
+        ? ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || []).map((entry) => entry.pin) : [];
+      const pins = controlsGpioLines(setting).concat(used, Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
       return Array.from(new Set(pins)).filter((pin) => Number.isFinite(pin)).sort((a, b) => a - b);
     }
     // Remote only: a GPIO button with no pin, saved as remote<N> in [gpio_buttons] (Core: ControlsModel.hpp). The
@@ -17427,13 +19521,12 @@ std::string_view webControlPageHtml()
       renderControls();
     }
 
-    // The pins a new row may take: free on the header, not held outside Core, not picked by another new row
-    // or by a row moved here.
+    // The pins a new row may take: free on the GPIO input's chip, not held outside Core, not picked by another
+    // new row or by a row moved here.
     function controlsFreePins(entry) {
-      const model = controlsState.model;
       const taken = controlsPinsTaken(null, false);
       controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => { if (pin !== null) taken.add(pin); }); });
-      return ((model && model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
+      return controlsGpioLines(controlsInputGpioChip()).filter((pin) => !taken.has(pin));
     }
 
     // A row added here: its pins are chosen in the row; a three-way switch has two.
@@ -17671,6 +19764,14 @@ std::string_view webControlPageHtml()
         info.textContent = status.info;
         text.appendChild(info);
       }
+      if (withSettings && status.chip) {                      // the GPIO chip Core reads the buttons on
+        const chip = document.createElement("div");
+        chip.className = "controls-row-detail";
+        chip.textContent = status.chip.ok
+          ? "Chip " + status.chip.path + " (" + status.chip.label + "), " + status.chip.lines + " lines"
+          : "Chip: " + (status.chip.error || "not found");
+        text.appendChild(chip);
+      }
       head.appendChild(text);
       const pill = document.createElement("div");
       pill.className = "online-pill";
@@ -17724,6 +19825,20 @@ std::string_view webControlPageHtml()
             option.textContent = optionText;
             control.appendChild(option);
           });
+        } else if (setting.key === "chip") {
+          // The GPIO chips there are. Auto is the Pi's own header; a chip the file names that is not there stays listed.
+          control = document.createElement("select");
+          control.className = "settings-select";
+          const chips = [["auto", "Auto (the Pi's own pins)"], ...controlsState.gpioChips.map((chip) =>
+            [chip.path, chip.path + " · " + chip.label + " · " + chip.lines + " lines" + (chip.header ? " (the Pi's own pins)" : "")])];
+          if (!chips.some(([optionValue]) => optionValue === value))
+            chips.push([value, value + " (not found)"]);
+          chips.forEach(([optionValue, optionText]) => {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            control.appendChild(option);
+          });
         } else if (setting.key === "pcf_pin") {
           // An expander has eight pins; -1 is none.
           control = document.createElement("select");
@@ -17741,6 +19856,13 @@ std::string_view webControlPageHtml()
           if (setting.type === "number") {
             control.min = String(setting.min);
             control.max = String(setting.max);
+            if (setting.key === "line" && !controlsGpioChipOnHeader(controlsGpioChipSetting(peripheral.section))) {
+              const chip = controlsGpioChipInfo(controlsGpioChipSetting(peripheral.section));   // another chip: its own lines
+              if (chip)
+                control.max = String(chip.lines - 1);
+              else
+                control.removeAttribute("max");
+            }
           }
         }
         control.value = value;
@@ -17828,9 +19950,11 @@ std::string_view webControlPageHtml()
       const shownPin = parseInt(tallyShown(peripheral, viaPcf ? "pcf_pin" : "line"), 10);
       const current = Number.isFinite(shownPin) && shownPin >= 0 ? (viaPcf ? "p:" : "g:") + shownPin : "none";
       const self = { tally: true };
-      const owners = controlsPinOwners(self);
+      // The buttons' pins matter here only when the tally's chip= is the chip they are on.
+      const owners = controlsTallyOnInputChip() ? controlsPinOwners(self) : new Map();
       const fileGpio = parseInt(tallyRaw(peripheral, "line"), 10);
-      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null]);
+      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null],
+        controlsGpioChipSetting(peripheral.section));
       const options = [["none", "None"], ...gpioPins.map((pin) => controlsPinOption(pin, "", owners.get(pin), "g:" + pin))];
       if (controlsExpanderAttached() || current.startsWith("p:")) {      // PCF8574 pins only with an expander detected
         const used = controlsPcfPinsInUse();
@@ -18206,7 +20330,7 @@ std::string_view webControlPageHtml()
         if (controlsState.dpiLines.length > 0) {
           const dpi = document.createElement("div");
           dpi.className = "controls-scan";
-          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot.";
+          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds the Pi's GPIO 0 to 27, so buttons on those pins and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot, or put the buttons on another GPIO chip.";
           buses.appendChild(dpi);
         }
         host.appendChild(buses);
@@ -18229,10 +20353,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your settings stay on the page. Press Reload to see the newer file." : "";
-          showHardwareMessage((result.error || "Could not save the settings.") + kept, found, false);
+          showHardwareMessage(result.error || "Could not save the settings.", [], false);
           showToast(result.error || "Could not save the settings.", true);
           return;
         }
@@ -18260,23 +20381,24 @@ std::string_view webControlPageHtml()
       controlsState.loading = true;
       updateControlsButtons();
       try {
-        const [controls, catalog] = await Promise.all([
-          controlsCall({ cmd: "get_controls" }),
+        const [payload, catalog] = await Promise.all([
+          fetch("/api/config", { cache: "no-store" }).then((response) => response.json()),
           controlsState.catalog ? Promise.resolve(null) : controlsCall({ cmd: "list_actions" }),
         ]);
-        if (!controls.ok)
-          throw new Error(controls.error || "Could not load the controls.");
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not load the controls.");
         if (catalog) {
           if (!catalog.ok)
             throw new Error(catalog.error || "Could not load the list of actions.");
           controlsState.catalog = catalog;
         }
-        controlsState.revision = String(controls.controls.revision || "");
-        controlsState.model = controls.controls.model || null;
-        controlsState.peripherals = controls.controls.peripherals || [];
-        controlsState.buses = controls.controls.i2c_buses || [];
-        controlsState.dpiLines = controls.controls.dpi_lines || [];
-        controlsState.apply = controls.controls.apply || null;
+        controlsState.revision = String(payload.revision || "");
+        controlsState.model = payload.model || null;
+        controlsState.peripherals = payload.peripherals || [];
+        controlsState.buses = payload.i2c_buses || [];
+        controlsState.dpiLines = payload.dpi_lines || [];
+        controlsState.gpioChips = payload.gpio_chips || [];
+        controlsState.apply = payload.apply || null;
         controlsChipLines.clear();
         controlsSeparateTurns.clear();
         controlsReplaced.clear();
@@ -18295,7 +20417,7 @@ std::string_view webControlPageHtml()
               suffix: line.key.slice(row.base.length), value: line.raw, orig: line.key, raw: line.raw, removed: false,
             })) });
         });
-        const found = controls.controls;
+        const found = payload;
         if (found.errors > 0)
           showControlsMessage("The file has " + found.errors + (found.errors === 1 ? " error" : " errors") + ". Config shows where.", found.issues.filter((issue) => issue.error), false);
         else if (found.replaced && found.replaced.replaced)
@@ -18515,12 +20637,13 @@ std::string_view webControlPageHtml()
     // A moment after a save, read the file's state again: what Core restarted, and what still needs a restart.
     function controlsRecheckSoon() {
       window.setTimeout(async () => {
-        const reply = await controlsCall({ cmd: "get_controls" });
-        if (!reply.ok)
+        const response = await fetch("/api/config", { cache: "no-store" });
+        const payload = await response.json();
+        if (!payload.ok)
           return;
-        controlsState.apply = reply.controls.apply || null;
+        controlsState.apply = payload.apply || null;
         if (!controlsDirty() && !hardwareDirty()) {
-          controlsState.peripherals = reply.controls.peripherals || controlsState.peripherals;
+          controlsState.peripherals = payload.peripherals || controlsState.peripherals;
           renderControls();
           renderHardware();
         }
@@ -18551,10 +20674,21 @@ std::string_view webControlPageHtml()
       });
     }
 
+    async function fetchConfigHistory(name) {
+      const response = await fetch("/api/config/history" + (name ? "?name=" + encodeURIComponent(name) : ""), { cache: "no-store" });
+      const payload = await response.json();
+      if (!payload.ok)
+        throw new Error(payload.error || "Could not read that version.");
+      return payload;
+    }
+
     // T42 Undo last save: put back the version the last save replaced (it is in the file's history).
     async function loadControlsHistory() {
-      const reply = await controlsCall({ cmd: "controls_history" });
-      controlsState.history = reply.ok ? reply.history || [] : [];
+      try {
+        controlsState.history = (await fetchConfigHistory("")).history || [];
+      } catch (error) {
+        controlsState.history = [];
+      }
       const undo = document.getElementById("undoControlsButton");
       if (undo)
         undo.disabled = !controlsState.history.some((entry) => entry.by !== "adopted");
@@ -18580,14 +20714,16 @@ std::string_view webControlPageHtml()
         return;
       if (!window.confirm("Put back the file as it was before the save at " + last.saved_at + "? Unsaved changes on this page are dropped."))
         return;
-      const version = await controlsCall({ cmd: "controls_history", name: last.name });
-      if (!version.ok) {
-        showToast(version.error || "Could not read that version.", true);
+      let version;
+      try {
+        version = await fetchConfigHistory(last.name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const result = await controlsCall({ cmd: "set_controls", base: controlsState.revision, text: version.text, by: "webui_undo" });
       if (!result.ok) {
-        showControlsMessage(result.error || "Could not undo.", result.issues, false);
+        showControlsMessage(result.error || "Could not undo.", [], false);
         return;
       }
       await loadControls(true);
@@ -18600,6 +20736,7 @@ std::string_view webControlPageHtml()
     // T42 Listen: press a button or turn a knob and its row lights up.
     let controlsListenTimer = 0;
     let controlsListenSeq = -1;
+    let controlsListenStarted = 0;
     function controlsRowForKey(section, key) {
       const rows = (controlsState.model && controlsState.model.rows) || [];
       return rows.findIndex((row) => row.source === section && (row.lines.some((line) => line.key === key) || (row.keys || []).includes(key) ||
@@ -18616,17 +20753,21 @@ std::string_view webControlPageHtml()
         note.textContent = "Listening: press a button, flip a switch or turn a knob, and its row lights up.";
         note.hidden = !on;
       }
-      window.clearInterval(controlsListenTimer);
+      window.clearTimeout(controlsListenTimer);
       if (!on)
         return;
       controlsListenSeq = -1;
       const started = Date.now();
-      controlsListenTimer = window.setInterval(async () => {
+      // Ask again only after the reply: the command waits for the command lock, so at most one is ever waiting.
+      const listen = async () => {
         if (Date.now() - started > 120000 || !document.getElementById("controlsRows").offsetParent) {
           setControlsListening(false);
           return;
         }
-        const reply = await controlsCall({ cmd: "controls_last_input" });
+        const reply = await controlsCall({ cmd: "controls_last_input" }).catch(() => ({ ok: false }));
+        if (!controlsState.listening || controlsListenStarted !== started)
+          return;
+        controlsListenTimer = window.setTimeout(listen, 300);
         if (!reply.ok)
           return;
         if (controlsListenSeq < 0) {
@@ -18645,7 +20786,9 @@ std::string_view webControlPageHtml()
           element.scrollIntoView({ block: "center", behavior: "smooth" });
           window.setTimeout(() => element.classList.remove("heard"), 2000);
         }
-      }, 300);
+      };
+      controlsListenStarted = started;
+      controlsListenTimer = window.setTimeout(listen, 300);
     }
 
     async function saveControls() {
@@ -18657,10 +20800,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your choices stay on the page. Press Reload to see the newer file." : "";
-          showControlsMessage((result.error || "Could not save the controls.") + kept, found, false);
+          showControlsMessage(result.error || "Could not save the controls.", [], false);
           showToast(result.error || "Could not save the controls.", true);
           return;
         }
@@ -18792,10 +20932,10 @@ std::string_view webControlPageHtml()
     // T43 Check: Core reads the text without saving it and says what it finds, with line numbers.
     async function checkConfigFile() {
       const editor = document.getElementById("settingsConfigEditor");
-      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision || "h", text: editor ? editor.value : "", dry_run: "true", by: "webui" });
+      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision, text: editor ? editor.value : "", dry_run: "true", by: "webui" });
       const found = Array.isArray(result.issues) ? result.issues : [];
-      if (!result.ok && found.length === 0) {
-        showConfigIssues(result.error || "Could not check the text.", result.new_errors || []);
+      if (!result.ok) {
+        showConfigIssues(result.error || "Could not check the text.", []);
         return;
       }
       if (found.length === 0) {
@@ -18805,7 +20945,7 @@ std::string_view webControlPageHtml()
       }
       const errors = found.filter((issue) => issue.error).length;
       showConfigIssues("Checked: " + errors + (errors === 1 ? " error" : " errors") + ", " + (found.length - errors) +
-        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save is refused until the errors are fixed." : "."), found);
+        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save writes the file anyway; the readers skip what they cannot use." : "."), found);
     }
 
     // T43: the lines that differ between the loaded file and the editor (a longest-common-subsequence line diff),
@@ -18892,9 +21032,11 @@ std::string_view webControlPageHtml()
         return;
       if (state.configDirty && !window.confirm("Replace the unsaved text in the editor with that version?"))
         return;
-      const reply = await controlsCall({ cmd: "controls_history", name: name });
-      if (!reply.ok) {
-        showToast(reply.error || "Could not read that version.", true);
+      let reply;
+      try {
+        reply = await fetchConfigHistory(name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const editor = document.getElementById("settingsConfigEditor");
@@ -18916,7 +21058,7 @@ std::string_view webControlPageHtml()
       state.configSaveInFlight = true;
       updateConfigEditorControls();
       try {
-        // The revision the text was loaded at: Core refuses a save over a newer file, and an old tab without one.
+        // The revision the text was loaded at: Core refuses a save over a newer file.
         const headers = { "Content-Type": "text/plain; charset=utf-8" };
         if (state.configRevision)
           headers["X-Apertar-Revision"] = state.configRevision;
@@ -18926,11 +21068,8 @@ std::string_view webControlPageHtml()
           body: text,
         });
         const payload = await response.json();
-        if (!payload.ok) {
-          const failure = new Error(payload.error || "Could not save config.");
-          failure.payload = payload;
-          throw failure;
-        }
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not save config.");
         state.configDirty = false;
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
@@ -18942,13 +21081,7 @@ std::string_view webControlPageHtml()
           showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
       } catch (error) {
         // A refused save leaves the text in the box (no reload), so nothing typed is lost.
-        const payload = error && error.payload;
-        if (payload) {
-          const found = payload.new_errors && payload.new_errors.length > 0 ? payload.new_errors : payload.issues;
-          const kept = payload.code === "stale" || payload.code === "conflict" || payload.code === "merge_review"
-            ? " Your text stays in the box. Press Reload Config to see the newer file." : "";
-          showConfigIssues(error.message + kept, found);
-        }
+        showConfigIssues(error.message || "Could not save config.", []);
         showToast(error.message || "Could not save config.", true);
       } finally {
         state.configSaveInFlight = false;
@@ -19047,6 +21180,7 @@ std::string_view webControlPageHtml()
         "uiOrientation",
         "externalMonitorEnabled",
         "externalMonitorMode",
+        "recordCameras",
         "externalMonitorInfoOverlay",
         "externalMonitorOrientation",
         "timecodeMode",
@@ -19275,6 +21409,12 @@ std::string_view webControlPageHtml()
             payload.audio_input_device = inputDevice;
           if (monitoringEnabled)
             payload.audio_output_device = outputDevice;
+          // NEXT TAKE: this press names its cameras (never in Sound Recorder mode, which Core refuses it in).
+          if (!soundRecorderEnabled && nextTake.value !== "Auto" && dualActive(dualBaseSnapshot(state.snapshot)))
+            payload.cameras = nextTake.value;
+          // An unlinked pane REC button records its own camera.
+          if (!soundRecorderEnabled && paneRec.cameras)
+            payload.cameras = paneRec.cameras;
 
           await sendCommand(payload);
           showToast(soundRecorderEnabled ? "Sound recording started." : "Recording started.", false);
@@ -19870,6 +22010,7 @@ std::string_view webControlPageHtml()
     // the lines already there; this card shows that state, asks Core what a change would do (dry_run) before saving,
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
     const bootConfig = {
+      linkNote: "",           // the two IMX585 lines differed in config.txt: Save writes Camera 0's rate on both
       payload: null,          // the last GET: path, revision, state, drm, text, helper
       form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
       loading: false,
@@ -19961,6 +22102,50 @@ std::string_view webControlPageHtml()
       if (!info || !info.link)
         return null;
       return form.links[port] === null || form.links[port] === undefined ? info.link.default_hz : Number(form.links[port]);
+    }
+
+    // Dual rules (design §5.4). The driver's mode table is shared, so two IMX585 run one link frequency, Camera 0's leading.
+    // It applies only when both ports are IMX585 (colour or mono): an IMX283 line never gets 891 MHz.
+    function bootConfigIsImx585(key) {
+      return String(key || "").indexOf("imx585") === 0;
+    }
+
+    function bootConfigTwoImx585(form) {
+      return bootConfigIsImx585(form.sensors.cam0) && bootConfigIsImx585(form.sensors.cam1);
+    }
+
+    // After any change: both IMX585 ports hold one value. `leader` is the port the user just changed (Camera 0 when none).
+    function bootConfigPairLinks(form, leader) {
+      if (!bootConfigTwoImx585(form))
+        return;
+      const from = leader === "cam1" ? "cam1" : "cam0";
+      const to = from === "cam0" ? "cam1" : "cam0";
+      form.links[to] = bootConfigEffectiveLink(form, from);
+    }
+
+    // On load: two different values in config.txt load Camera 0's into both and say so (the card then reads Unsaved).
+    function bootConfigLoadPairNote(form) {
+      bootConfig.linkNote = "";
+      if (!bootConfigTwoImx585(form))
+        return;
+      const hz0 = bootConfigEffectiveLink(form, "cam0");
+      const hz1 = bootConfigEffectiveLink(form, "cam1");
+      if (hz0 === null || hz1 === null || hz0 === hz1)
+        return;
+      bootConfig.linkNote = "The two link frequencies differ in config.txt; Save writes Camera 0's (" + megahertzText(hz0) + ") on both.";
+      bootConfigPairLinks(form, "cam0");
+    }
+
+    // Warnings for the pair on the card now (the form, not the file): what the relay can and cannot link.
+    function bootConfigPairWarning(form) {
+      const cam0 = form.sensors.cam0;
+      const cam1 = form.sensors.cam1;
+      if (!cam1 || cam1 === "none")
+        return "";
+      if (!cam0 || cam0 === "none")
+        return "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.";
+      const ok = bootConfigIsImx585(cam0) && (bootConfigIsImx585(cam1) || cam1 === "imx283");
+      return ok ? "" : "Dual sensor needs an IMX585 on Camera 0 and an IMX585 or an IMX283 on Camera 1.";
     }
 
     function bootConfigDirty() {
@@ -20121,7 +22306,508 @@ std::string_view webControlPageHtml()
         linkNote.textContent = "CSI-2 lane rate: sets the frame-rate ceiling.";
     }
 
+    // The Dual Sensor card. Until the primary reports cam1 (T61) "configured" is config.txt's Camera 1 sensor, as the
+    // Boot Config card reads it. Controls: cam1Settings, "unison" (CAM1 follows CAM0 in everything) or the controls
+    // tied one by one, a comma list in a fixed order ("" = none). A tied resolution between two sensor types is CAM1's
+    // closest matching mode (this replaces the CAM1 mode choice; Core keeps cam1Mode).
+    const dualTies = [["resolution", "Resolution and format"], ["iso", "ISO"], ["shutter", "Shutter"],
+      ["fps", "FPS"], ["wb", "WB"]];
+    const dualRecordOptions = ["Both", "Cam 0", "Cam 1", "Follow preview"];
+    const dualOnOff = (enabled) => [{ label: "Off", value: "Off", enabled }, { label: "On", value: "On", enabled }];
+
+    function dualSensorPorts() {
+      const cameras = bootConfig.payload && bootConfig.payload.state && bootConfig.payload.state.cameras;
+      if (!cameras)
+        return null;   // config.txt not read yet
+      const sensor = (port) => String((cameras[port] && cameras[port].sensor) || "none").toLowerCase();
+      return { cam0: sensor("cam0"), cam1: sensor("cam1") };
+    }
+
+    // ---- Settings for CAM0 | CAM1 (design §5.3, A2) ----------------------------------------------------------
+    // Shown only while some control is untied. On CAM1 the page renders a projection of the snapshot: cam1.settings
+    // (cam1's settingsBody) over the top-level fields, with cam1's sensor in place of cam0's, so the existing renderers
+    // and helpers (which take the snapshot) see cam1. Its setters are sent with camera=cam1; controls still tied to
+    // cam0 are greyed "Shared with CAM0". The projection carries dual_real, the snapshot it came from.
+    const dualSettings = { target: "cam0" };
+    const dualCam1Setters = {
+      set_resolution: "resolution", set_raw_bit_depth: "resolution", set_record_format: "resolution",
+      set_cdng_compression: "resolution", set_cdng_log: "resolution", set_lossy_dng_ratio: "resolution",
+      set_cdng_preview_color_profile: "resolution", set_prores_color_profile: "resolution",
+      set_prores_profile: "resolution", set_tuning_file: "resolution", set_clear_hdr: "resolution",
+      set_h264_resolution: "resolution", set_af_mode: "resolution", set_af_range: "resolution",
+      set_af_speed: "resolution", set_af_window: "resolution",
+      set_iso: "iso", set_iso_auto: "iso", set_exposure_compensation: "iso", set_exposure_metering: "iso",
+      set_shutter_us: "shutter", set_shutter_auto: "shutter", set_wb: "wb", set_wb_auto: "wb",
+      set_fps: "fps", set_conform_fps: "fps",
+    };
+
+    // The tied controls: every control for "unison", else the comma list.
+    function dualTiedControls(snapshot) {
+      const raw = snapshot && snapshot.ui && typeof snapshot.ui.cam1_settings === "string" ? snapshot.ui.cam1_settings.trim() : "unison";
+      if (raw === "unison" || raw === "")
+        return raw === "" ? [] : dualTies.map(([token]) => token);
+      return raw.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+    }
+
+    function dualSettingsSwitchVisible(snapshot) {
+      return !!dualCam1(snapshot) && dualActive(snapshot)
+        && dualTies.some(([token]) => !dualTiedControls(snapshot).includes(token));
+    }
+
+    // With no link CAM1's panels show the last settings greyed and Core refuses camera=cam1 setters (§4.5).
+    function dualCam1Linked(snapshot) {
+      const cam1 = dualCam1(snapshot);
+      return !!cam1 && !["not_found", "offline", "lost"].includes(cam1.state);
+    }
+
+    function dualBaseSnapshot(snapshot) {
+      return snapshot && snapshot.dual_projected && snapshot.dual_real ? snapshot.dual_real : snapshot;
+    }
+
+    function dualProjectSnapshot(base) {
+      const cam1 = dualCam1(base);
+      const view = Object.assign({}, base, cam1.settings && typeof cam1.settings === "object" ? cam1.settings : {});
+      view.capture = Object.assign({}, base.capture, { sensor: String(cam1.sensor || "") });
+      view.sensor = String(cam1.sensor || "");
+      view.sensor_mono = cam1.sensor_mono === true;
+      view.dual_projected = true;
+      view.dual_real = base;
+      return view;
+    }
+
+    // What the page renders: the snapshot itself, or its CAM1 projection. A projection that is still wanted passes
+    // through, so an optimistic patch on it survives a re-render.
+    function dualShownSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object")
+        return snapshot;
+      const base = dualBaseSnapshot(snapshot);
+      if (dualSettings.target === "cam1" && !dualSettingsSwitchVisible(base))
+        dualSettings.target = "cam0";   // the last tie went back on, or dual is off
+      if (dualSettings.target !== "cam1")
+        return base;
+      return snapshot.dual_projected ? snapshot : dualProjectSnapshot(base);
+    }
+
+    // The Camera settings card in two columns while some control is untied: CAM0's is the page's own stack, CAM1's a
+    // clone of it (ids suffixed __c1) rendered by a second pass of renderSnapshot over the CAM1 projection, with the ids
+    // swapped for that pass. Clicks inside the clone swap state.snapshot to the projection for the handler and route the
+    // setters to cam1 (the window below covers a handler that sends several commands).
+    const cam1Column = { el: null, routeUntil: 0 };
+
+    function dualColumnsActive(base) {
+      return dualSettingsSwitchVisible(base);
+    }
+
+    function ensureCam1Column() {
+      if (cam1Column.el)
+        return cam1Column.el;
+      const stack = document.getElementById("cameraStack");
+      const clone = stack.cloneNode(true);
+      clone.id = "";
+      clone.classList.add("cam1-stack");
+      clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id + "__c1"; });
+      stack.parentNode.insertBefore(clone, stack.nextSibling);
+      stack.insertBefore(createDomElement("div", "dual-col-head", "CAM0"), stack.firstChild);
+      clone.insertBefore(createDomElement("div", "dual-col-head", "CAM1"), clone.firstChild);
+      // The one handler the page installs once on an element: the white balance slider.
+      const range = clone.querySelector("#whiteBalanceRange__c1");
+      range.addEventListener("input", () => {
+        const base = dualBaseSnapshot(state.snapshot);
+        const settings = dualCam1(base) && dualCam1(base).settings;
+        if (!settings || settings.wb_available !== true)
+          return;
+        const kelvin = whiteBalanceFromSliderValue(range.value);
+        const label = clone.querySelector("#whiteBalanceValue__c1");
+        if (label)
+          label.textContent = kelvin + "K";
+        clearTimeout(state.wbCommitTimer);
+        state.wbCommitTimer = window.setTimeout(async () => {
+          try {
+            await sendCommand({ cmd: "set_wb", kelvin: kelvin, camera: "cam1" });
+          } catch (error) {
+            showToast(error.message, true);
+          }
+        }, 160);
+      });
+      let restore = null;
+      ["click", "input", "change"].forEach((type) => {
+        document.addEventListener(type, (event) => {
+          const inside = clone.contains(event.target);
+          cam1Column.routeUntil = inside ? performance.now() + 3000 : 0;
+          if (inside && state.snapshot && !state.snapshot.dual_projected) {
+            restore = state.snapshot;
+            state.snapshot = dualProjectSnapshot(dualBaseSnapshot(state.snapshot));
+          }
+        }, true);
+        clone.addEventListener(type, () => {
+          if (restore) {
+            state.snapshot = restore;
+            restore = null;
+          }
+        });
+      });
+      cam1Column.el = clone;
+      return clone;
+    }
+
+    function swapCam1Ids(toClone) {
+      const stack = document.getElementById("cameraStack");
+      const clone = cam1Column.el;
+      const own = Array.from(stack.querySelectorAll("[id]")).filter((element) => !clone.contains(element));
+      if (toClone) {
+        own.forEach((element) => { element.id = element.id + "__c0"; });
+        clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id.replace(/__c1$/, ""); });
+      } else {
+        clone.querySelectorAll("[id]").forEach((element) => { element.id = element.id + "__c1"; });
+        own.forEach((element) => { element.id = element.id.replace(/__c0$/, ""); });
+      }
+    }
+
+    // Two settings columns: each CAM0 section and its CAM1 twin get the taller one's height, so Frame rate, ISO,
+    // Shutter, Resolution, Crop mode and White balance start on one line across the columns. Stacked (narrow), none.
+    let dualAlignFrame = 0;
+    function scheduleDualColumnAlign(columns) {
+      if (dualAlignFrame)
+        return;
+      dualAlignFrame = window.requestAnimationFrame(() => {
+        dualAlignFrame = 0;
+        const stack = document.getElementById("cameraStack");
+        const clone = cam1Column.el;
+        const left = stack ? Array.from(stack.querySelectorAll(":scope > section")) : [];
+        const right = clone ? Array.from(clone.querySelectorAll(":scope > section")) : [];
+        left.concat(right).forEach((section) => { section.style.minHeight = ""; });
+        if (!columns || !clone || left.length !== right.length)
+          return;
+        const sideBySide = stack.getBoundingClientRect().top === clone.getBoundingClientRect().top;
+        if (!sideBySide)
+          return;
+        const heights = left.map((section, i) => Math.max(section.offsetHeight, right[i].offsetHeight));
+        left.forEach((section, i) => {
+          section.style.minHeight = heights[i] + "px";
+          right[i].style.minHeight = heights[i] + "px";
+        });
+      });
+    }
+
+    function renderCam1Column(base) {
+      ensureCam1Column();
+      swapCam1Ids(true);
+      try {
+        renderSnapshot(dualProjectSnapshot(base), { columnPass: true });
+      } finally {
+        swapCam1Ids(false);
+      }
+    }
+
+    function dualLayoutClasses(base, columns) {
+      const grid = document.querySelector(".main-grid");
+      if (!grid)
+        return;
+      grid.classList.toggle("dual-wide", dualActive(base));
+      grid.classList.toggle("dual-cols", columns);
+    }
+
+    // ---- CAM1 badge, the External monitor card's CAM1 row, NEXT TAKE and the REC label ------------------------
+    function cam1StatusText(cam1) {
+      const words = { ready: "READY", busy: "BUSY", writing: "WRITING", recording: "REC", lost: "LOST", refused: "REFUSED",
+        standby: "STANDBY", offline: "OFFLINE", not_found: "NOT FOUND" };
+      let text = "CAM1 · " + (words[cam1.state] || String(cam1.state || "").toUpperCase());
+      const drops = Number(cam1.recording_dropped_frames) || 0;
+      if (drops > 0)
+        text += " · " + drops + " DROPPED";
+      if (["ready", "busy", "writing", "recording"].includes(cam1.state)) {
+        text += cam1.locked === true ? " · SYNCED" : " · NOT SYNCED";
+        if (cam1.locked === true && typeof cam1.skew_us === "number")
+          text += " · " + Math.round(cam1.skew_us) + " µs";
+      }
+      return text;
+    }
+
+    function renderCam1Badge(base) {
+      const cam1 = dualActive(base) ? dualCam1(base) : null;
+      const badge = document.getElementById("cam1Badge");
+      if (badge) {
+        badge.hidden = !cam1;
+        if (cam1) {
+          badge.textContent = cam1StatusText(cam1);
+          badge.title = String(cam1.message || "");
+          badge.classList.toggle("warn", ["lost", "refused", "offline", "not_found", "standby"].includes(cam1.state) || !!cam1.message);
+          badge.classList.toggle("rec", cam1.state === "recording");
+        }
+      }
+      const row = document.getElementById("hdmiCam1Row");
+      if (row) {
+        row.hidden = !cam1;
+        if (cam1)
+          setText("hdmiCam1Text", cam1StatusText(cam1) + (cam1.message ? ". " + cam1.message : ""));
+      }
+      const hdmi0 = document.getElementById("settingsHdmi0Row");
+      if (hdmi0) {
+        hdmi0.hidden = !cam1;
+        if (cam1)
+          setText("settingsHdmi0Value", (base.ui && base.ui.preview_source) || "Both");
+      }
+    }
+
+    const nextTake = { value: "Auto", wasRecording: false };
+    const nextTakeOptions = [["Auto", "Auto"], ["cam0", "CAM0"], ["cam1", "CAM1"], ["both", "Both"]];
+
+    // What this page's REC press records, and what the camera's own button records (record_cameras, §6.1).
+    function recordLabelFor(base) {
+      const ui = base.ui || {};
+      const cam1 = dualCam1(base);
+      const down = !!cam1 && ["not_found", "offline", "refused", "lost", "standby"].includes(cam1.state);
+      const name = (value) => (value === "both" ? "BOTH" : (value === "cam1" ? "CAM1" : "CAM0"));
+      const next = typeof base.record_cameras === "string" && base.record_cameras !== "none" ? base.record_cameras : "both";
+      let main = next;
+      let system = false;
+      if (nextTake.value !== "Auto") {
+        main = nextTake.value;
+        if (down && main === "both") {
+          main = "cam0";
+          system = true;
+        }
+      } else {
+        const asked = { "Both": "both", "Cam 1": "cam1" }[ui.record_cameras];
+        system = !!asked && asked !== next;
+      }
+      return { main: "REC " + name(main), second: nextTake.value !== "Auto" ? "CAMERA BUTTON: REC " + name(next) : "", system };
+    }
+
+    function renderRecordControls(base) {
+      const active = dualActive(base);
+      const ui = base.ui || {};
+      const sound = !!ui.sound_recorder_enabled;
+      const recording = !!base.recording;
+      if (nextTake.wasRecording && !recording)
+        nextTake.value = "Auto";
+      nextTake.wasRecording = recording;
+      const row = document.getElementById("nextTakeRow");
+      if (row) {
+        row.hidden = !active || sound;
+        const key = nextTake.value;
+        if (!row.hidden && row.dataset.built !== key) {
+          row.dataset.built = key;
+          buildOptionButtonsInto(document.getElementById("nextTakeOptions"),
+            nextTakeOptions.map(([value, label]) => ({ value, label, enabled: !recording })), nextTake.value, (value) => {
+              nextTake.value = value;
+              if (state.snapshot)
+                renderRecordControls(dualBaseSnapshot(state.snapshot));
+            });
+        }
+        if (!row.hidden)
+          Array.from(document.getElementById("nextTakeOptions").children).forEach((button) => { button.disabled = recording; });
+      }
+      const label = document.getElementById("recordLabel");
+      if (!label)
+        return;
+      label.hidden = !active;
+      if (!active)
+        return;
+      if (recording) {
+        label.classList.remove("system-value");
+        setText("recordLabelMain", ui.sound_recorder_enabled ? "STOP" : "STOP");
+        setText("recordLabelSecond", "");
+        return;
+      }
+      if (sound) {
+        label.classList.remove("system-value");
+        setText("recordLabelMain", "REC SOUND");
+        setText("recordLabelSecond", "");
+        return;
+      }
+      const info = recordLabelFor(base);
+      label.classList.toggle("system-value", info.system);
+      setText("recordLabelMain", info.main);
+      setText("recordLabelSecond", info.second);
+    }
+
+    function dualRoutePayload(payload) {
+      const snapshot = state.snapshot;
+      const routed = !!snapshot && (snapshot.dual_projected === true || performance.now() < cam1Column.routeUntil);
+      if (!routed || !payload || payload.camera !== undefined || !dualCam1Setters[payload.cmd])
+        return payload;
+      return Object.assign({}, payload, { camera: "cam1" });
+    }
+
+    function setDualSettingsTarget(target) {
+      dualSettings.target = target === "cam1" ? "cam1" : "cam0";
+      if (state.snapshot)
+        renderSnapshot(dualBaseSnapshot(state.snapshot));
+    }
+
+    function renderDualSettingsFor(snapshot) {
+      const base = dualBaseSnapshot(snapshot);
+      const visible = dualSettingsSwitchVisible(base);
+      const linked = dualCam1Linked(base);
+      ["dualSettingsForRecord"].forEach((id) => {
+        const host = document.getElementById(id);
+        if (!host)
+          return;
+        host.hidden = !visible;
+        if (!visible)
+          return;
+        const key = dualSettings.target + "|" + (linked ? 1 : 0);
+        if (host.dataset.built === key)
+          return;
+        host.dataset.built = key;
+        host.innerHTML = "";
+        host.appendChild(createDomElement("span", "dual-settings-for-label", "Settings for"));
+        const grid = createDomElement("div", "pill-grid two-col");
+        host.appendChild(grid);
+        buildOptionButtonsInto(grid, [{ value: "cam0", label: "CAM0", enabled: true }, { value: "cam1", label: "CAM1", enabled: true }],
+          dualSettings.target, setDualSettingsTarget, 2);
+        if (dualSettings.target === "cam1" && !linked)
+          host.appendChild(createDomElement("span", "subtle-note", "CAM1 has no link: its last settings are shown greyed."));
+      });
+    }
+
+    // Grey what CAM1 does not own, with the note; on CAM0 every mark is cleared.
+    function applyDualTies(snapshot, columnPass) {
+      const cam1View = !!(snapshot && snapshot.dual_projected);
+      const tied = cam1View ? dualTiedControls(snapshot) : [];
+      const linked = dualCam1Linked(snapshot);
+      document.querySelectorAll("[data-dual-tie]").forEach((element) => {
+        // The CAM1 column's marks belong to its own pass, the rest to the page's.
+        if ((cam1Column.el && cam1Column.el.contains(element)) !== !!columnPass)
+          return;
+        const kind = element.dataset.dualTie;
+        let note = "";
+        if (cam1View) {
+          if (!linked)
+            note = "CAM1 has no link";
+          else if (kind === "cam0only")
+            note = "CAM0 only";
+          else if (kind === "shared" || tied.includes(kind))
+            note = "Shared with CAM0";
+        }
+        element.classList.toggle("dual-tied", note !== "");
+        element.inert = note !== "";
+        // In the section's heading line where there is one, so a shared section keeps its height and the columns line up.
+        const topline = element.querySelector(":scope > .select-topline");
+        let noteElement = topline ? topline.querySelector(":scope > .dual-shared-note")
+                                  : element.querySelector(":scope > .dual-shared-note");
+        if (note !== "" && !noteElement) {
+          noteElement = createDomElement("span", "dual-shared-note");
+          if (topline)
+            topline.appendChild(noteElement);
+          else
+            element.insertBefore(noteElement, element.firstChild);
+        }
+        if (noteElement)
+          noteElement.textContent = note;
+      });
+      const fpsMax = document.getElementById("dualFpsMax");
+      if (fpsMax) {
+        const max = cam1View && snapshot.dual_real && dualCam1(snapshot.dual_real) ? Number(dualCam1(snapshot.dual_real).settings && dualCam1(snapshot.dual_real).settings.fps_max) : 0;
+        fpsMax.hidden = !(max > 0);
+        fpsMax.textContent = max > 0 ? "CAM1 max " + (Math.round(max * 10) / 10) + " fps" : "";
+      }
+    }
+
+    async function sendCam1Settings(value) {
+      try {
+        await sendCommand({ cmd: "set_cam1_settings", value });
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    }
+
+    function renderDualSensorCard(snapshot) {
+      const card = document.getElementById("settingsDualSensorCard");
+      const ties = document.getElementById("dualSensorTies");
+      if (!card || !ties || !snapshot)
+        return;
+      const uiState = snapshot.ui || {};
+      const ports = dualSensorPorts();
+      const cam1 = dualCam1(snapshot);
+      // Found = the Core reports cam1 and a sensor answered; before that config.txt decides, as it does while cam1 is absent.
+      const configured = cam1 ? cam1.state !== "not_found" : (!!ports && ports.cam1 !== "none" && ports.cam0 !== "none");
+      const sensor1 = cam1 && cam1.sensor ? String(cam1.sensor).toLowerCase() : (ports ? ports.cam1 : "");
+      const differ = configured && !!ports && ports.cam0 !== sensor1;
+      // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
+      const switchedOn = uiState.dual_sensor_enabled === true;
+      // Switch on, config.txt naming both and still no cam1 from Core: one of the two sensors did not answer.
+      const oneAnswered = !cam1 && switchedOn && configured;
+      setText("dualSensorNote", cam1 && cam1.state === "not_found" ? "Camera 1 is set in Boot Config, but no sensor answered."
+        : oneAnswered ? "Boot Config names two sensors, but only one answered: one camera."
+        : !ports && !cam1 ? "Reading config.txt..."
+        : !configured ? (ports.cam1 === "none" ? "One sensor found. Set Camera 1 in Boot Config, then reboot."
+          : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
+        : "CAM0 (main): " + (ports ? ports.cam0 : String(snapshot.capture && snapshot.capture.sensor || "").toLowerCase()).toUpperCase()
+          + " · CAM1: " + sensor1.toUpperCase()
+          + (switchedOn ? "" : ". Dual sensor is off: CAM0 only."));
+      // The found note: cam1's sensor and mode, in italics (the system reports it), not a status copy.
+      const found = document.getElementById("dualSensorFoundNote");
+      if (found) {
+        const settings = cam1 && cam1.settings;
+        const showFound = !!cam1 && cam1.state !== "not_found" && !!cam1.sensor;
+        found.hidden = !showFound;
+        if (showFound) {
+          const bits = settings ? rawBitDepthNumber(settings.raw_bit_depth) : 0;
+          found.textContent = "CAM1: " + String(cam1.sensor).toUpperCase()
+            + (settings && Number(settings.width) > 0 ? " · " + settings.width + "×" + settings.height + (bits > 0 ? " " + bits + "-bit" : "") : "");
+        }
+      }
+      card.classList.toggle("locked", !configured);
+      card.classList.toggle("dual-off", configured && !switchedOn);
+      buildOptionButtons("dualSensorEnabledOptions", dualOnOff(configured), switchedOn ? "On" : "Off", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_dual_sensor_enabled", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+      const active = configured && dualActive(snapshot);
+      // Output: each HDMI port's view (previewSource, hdmi1Source). With one sensor or dual off both ports show CAM0.
+      ensureSelectOptions("settingsPreviewSourceSelect", previewSourceOptions);
+      setFormValue("settingsPreviewSourceSelect", uiState.preview_source || "Both");
+      ensureSelectOptions("settingsHdmi1SourceSelect", previewSourceOptions);
+      setFormValue("settingsHdmi1SourceSelect", uiState.hdmi1_source || "Cam 1");
+      ["settingsPreviewSourceSelect", "settingsHdmi1SourceSelect"].forEach((selectId) => {
+        const select = document.getElementById(selectId);
+        if (select)
+          select.disabled = !active;
+      });
+
+      const raw = typeof uiState.cam1_settings === "string" ? uiState.cam1_settings.trim() : "unison";
+      const unison = raw === "unison";
+      const tied = unison ? dualTies.map(([token]) => token)
+        : raw.split(",").map((token) => token.trim().toLowerCase()).filter(Boolean);
+      buildOptionButtons("dualSensorUnisonOptions", dualOnOff(active), unison ? "On" : "Off",
+        // Off keeps every control tied, so nothing changes until a tie is switched off.
+        (value) => sendCam1Settings(value === "On" ? "unison" : dualTies.map(([token]) => token).join(",")), 2);
+
+      ties.innerHTML = "";
+      dualTies.forEach(([token, label]) => {
+        const row = createDomElement("div", "dual-tie-row");
+        row.appendChild(createDomElement("span", "dual-tie-label", label));
+        const grid = createDomElement("div", "pill-grid ladder-pair");
+        row.appendChild(grid);
+        ties.appendChild(row);
+        buildOptionButtonsInto(grid, dualOnOff(active && !unison), tied.includes(token) ? "On" : "Off", (value) => {
+          const next = value === "On" ? tied.concat([token]) : tied.filter((other) => other !== token);
+          sendCam1Settings(dualTies.map(([other]) => other).filter((other) => next.includes(other)).join(","));
+        }, 2);
+        if (token === "resolution" && differ && tied.includes("resolution"))
+          ties.appendChild(createDomElement("span", "subtle-note dual-tie-note", "The sensors differ ("
+            + ports.cam0.toUpperCase() + " · " + sensor1.toUpperCase() + "): CAM1 takes the closest matching resolution."));
+      });
+
+      buildOptionButtons("dualSensorRecordOptions", dualRecordOptions.map((value) => ({
+        value, label: value, enabled: active,
+      })), uiState.record_cameras || "Both", async (value) => {
+        try {
+          await sendCommand({ cmd: "set_record_cameras", value });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+    }
+
     function renderBootConfig() {
+      if (state.snapshot)
+        renderDualSensorCard(state.snapshot);   // its "configured" comes from config.txt
       const card = document.getElementById("settingsBootConfigCard");
       if (!card)
         return;
@@ -20143,6 +22829,11 @@ std::string_view webControlPageHtml()
       if (bootState.board && !bootState.board.detected)
         notes.push("No Raspberry Pi device tree here: the card reads config.txt as a Pi 5 would.");
       (bootState.warnings || []).forEach((warning) => notes.push(warning));
+      if (bootConfig.linkNote)
+        notes.push(bootConfig.linkNote);
+      const pairWarning = bootConfigPairWarning(bootConfig.form);
+      if (pairWarning)
+        notes.push(pairWarning);
       if (bootState.camera_auto_detect === 1)
         notes.push("camera_auto_detect=1: Save sets it to 0, because the file names its sensors.");
       const warnings = document.getElementById("bootConfigWarnings");
@@ -20154,6 +22845,8 @@ std::string_view webControlPageHtml()
       const loaded = bootConfigFormFrom(bootState);
       renderBootConfigPort("cam0", bootState, loaded, editable);
       renderBootConfigPort("cam1", bootState, loaded, editable);
+      document.getElementById("bootConfigCam1DualNote").classList.toggle("hidden",
+        !(bootConfigPorts().includes("cam1") && bootConfig.form.sensors.cam1 !== "none"));
 
       const form = bootConfig.form;
       const onOff = (on) => (on ? "On" : "Off");
@@ -20206,6 +22899,7 @@ std::string_view webControlPageHtml()
         bootConfig.payload = result.boot_config;
         if (!keepForm || !bootConfig.form) {
           bootConfig.form = bootConfigFormFrom(bootConfig.payload.state);
+          bootConfigLoadPairNote(bootConfig.form);
           bootConfig.text = null;
           closeBootConfigEditor(true);
         }
@@ -20461,6 +23155,7 @@ std::string_view webControlPageHtml()
         const uploaded = bootConfigFormFrom(result.state);
         if (!bootConfigRp1Available())
           uploaded.rp1 = bootConfig.form.rp1;
+        bootConfigLoadPairNote(uploaded);
         bootConfig.form = uploaded;
         bootConfigChanged();
         showToast("Loaded " + file.name + " into the card: not saved yet.", false);
@@ -20570,12 +23265,17 @@ std::string_view webControlPageHtml()
             && info.link.options.some((option) => option.hz === Number(current));
           bootConfig.form.links[port] = sensor === loaded.sensors[port] && camera ? camera.link_frequency
             : offered ? Number(current) : (candidates && candidates[sensor]) || null;
+          // Two IMX585: Camera 0's rate leads (choosing IMX585 for Camera 1 copies it; an IMX283 never takes it).
+          bootConfigPairLinks(bootConfig.form, "cam0");
+          bootConfig.linkNote = "";
           bootConfigChanged();
         });
         document.getElementById(prefix + "LinkSelect").addEventListener("change", (event) => {
           if (!bootConfig.form)
             return;
           bootConfig.form.links[port] = Number(event.target.value);
+          bootConfigPairLinks(bootConfig.form, port);   // either select changes both
+          bootConfig.linkNote = "";
           bootConfigChanged();
         });
       });
@@ -20610,6 +23310,11 @@ std::string_view webControlPageHtml()
       arrangeSettingsPanels();
 
       document.getElementById("recordButton").addEventListener("click", toggleRecord);
+      ["paneRecButton0", "paneRecButton1"].forEach((id) => {
+        const button = document.getElementById(id);
+        if (button)
+          button.addEventListener("click", () => paneRecPress(button.dataset.cam));
+      });
       document.getElementById("settingsButton").addEventListener("click", () => setSettingsOpen(true));
       document.getElementById("mediaBrowserButton").addEventListener("click", () => setMediaBrowserOpen(true));
       document.getElementById("pbBackButton").addEventListener("click", pbBack);
@@ -20741,6 +23446,19 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsImuCalibrateButton").addEventListener("click", calibrateImuBias);
       document.getElementById("settingsExternalMonitorModeSelect").addEventListener("change", () => {
         void applySelectCommand("settingsExternalMonitorModeSelect", "set_external_monitor_mode");
+      });
+      document.getElementById("settingsHdmi1SourceSelect").addEventListener("change", () => {
+        void applySelectCommand("settingsHdmi1SourceSelect", "set_hdmi1_source");
+      });
+      document.getElementById("hdmiSwapButton").addEventListener("click", async () => {
+        try {
+          await sendCommand({ cmd: "set_preview_source", swap: "true" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      document.getElementById("settingsPreviewSourceSelect").addEventListener("change", () => {
+        void applySelectCommand("settingsPreviewSourceSelect", "set_preview_source");
       });
       document.getElementById("settingsExternalMonitorInfoOverlaySelect").addEventListener("change", () => {
         void applySelectCommand("settingsExternalMonitorInfoOverlaySelect", "set_external_monitor_info_overlay");

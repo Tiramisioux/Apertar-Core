@@ -454,7 +454,7 @@ inline bool knownKey(std::string_view section, std::string_view key)
         return std::find(keys.begin(), keys.end(), key) != keys.end();
     };
     if (section == "gpio_buttons")
-        return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "hold_ms", "double_ms"}) ||
+        return in({"enabled", "chip", "active_low", "pull", "poll_ms", "debounce_ms", "invert_on_start", "hold_ms", "double_ms"}) ||
             indexedKey(key, "d", 63, {"", "_single", "_double", "_triple", "_hold"}) ||
             indexedKey(key, "remote", 15, {"", "_single", "_double", "_triple", "_hold"});   // remote only: no pin
     if (section == "gpio_encoders")
@@ -463,7 +463,7 @@ inline bool knownKey(std::string_view section, std::string_view key)
     if (section == "gpio_switches")
         return key == "enabled" || indexedKey(key, "switch", 15, {"_pins", "_on", "_off", "_position0", "_position1", "_position2"});
     if (section == "pcf8574")
-        return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "hold_ms", "double_ms"}) ||
+        return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "active_low", "invert_on_start", "hold_ms", "double_ms"}) ||
             indexedKey(key, "pin", 7, {"", "_single", "_double", "_triple", "_hold"});
     if (section == "neorotary4")
         return in({"enabled", "bus", "address", "poll_ms", "debounce_ms", "invert_direction", "reset_on_start",
@@ -535,28 +535,30 @@ inline std::string applyEdit(const std::string &text, const Edit &edit)
         return fromRaw(kept, finalNewline);
     }
     const std::string newLine = edit.key + "=" + edit.value;
-    // 1. Replace the first line of this key in the first section of this name; drop later copies.
-    std::optional<size_t> firstHeader, lastInSection, replaced;
-    std::vector<size_t> drop;
+    // 1. Replace the first line of this key in every copy of this section (the readers use the later lines);
+    //    drop later lines of the key inside the same copy.
+    std::optional<size_t> firstHeader, lastInSection;
+    std::vector<size_t> replaced, drop;
+    bool keyInCopy = false;
     for (size_t i = 0; i < L.size(); ++i) {
         if (L[i].kind == Kind::Section && L[i].section == edit.section && !firstHeader) firstHeader = i;
         if (!firstHeader || L[i].section != edit.section) continue;
-        if (L[i].kind == Kind::Section && i != *firstHeader) break;   // a second copy of the section: leave it
+        if (L[i].kind == Kind::Section) keyInCopy = false;   // a new copy of the section
         if (L[i].kind != Kind::Blank) lastInSection = i;
         if (L[i].kind == Kind::Key && L[i].key == edit.key) {
-            if (replaced) drop.push_back(i);
-            else replaced = i;
+            if (keyInCopy) drop.push_back(i);
+            else replaced.push_back(i);
+            keyInCopy = true;
         }
     }
-    if (replaced) {
-        const size_t i = *replaced;
-        const std::string indent = lines[i].substr(0, lines[i].find_first_not_of(" \t"));
+    if (!replaced.empty()) {
         std::vector<std::string> out;
         for (size_t j = 0; j < lines.size(); ++j) {
             if (std::find(drop.begin(), drop.end(), j) != drop.end()) continue;
-            if (j == i) {
-                if (!L[i].comment.empty())   // keep the comment, on its own line (inline comments break two readers)
-                    out.push_back(indent + (L[i].comment[0] == '#' || L[i].comment[0] == ';' ? "" : "# ") + L[i].comment);
+            if (std::find(replaced.begin(), replaced.end(), j) != replaced.end()) {
+                const std::string indent = lines[j].substr(0, lines[j].find_first_not_of(" \t"));
+                if (!L[j].comment.empty())   // keep the comment, on its own line (inline comments break two readers)
+                    out.push_back(indent + (L[j].comment[0] == '#' || L[j].comment[0] == ';' ? "" : "# ") + L[j].comment);
                 out.push_back(indent + newLine);
             } else {
                 out.push_back(lines[j]);
@@ -564,7 +566,7 @@ inline std::string applyEdit(const std::string &text, const Edit &edit)
         }
         return fromRaw(out, finalNewline);
     }
-    if (firstHeader) {   // 2. A new key goes after the section's last non-blank line.
+    if (firstHeader) {   // 2. A new key goes after the last non-blank line of the section's last copy.
         lines.insert(lines.begin() + static_cast<long>(*lastInSection + 1), newLine);
         return fromRaw(lines, finalNewline);
     }
@@ -665,10 +667,18 @@ inline std::string diff(const std::string &before, const std::string &after)
 
 // ---- validation ----------------------------------------------------------------------------------
 
+struct GpioChipFact {
+    std::string path;                 // /dev/gpiochip0
+    std::string label;                // pinctrl-rp1
+    int lines = 0;
+};
+
 struct Facts {
     bool known = false;               // false: bus existence is not checked
     std::vector<int> buses;           // /dev/i2c-N that exist
     std::vector<size_t> dpiLines;     // active DPI dtoverlay lines in config.txt
+    std::vector<GpioChipFact> gpioChips;   // /dev/gpiochipN that exist; empty: chips and line numbers are not checked
+    std::string headerChip;           // the chip that chip=auto means: the Pi's 40-pin header
 };
 
 struct Issue {
@@ -690,19 +700,41 @@ inline std::optional<long> integer(const std::string &text)
     return value;
 }
 
-// A switch's pins, "17" or "22,23": the BCM numbers 0..27, or nothing when any of them is not one.
+// A switch's pins, "17" or "22,23": line numbers 0..63 as Core's GPIO input reads them, or nothing when any of them
+// is not one. Whether the chip has such a line is the validator's check.
 inline std::vector<long> pinList(const std::string &text)
 {
     std::vector<long> pins;
     for (size_t start = 0; start <= text.size();) {
         const auto end = text.find(',', start);
         const auto pin = integer(trim(std::string_view(text).substr(start, end == std::string::npos ? std::string::npos : end - start)));
-        if (!pin || *pin < 0 || *pin > 27) return {};
+        if (!pin || *pin < 0 || *pin > 63) return {};
         pins.push_back(*pin);
         if (end == std::string::npos) break;
         start = end + 1;
     }
     return pins;
+}
+
+// chip= names the GPIO chip a section's line numbers are on: a device path, or "auto" for the Pi's 40-pin header.
+// This is the chip of Core's GPIO input. Buttons, encoders and switches share it: the reader takes chip= from
+// [gpio_buttons] and [gpio_encoders] into one setting, so the line further down the file wins. As the reader:
+// nothing or exactly "auto" is the header, anything else is opened as a path.
+inline std::string gpioInputChip(const Document &doc)
+{
+    const Line *last = nullptr;
+    for (const char *section : {"gpio_buttons", "gpio_encoders"})
+        if (const Line *line = lastKeyLine(doc, section, "chip"); line && (!last || line->number > last->number))
+            last = line;
+    const std::string chip = last ? trim(last->value) : std::string();
+    return chip.empty() ? std::string("auto") : chip;
+}
+
+// The chip of the trigger output or the tally: its own chip= key. As their readers: "auto" in any case is the header.
+inline std::string gpioOutputChip(const Document &doc, const std::string &section)
+{
+    const std::string chip = trim(valueOf(doc, section, "chip").value_or(""));
+    return chip.empty() || normalizeToken(chip) == "auto" ? std::string("auto") : chip;
 }
 
 inline bool truthy(const std::string &value, bool fallback)
@@ -811,7 +843,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
             const std::string problem = storagepreroll::prerollConfProblem(line.key, line.value);
             if (!problem.empty())
                 add(line.number, true, "preroll_value", line.section, line.key, line.value, line.key + "=" + line.value + " on line " +
-                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "preroll" ? " (on)." : " (2)."));
+                    N(line.number) + " " + problem + ": Core uses the default for " + line.key + (line.key == "preroll" ? " (off)." : " (2)."));
         }
         if (line.key == "bus") {
             const auto bus = integer(line.value);
@@ -853,13 +885,32 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
         }
     }
 
-    // GPIO lines: one owner each.
-    std::map<long, std::pair<std::string, size_t>> claims;
-    auto claim = [&](long gpio, const std::string &who, const std::string &section, const std::string &key, size_t line) {
+    // GPIO lines: one owner each, per chip. Buttons, encoders and switches are on the GPIO input's chip; the trigger
+    // and the tally each name their own. What only the Pi's header has (the I2C bus 1 lines, a DPI display on
+    // GPIO 0 to 27) is checked only there.
+    const std::string inputChip = gpioInputChip(doc);
+    const auto onHeader = [&](const std::string &chip) { return chip == "auto" || chip == facts.headerChip; };
+    const auto chipFact = [&](const std::string &chip) -> const GpioChipFact * {
+        const std::string &path = chip == "auto" ? facts.headerChip : chip;
+        for (const auto &fact : facts.gpioChips)
+            if (fact.path == path) return &fact;
+        return nullptr;
+    };
+    std::map<std::pair<std::string, long>, std::pair<std::string, size_t>> claims;
+    auto claim = [&](const std::string &chip, long gpio, const std::string &who, const std::string &section,
+                     const std::string &key, size_t line) {
         if (gpio < 0) return;
-        if (auto [it, fresh] = claims.emplace(gpio, std::make_pair(who, line)); !fresh) {
-            add(line, true, "gpio_twice", section, key, std::to_string(gpio), "GPIO " + std::to_string(gpio) + " is used by " +
+        const bool header = onHeader(chip);
+        const std::string name = "GPIO " + std::to_string(gpio) + (header ? "" : " on " + chip);
+        if (auto [it, fresh] = claims.emplace(std::make_pair(header ? std::string("auto") : chip, gpio), std::make_pair(who, line)); !fresh) {
+            add(line, true, "gpio_twice", section, key, std::to_string(gpio), name + " is used by " +
                 it->second.first + " (line " + N(it->second.second) + ") and " + who + " (line " + N(line) + ").");
+            return;
+        }
+        if (!header) {
+            if (const GpioChipFact *fact = chipFact(chip); fact && gpio >= fact->lines)
+                add(line, true, "gpio_line", section, key, std::to_string(gpio), name + " does not exist: " + fact->label +
+                    " has lines 0 to " + std::to_string(fact->lines - 1) + "; " + who + " cannot use it.");
             return;
         }
         const bool busOne = std::find(facts.buses.begin(), facts.buses.end(), 1) != facts.buses.end();
@@ -870,6 +921,25 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
             add(line, true, "gpio_dpi", section, key, std::to_string(gpio), "GPIO " + std::to_string(gpio) +
                 " is held by the DPI overlay (config.txt line " + N(facts.dpiLines.front()) + "); " + who + " cannot use it.");
     };
+    // A chip= that names a chip which is not there: the reader cannot open it, so everything on it stays silent.
+    auto checkChip = [&](const std::string &chip, const std::string &section, const std::string &who) {
+        if (facts.gpioChips.empty() || chip == "auto" || chipFact(chip)) return;
+        std::string found;
+        for (const auto &fact : facts.gpioChips) found += (found.empty() ? "" : ", ") + fact.path;
+        const Line *at = lastKeyLine(doc, section, "chip");
+        add(at ? at->number : 0, false, "gpio_chip_missing", section, "chip", chip, "GPIO chip " + chip + " is not there (chips: " +
+            found + "). " + who + " silent until it is, or set chip=auto for the Pi's own pins.");
+    };
+    {
+        const Line *buttons = lastKeyLine(doc, "gpio_buttons", "chip");
+        const Line *encoders = lastKeyLine(doc, "gpio_encoders", "chip");
+        const bool encodersLast = encoders && (!buttons || encoders->number > buttons->number);
+        if (encoders && (!buttons || trim(buttons->value) != trim(encoders->value)))
+            add(encoders->number, false, "gpio_chip_shared", "gpio_encoders", "chip", trim(encoders->value), "The GPIO buttons, "
+                "encoders and switches share one chip, and Core takes the chip= line further down the file (line " +
+                N((encodersLast ? encoders : buttons)->number) + "). Keep one, in [gpio_buttons].");
+        checkChip(inputChip, encodersLast ? "gpio_encoders" : "gpio_buttons", "The GPIO buttons, encoders and switches stay");
+    }
     const bool buttonsOn = truthy(valueOf(doc, "gpio_buttons", "enabled").value_or("false"), false);
     const bool encodersOn = truthy(valueOf(doc, "gpio_encoders", "enabled").value_or("false"), false);
     const bool switchesOn = truthy(valueOf(doc, "gpio_switches", "enabled").value_or("false"), false);
@@ -886,7 +956,8 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
         if (const auto *l = lastKeyLine(doc, output, "line")) at = l->number;
         if (isGpioTarget(outputTarget(output))) {
             const auto line = integer(valueOf(doc, output, "line").value_or(output == "trigger_output" ? "17" : "-1"));
-            claim(line.value_or(-1), who, output, "line", at);
+            checkChip(gpioOutputChip(doc, output), output, "The " + std::string(output == "trigger_output" ? "trigger output" : "tally") + " stays");
+            claim(gpioOutputChip(doc, output), line.value_or(-1), who, output, "line", at);
             // An open-drain line can only pull low; with active high an LED to GND never lights.
             if (truthy(valueOf(doc, output, "open_drain").value_or("false"), false) &&
                 truthy(valueOf(doc, output, "active_high").value_or("false"), false))
@@ -908,13 +979,13 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
                 add(line.number, false, "tally_shorthand", line.section, line.key, "", "The tally shorthand on line " +
                     N(line.number) + " loses to an enabled [recording_indicator] section and has no polarity key. Use the section.");
             else if (buttonsOn && !mapped.empty() && claimedButtons.insert(pin).second)
-                claim(pin, "button d" + std::to_string(pin), line.section, line.key, line.number);
+                claim(inputChip, pin, "button d" + std::to_string(pin), line.section, line.key, line.number);
         }
         if (line.section == "gpio_encoders" && encodersOn && line.key.rfind("encoder", 0) == 0) {
             const std::string field = line.key.substr(line.key.find('_') + 1);
             if (field == "a" || field == "b" || field == "press_gpio")
                 if (const auto gpio = integer(line.value))
-                    claim(*gpio, "encoder " + line.key.substr(7, 1) + " " + field, line.section, line.key, line.number);
+                    claim(inputChip, *gpio, "encoder " + line.key.substr(7, 1) + " " + field, line.section, line.key, line.number);
         }
         if (line.section == "gpio_switches" && line.key.rfind("switch", 0) == 0 && line.key.size() > 11 &&
             line.key.compare(line.key.size() - 5, 5, "_pins") == 0) {
@@ -924,7 +995,7 @@ inline std::vector<Issue> validate(const std::string &text, const Facts &facts)
                     " takes one pin (a two-way switch) or two (a three-way switch), such as 17 or 22,23.");
             else if (switchesOn)
                 for (const long pin : pins)
-                    claim(pin, "switch " + line.key.substr(6, line.key.size() - 11), line.section, line.key, line.number);
+                    claim(inputChip, pin, "switch " + line.key.substr(6, line.key.size() - 11), line.section, line.key, line.number);
         }
     }
 

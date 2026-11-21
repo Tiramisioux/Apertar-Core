@@ -16,8 +16,9 @@ namespace apertar {
 class GpioInput {
 public:
     using ActionCallback = std::function<void(const std::string &)>;
+    using PressCallback = std::function<bool(const std::string &)>;   // true: the press woke the camera, nothing else follows
 
-    explicit GpioInput(ActionCallback actionCallback, ActionCallback rotationCallback = {});
+    explicit GpioInput(PressCallback actionCallback, ActionCallback rotationCallback = {});
     // Called with "section|key" each time a control fires, mapped or not (the WebUI's Listen). Set before start().
     void setSeenCallback(ActionCallback seenCallback) { seenCallback_ = std::move(seenCallback); }
     ~GpioInput();
@@ -69,6 +70,7 @@ private:
         bool enabled = false;
         std::string chipPath = "auto";
         bool activeLow = true;
+        bool invertOnStart = false;   // [gpio_buttons] only: a button pressed at start is taken as normally closed (1-0-1)
         std::string pull = "up";
         int pollMs = 12;
         int debounceMs = 60;
@@ -89,7 +91,8 @@ private:
         bool observedPressed = false;
         bool stablePressed = false;
         bool haveSample = false;
-        bool inverted = false;    // read pressed at start: wired the other way round (a 1-0-1 button)
+        bool inverted = false;    // read pressed at start with invert_on_start: wired the other way round (a 1-0-1 button)
+        bool heldAtStart = false; // read pressed at start without it: counted from its release
         std::string seenKey;      // section|base for Listen; gestures add their suffix
         std::string pressSuffix;  // "" for dN, "_press" for an encoder push
         std::chrono::steady_clock::time_point observedChangedAt{};
@@ -127,10 +130,10 @@ private:
                               std::string *errorMessage) const;
     bool readLineValues(int lineFd, size_t lineCount, uint64_t *bits) const;
     void closeFd(int *fd) const;
-    void emitAction(const std::string &action);
+    bool emitAction(const std::string &action);
     void setLastError(const std::string &error);
 
-    ActionCallback actionCallback_;
+    PressCallback actionCallback_;
     ActionCallback rotationCallback_;
     ActionCallback seenCallback_;
     Config config_;

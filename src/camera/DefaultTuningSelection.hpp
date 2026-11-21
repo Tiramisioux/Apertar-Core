@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camera/CameraPort.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -198,16 +200,21 @@ inline std::string clearHdrVariant(const std::string &basePath, Pipeline pipelin
 }
 
 // Subdevice names are available before CameraManager loads its IPA tuning file.
-// Only preselect a unique candidate; verify against the selected camera afterward.
+// Only preselect a unique candidate; verify against the selected camera afterward. underNode limits the candidates
+// to the subdevs below that device-tree node, so the Core of one sensor does not see the other's.
 inline std::string preselectDefault(const std::vector<std::filesystem::path> &directories,
                                    Pipeline pipeline,
-                                   const std::filesystem::path &videoDevices = "/sys/class/video4linux")
+                                   const std::filesystem::path &videoDevices = "/sys/class/video4linux",
+                                   const std::string &underNode = {})
 {
     std::set<std::string> candidates;
     std::error_code ec;
     std::filesystem::directory_iterator entries(videoDevices, ec);
     for (auto end = std::filesystem::directory_iterator{}; !ec && entries != end; entries.increment(ec)) {
         if (entries->path().filename().string().rfind("v4l-subdev", 0) != 0)
+            continue;
+        // Only the subdevs under the Core's I2C node (CameraPort.hpp); "" = every subdev.
+        if (!underNode.empty() && !cameraport::ofNodeUnder(cameraport::ofNodeOf({}, entries->path()), underNode))
             continue;
         std::ifstream input(entries->path() / "name");
         std::string model;

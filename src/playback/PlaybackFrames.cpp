@@ -86,16 +86,33 @@ DecodeSlots &slots()
     return s;
 }
 
+#if APERTARCORE_HAS_TURBOJPEG
+struct TurboJpegCompressor {
+    TurboJpegCompressor()
+        : handle(tjInitCompress())
+    {
+    }
+
+    ~TurboJpegCompressor()
+    {
+        if (handle)
+            tjDestroy(handle);
+    }
+
+    tjhandle handle = nullptr;
+};
+#endif
+
 bool encodeRgbJpeg(const std::vector<uint8_t> &rgb, uint32_t width, uint32_t height, int quality, std::vector<uint8_t> &out)
 {
 #if APERTARCORE_HAS_TURBOJPEG
-    thread_local tjhandle handle = tjInitCompress();
-    if (!handle) return false;
+    thread_local TurboJpegCompressor compressor;
+    if (!compressor.handle) return false;
     const unsigned long bound = tjBufSize(int(width), int(height), TJSAMP_420);
     out.resize(bound);
     unsigned char *buffer = out.data();
     unsigned long size = bound;
-    const int rc = tjCompress2(handle, rgb.data(), int(width), 0, int(height), TJPF_RGB, &buffer, &size, TJSAMP_420, quality,
+    const int rc = tjCompress2(compressor.handle, rgb.data(), int(width), 0, int(height), TJPF_RGB, &buffer, &size, TJSAMP_420, quality,
                                TJFLAG_FASTDCT | TJFLAG_NOREALLOC);
     if (rc != 0 || size == 0) { out.clear(); return false; }
     out.resize(size);
@@ -201,7 +218,7 @@ FrameOut frameJpeg(const std::string &clipId, const std::filesystem::path &dir, 
     }
     niceThread();
     const auto started = std::chrono::steady_clock::now();
-    const int fd = openDngFrame((dir / frame.name).string().c_str());
+    const int fd = openClipFrame(dir.string(), frame.name);
     if (fd < 0) {
         out.status = 404;
         out.error = "The frame file is gone.";

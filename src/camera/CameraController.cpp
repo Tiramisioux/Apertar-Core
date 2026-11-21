@@ -3,6 +3,7 @@
 #include <optional>
 #include "camera/CameraController.hpp"
 #include <apertar/core/RecordingCapabilities.hpp>
+#include "camera/CameraPort.hpp"
 #include "camera/DefaultTuningSelection.hpp"
 #include "camera/ExposureMetering.hpp"
 #include "camera/StillBracketing.hpp"
@@ -35,6 +36,7 @@
 #include "util/BufferBudget.hpp"
 #include "util/StoragePreroll.hpp"
 #include "util/ClipName.hpp"
+#include "util/TakeSlots.hpp"
 #include "prores/ProresRecorder.hpp"
 
 #include <algorithm>
@@ -98,6 +100,7 @@
 #include <fcntl.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-heap.h>
+#include <linux/v4l2-subdev.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -234,6 +237,8 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"af_mode\":\"" << toString(settings.autofocusMode) << "\""
         << ",\"af_range\":\"" << toString(settings.autofocusRange) << "\""
         << ",\"af_speed\":\"" << toString(settings.autofocusSpeed) << "\""
@@ -414,6 +419,23 @@ std::filesystem::path modeLadderPath()
     return std::filesystem::temp_directory_path() / "apertar-core-mode_ladder.conf";
 }
 
+// mode_ladder.conf as text, true only when the whole file was read. A read can fail after the open (an I/O
+// error; a directory opens but cannot be read) and leave a short or empty text while the ifstream still reads as
+// good (libstdc++ catches the error inside operator<<), so the text's size is compared with file_size, which
+// also fails on a directory.
+bool readModeLadderFile(const std::filesystem::path &path, std::string &text)
+{
+    std::ifstream file(path);
+    if (!file)
+        return false;
+    std::stringstream content;
+    content << file.rdbuf();
+    text = content.str();
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    return !ec && text.size() == size;
+}
+
 std::filesystem::path persistedSettingsPath()
 {
     const char *xdgConfig = std::getenv("XDG_CONFIG_HOME");
@@ -436,29 +458,6 @@ bool isImx585LowResolutionAlias(const Resolution &resolution)
 {
     return resolutionMatches(resolution, 1920, 1080) ||
            resolutionMatches(resolution, 1928, 1090);
-}
-
-// The imx585 driver's 1.85:1 crops are 3840x2072 and the binned 1920x1036 (cinemate-modes, the
-// cinemate-port driver branch). The Apertar-Beta 1.6.0 driver had 3840x2076 and 1920x1038, windows
-// that started at PIX_VST 54 against the sensor's multiple-of-4 rule; the new driver has neither.
-// Settings, presets, ladder rungs and clients (the touch UI) that still say the old sizes are
-// moved to the new ones here, before any lookup.
-Resolution migratedImx585CropResolution(Resolution resolution)
-{
-    if (resolutionMatches(resolution, 3840, 2076))
-        return Resolution{ 3840, 2072 };
-    if (resolutionMatches(resolution, 1920, 1038))
-        return Resolution{ 1920, 1036 };
-    return resolution;
-}
-
-void migrateImx585LadderRungs(std::vector<ladder::Rung> &rungs)
-{
-    for (ladder::Rung &rung : rungs) {
-        const Resolution moved = migratedImx585CropResolution(Resolution{ rung.width, rung.height });
-        rung.width = moved.width;
-        rung.height = moved.height;
-    }
 }
 
 bool isImx585HighResolutionAlias(const Resolution &resolution)
@@ -496,22 +495,59 @@ bool isImx585KnownResolution(const Resolution &resolution)
 // mode): the Full HD and 3840-wide crops. The other table sizes are IMX585 only.
 bool isImx585LegacyCropResolution(const Resolution &resolution)
 {
-    for (const uint32_t height : { 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
+    for (const uint32_t height : { 1038u, 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
         if (resolutionMatches(resolution, 1920, height))
             return true;
     }
-    for (const uint32_t height : { 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
+    for (const uint32_t height : { 2076u, 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
         if (resolutionMatches(resolution, 3840, height))
             return true;
     }
     return false;
 }
 
+// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
+std::mutex probedSensorModesMutex;
+std::vector<CameraController::SensorMode> probedSensorModes;
+#if APERTARCORE_HAS_LIBCAMERA
+bool sensorModesProbed = false;
+#endif
+
+// The sizes the probe found in a class (bit depth, Clear HDR), as the driver delivers them.
+std::vector<apertar::imx585::Size> probedImx585Sizes(apertar::imx585::Class cls)
+{
+    std::vector<apertar::imx585::Size> sizes;
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    for (const auto &mode : probedSensorModes) {
+        if (mode.bitDepth == apertar::imx585::bitDepthOf(cls) && mode.clearHdr == apertar::imx585::clearHdrClass(cls))
+            sizes.push_back({ mode.size.width, mode.size.height });
+    }
+    return sizes;
+}
+
+// A 1.85:1 request in the height the installed driver has (2072 or 2076, 1036 or 1038).
+Resolution driverCropResolution(apertar::imx585::Class cls, const Resolution &requested)
+{
+    const auto size = apertar::imx585::driverCropSize(cls, { requested.width, requested.height }, probedImx585Sizes(cls));
+    return Resolution{ size.width, size.height };
+}
+
+// Ladder rungs saved with the other driver's 1.85:1 height take this driver's.
+void followDriverCropSizes(std::vector<ladder::Rung> &rungs)
+{
+    for (ladder::Rung &rung : rungs) {
+        const Resolution followed = driverCropResolution(apertar::imx585::classFor(rung.bits, rung.clearHdr),
+                                                         Resolution{ rung.width, rung.height });
+        rung.width = followed.width;
+        rung.height = followed.height;
+    }
+}
+
 // The row of a class that an active size stands for: the size itself, else (a size from another class
 // or sensor) the nearest row. Never null while the width policy leaves the class a row.
 const apertar::imx585::Mode *imx585ModeForResolution(apertar::imx585::Class cls, const Resolution &requested)
 {
-    const Resolution wanted = imx585AliasResolution(requested);
+    const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(requested));
     if (const auto *mode = apertar::imx585::find(cls, wanted.width, wanted.height))
         return mode;
     return apertar::imx585::nearest(cls, wanted.width, wanted.height);
@@ -700,7 +736,6 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         const auto parsed = apertar::clipname::parse(settings.clipNameTemplate);
         settings.clipNameTemplate = parsed.ok ? parsed.normalized : std::string(apertar::clipname::kDefaultTemplate);
     }
-    settings.resolution = migratedImx585CropResolution(settings.resolution);
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -960,7 +995,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
     output << prefix << "prores_profile=" << toString(s.proresProfile) << '\n';
     output << prefix << "prores_color_profile=" << toString(s.proresColorProfile) << '\n';
-    output << prefix << "clear_hdr=" << (s.clearHdr ? "true" : "false") << '\n';
+    output << prefix << "clear_hdr=" << s.clearHdr << '\n';
     output << prefix << "hdr_threshold_high=" << s.hdrThresholdHigh << '\n';
     output << prefix << "hdr_threshold_low=" << s.hdrThresholdLow << '\n';
     output << prefix << "hdr_blend=" << s.hdrBlend << '\n';
@@ -971,12 +1006,12 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "h264_height=" << s.h264Resolution.height << '\n';
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
-    output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
-    output << prefix << "preview_tdn=" << (s.previewTdn ? "true" : "false") << '\n';
-    output << prefix << "media_trim=" << (s.mediaTrimEnabled ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
+    output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
+    output << prefix << "preview_tdn=" << s.previewTdn << '\n';
+    output << prefix << "media_trim=" << s.mediaTrimEnabled << '\n';
+    output << prefix << "fps_speed_ramp=" << s.fpsSpeedRamp << '\n';
+    output << prefix << "fps_speed_ramp_keep_exposure=" << s.fpsSpeedRampKeepExposure << '\n';
+    output << prefix << "fps_speed_ramp_stretch_audio=" << s.fpsSpeedRampStretchAudio << '\n';
     output << prefix << "fps_speed_ramp_after=" << (s.fpsSpeedRampReturn ? "return" : "stay") << '\n';
     output << prefix << "clip_name_template=" << s.clipNameTemplate << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
@@ -1105,6 +1140,64 @@ std::filesystem::path mediaRootPath(const std::string &mediaRoot)
                              : std::filesystem::path(mediaRoot);
 }
 
+// ---- Camera by port (src/camera/CameraPort.hpp, design 3.2) ----
+// --camera, resolved once, and what the session opened. cam0 / "" is the primary; any other value a secondary.
+struct CameraSelectionState {
+    std::mutex mutex;
+    std::string value;                 // --camera as given
+    cameraport::Node node;             // the I2C node of `value` (the primary: cam0's); valid only when it resolved
+    bool resolved = false;
+    bool cam0Waited = false;           // the primary's wait for cam0's subdev has run
+    std::string openedId;              // libcamera id of the camera the session picked
+    std::string openedPort;            // its port, "" when neither cam0 nor cam1
+    bool noPersist = false;            // the primary fell back to another port's camera: no camera settings are saved
+};
+
+CameraSelectionState &cameraSelection()
+{
+    static CameraSelectionState state;
+    return state;
+}
+
+bool cameraIsSecondary(const std::string &value)
+{
+    return cameraport::isSecondary(value);
+}
+
+void resolveCameraSelectionLocked(CameraSelectionState &state)
+{
+    if (state.resolved)
+        return;
+    state.node = cameraport::resolve({}, cameraIsSecondary(state.value) ? state.value : "cam0");
+    state.resolved = true;
+}
+
+// The port in the state and in clip names: the opened camera's, else the one --camera names, else cam0.
+std::string cameraPortLabel()
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    resolveCameraSelectionLocked(state);
+    if (!state.openedPort.empty())
+        return state.openedPort;
+    if (state.value == "cam0" || state.value == "cam1")
+        return state.value;
+    if (!state.node.port.empty())
+        return state.node.port;
+    return cameraIsSecondary(state.value) ? std::string() : std::string("cam0");
+}
+
+// The camera_id / camera_port fields of a settings copy (not persisted).
+void fillCameraIdentity(CaptureSettings &settings)
+{
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        settings.cameraId = state.openedId;
+    }
+    settings.cameraPort = cameraPortLabel();
+}
+
 // ---- Clip names (src/util/ClipName.hpp) ----------------------------------------------------------------
 // The {format} token: the prefix the camera always used, without its trailing underscore.
 std::string clipNameFormatToken(const CaptureSettings &settings)
@@ -1154,7 +1247,8 @@ apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const 
     const int nominalFps = std::max(1, static_cast<int>(std::llround(fps)));
     v.frame = std::min(nominalFps - 1, static_cast<int>(static_cast<double>(micros % 1000000) * fps / 1000000.0));
     v.format = clipNameFormatToken(settings);
-    v.cam = "cam0";   // one camera per Apertar
+    v.cam = cameraPortLabel();
+    if (v.cam.empty()) v.cam = "cam0";
     v.sensor = sanitize(sensor, 12);
     std::string model = CdngEncoder::Metadata{}.model;   // "Apertar D1", the Model tag of the DNGs
     if (model.rfind("Apertar ", 0) == 0) model.erase(0, 8);
@@ -1187,22 +1281,38 @@ apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const 
     return v;
 }
 
-// The folder name for the next take of these settings; no side effects (nothing is created).
-std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
-                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+// The folder name for the next take of these settings; `exists` says whether a name is taken, `existingNames` lists the
+// names there for a template with a time token. Nothing is created.
+std::string nextClipFolderName(const std::function<bool(const std::string &)> &exists, const std::vector<std::string> &existingNames,
+                               const CaptureSettings &settings, const std::string &sensor,
+                               const std::chrono::system_clock::time_point &now)
 {
     using namespace apertar::clipname;
     Parsed parsed = parse(settings.clipNameTemplate);
     if (!parsed.ok)
         parsed = parse(kDefaultTemplate);
     const Values values = clipNameValues(settings, sensor, now);
-    const int clip = nextClipNumber(parsed, values, [&](const std::string &name) {
-        std::error_code ec;
-        return std::filesystem::exists(root / name, ec);
-    });
+    const int clip = nextClipNumber(parsed, values, exists, existingNames);
     if (clip == 0)
         throw std::runtime_error("Could not allocate a unique clip folder.");
     return expand(parsed, values, clip);
+}
+
+// The same, probing the folders under `root` on the medium.
+std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
+                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+{
+    // A time token makes a new name at every take: the numbering then looks at the folders already there.
+    std::vector<std::string> existingNames;
+    if (apertar::clipname::hasTimeToken(apertar::clipname::parse(settings.clipNameTemplate))) {
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator(root, ec))
+            existingNames.push_back(entry.path().filename().string());
+    }
+    return nextClipFolderName([&](const std::string &name) {
+        std::error_code ec;
+        return std::filesystem::exists(root / name, ec);
+    }, existingNames, settings, sensor, now);
 }
 
 std::filesystem::path withPhotoExtension(std::filesystem::path basePath, const char *extension)
@@ -2417,8 +2527,13 @@ libcamera::ControlList controlsForSettings(const CaptureSettings &settings,
         : 41666;
     const int64_t frameDurationUs = limitedPreview
         ? std::max(nominalFrameDurationUs, int64_t(exposureUs)) : nominalFrameDurationUs;
-    const int64_t maximumFrameDurationUs = settings.photoModeEnabled && !settings.shutterAuto
+    int64_t maximumFrameDurationUs = settings.photoModeEnabled && !settings.shutterAuto
         ? std::max(frameDurationUs, int64_t(exposureUs) + (limitedPreview ? 0 : 100000)) : frameDurationUs;
+    // Fix A (design §7.3): with the phase lock on, the base pin is {d, d+1} like the lock's own pin, so camera
+    // start, fps changes, ramp steps and the still restore keep HBLANK at its minimum and floor to whole lines
+    // instead of hopping the line length. With the lock off it stays {d, d}.
+    if (settings.fpsPhaseLock && !settings.photoModeEnabled)
+        maximumFrameDurationUs = frameDurationUs + 1;
     const int64_t frameDurationRange[2] = { frameDurationUs, maximumFrameDurationUs };
     controls.set(libcamera::controls::FrameDurationLimits,
                  libcamera::Span<const int64_t, 2>(frameDurationRange));
@@ -3059,12 +3174,12 @@ std::string compressionLabel(const CaptureSettings &settings)
 }
 
 constexpr const char *kLadderOwnsMode =
-    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Record > Mode Ladder) "
+    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Modes > Mode Ladder) "
     "to choose it by hand.";
 
 constexpr const char *kLadderOwnsCompression =
     "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
-    "(Settings > Record > Mode Ladder) to choose it by hand.";
+    "(Settings > Modes > Mode Ladder) to choose it by hand.";
 
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
@@ -3302,13 +3417,6 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
 
     return 1000.0;
 }
-
-// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
-std::mutex probedSensorModesMutex;
-std::vector<CameraController::SensorMode> probedSensorModes;
-#if APERTARCORE_HAS_LIBCAMERA
-bool sensorModesProbed = false;
-#endif
 
 std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
 {
@@ -4208,6 +4316,15 @@ public:
     ~DngRecordingQueue()
     {
         stop();
+        // Writers left behind by a dead-medium stop still use this queue's members
+        // (exitMutex_, mutex_) when they return; give them the dead-medium time again.
+        {
+            const auto limit = std::chrono::milliseconds(unsignedEnvValue("APERTAR_DEAD_MEDIUM_STOP_MS", 2000, 100, 600000));
+            std::unique_lock<std::mutex> lock(exitMutex_);
+            if (!exitCv_.wait_for(lock, limit, [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; }))
+                std::cerr << "ApertarCore recording: detached writers still running ("
+                          << liveWorkers_.load(std::memory_order_acquire) << ") as the queue is destroyed\n";
+        }
         unregisterFlushAbort();
     }
 
@@ -4239,6 +4356,8 @@ public:
         recordingFormat_ = settings.recordingFormat;
         frameIndex_ = 0;
         firstFrameTimestampUs_ = 0;
+        lastFrameTimestampUs_ = 0;
+        indexJumps_.store(0, std::memory_order_relaxed);
         droppedFrames_ = 0;
         enqueuedFrames_ = 0;
         writtenFrames_ = 0;
@@ -4524,6 +4643,7 @@ public:
                       << " discarded_on_failure=" << summary.discardedOnFailure
                       << " skipped_after_failure=" << summary.skippedAfterFailure
                       << " dropped_copy_slot=" << droppedNoRequestSlot_.load(std::memory_order_relaxed)
+                      << " index_jumps=" << indexJumps_.load(std::memory_order_relaxed)
                       << " fault=" << mediaFaultName(fault_.load(std::memory_order_acquire))
                       << " peak_queue=" << summary.peakQueueDepth << "/" << summary.maxQueueDepth;
             if (summary.ramMode)
@@ -4533,6 +4653,9 @@ public:
         }
         const uint64_t timedJobs = losslessTimedJobs_.load(std::memory_order_relaxed);
         if (timedJobs > 0) {
+            // std::cerr is shared: leave its float format as found, or every later double on it prints fixed.
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             const double averageWallUs = static_cast<double>(
                 losslessWorkerWallUs_.load(std::memory_order_relaxed)) / timedJobs;
             const double averageCpuUs = static_cast<double>(
@@ -4580,15 +4703,21 @@ public:
                           << losslessProfiledSourceRows_.load(std::memory_order_relaxed)
                           << std::defaultfloat << "\n";
             }
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
         }
         const double stopSeconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - stopStarted).count();
         if (stopSeconds > 0.20) {
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             std::cerr << "ApertarCore recorder stop time: "
                       << std::fixed << std::setprecision(3) << stopSeconds
                       << "s format=" << toString(recordingFormat_)
                       << " discarded_on_stop=" << summary.discardedOnStop
                       << "\n";
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
         }
 
         unregisterFlushAbort();   // before mutex_: abortSafetyFlush takes the registry mutex first, then mutex_
@@ -4601,7 +4730,12 @@ public:
         // The raw copy pool survives the take: the next take's first frames would
         // otherwise allocate and page in 16.6 MB each on libcamera's completion thread.
         workerCount_ = 0;
-        stopping_ = false;
+        // Writers left behind on a medium called gone still wait on this flag. Clearing it sent one that was only
+        // slow (a nearly full NVMe, 5 s without progress) back to waiting for frames: it never returned, liveWorkers_
+        // stayed 1 and startAtFolder refused every take until Core restarted (2026-11-10). startAtFolder clears it
+        // once they are gone.
+        if (joinAll)
+            stopping_ = false;
     }
 
     // The safety-stop flush can be cut short by a new record press (ApertarCoreApp::handleCommand, no controller
@@ -4681,7 +4815,22 @@ public:
         if (firstFrameTimestampUs_ == 0) firstFrameTimestampUs_ = timestampUs;
         const uint64_t timeIndex = (!countOnly && timestampUs > firstFrameTimestampUs_)
             ? uint64_t(std::llround((timestampUs - firstFrameTimestampUs_) * settings_.fps / 1000000)) : 0;
-        const auto index = std::max(frameIndex_.load(std::memory_order_relaxed), timeIndex);
+        const auto count = frameIndex_.load(std::memory_order_relaxed);
+        const auto index = std::max(count, timeIndex);
+        // The time index ran ahead of the count: this frame's number skips (index - count) numbers. After a lost frame
+        // that is right (the capture-gap line says so too); without one it is a late timestamp, and the clip has a
+        // numbering gap but no lost picture (SSD night 2, 2026-11-09: one such gap with every counter at 0). Logged so
+        // the next one can be told apart: dt is this frame's distance from the previous one.
+        if (index > count && count > 0) {
+            const uint64_t jumps = indexJumps_.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (jumps <= 5 || (jumps % 30) == 0)
+                std::cerr << "ApertarCore frame index jump: frame=" << index << " count=" << count
+                          << " skipped=" << (index - count)
+                          << " dt_us=" << (timestampUs - lastFrameTimestampUs_)
+                          << " since_first_us=" << (timestampUs - firstFrameTimestampUs_)
+                          << " total=" << jumps << "\n";
+        }
+        lastFrameTimestampUs_ = timestampUs;
         frameIndex_.store(index + 1, std::memory_order_relaxed);
         return index;
     }
@@ -4696,10 +4845,10 @@ public:
                 DngRecordingQueue *queue;
                 ~Exit()
                 {
-                    {
-                        std::lock_guard<std::mutex> lock(queue->exitMutex_);
-                        queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
-                    }
+                    // Notify under the lock: ~DngRecordingQueue may free the cv
+                    // as soon as it sees 0.
+                    std::lock_guard<std::mutex> lock(queue->exitMutex_);
+                    queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
                     queue->exitCv_.notify_all();
                 }
             } exit{this};
@@ -4800,10 +4949,52 @@ public:
         if (fd < 0)
             return;
         const auto started = std::chrono::steady_clock::now();
-        const int result = ::syncfs(fd);
+        // The secondary shares the medium with the primary's take: syncfs would wait for the primary's pages too
+        // (design 3.3, C-new3). It fsyncs its own files instead: those the sync loop has not reached, the part
+        // folders and the clip folder. The primary's behaviour is unchanged.
+        bool secondary = false;
+        {
+            auto &selection = cameraSelection();
+            std::lock_guard<std::mutex> selectionLock(selection.mutex);
+            secondary = cameraIsSecondary(selection.value);
+        }
+        int result = 0;
+        if (secondary) {
+            std::vector<std::string> files;
+            {
+                std::lock_guard<std::mutex> filesLock(writtenFilesMutex_);
+                files.swap(writtenFiles_);
+            }
+            if (recordingFormat_ == RecordingFormat::Mlv)
+                files.push_back(mlvPathString_);
+            std::vector<std::string> dirs;
+            for (const std::string &path : files) {
+                const int fileFd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+                if (fileFd >= 0) {
+                    if (::fsync(fileFd) != 0)
+                        result = -1;
+                    ::close(fileFd);
+                }
+                const std::string parent = path.substr(0, path.rfind('/'));
+                if (framesPerFolder_ > 0 && parent != folderPathString_ &&
+                    std::find(dirs.begin(), dirs.end(), parent) == dirs.end())
+                    dirs.push_back(parent);
+            }
+            for (const std::string &dir : dirs) {
+                const int dirFd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                if (dirFd >= 0) {
+                    ::fsync(dirFd);
+                    ::close(dirFd);
+                }
+            }
+            if (::fsync(fd) != 0)
+                result = -1;
+        } else {
+            result = ::syncfs(fd);
+        }
         const int savedErrno = errno;
         ::close(fd);
-        std::cerr << "ApertarCore recording stop: synced to the medium in "
+        std::cerr << "ApertarCore recording stop: " << (secondary ? "fsynced the take's files in " : "synced to the medium in ")
                   << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
                   << " ms" << (result != 0 ? std::string(" (failed: ") + std::strerror(savedErrno) + ")" : std::string()) << "\n";
     }
@@ -4953,9 +5144,12 @@ public:
         expectedRawBufferSize_ = 0;
     }
 
-    // A split take: make part_<part> once, on the copy side, before its first frame is queued (several copy threads
-    // may arrive here; the set and the mutex make each folder exactly once). A failed mkdir is logged; the writer's
-    // open then fails and the take ends as on any write failure.
+    // A split take: make part_<part> once, on a writer thread, before the first frame of that part is written (several
+    // writers may arrive here; the set and the mutex make each folder exactly once, and a writer that finds the part
+    // already made waits for its mkdir to finish). Not on the copy side: a mkdir that waits behind queued writes on
+    // exFAT over USB held the copy worker for >= 6 frame periods and cost 3 copy-slot drops at frame 40,000 (SSD night 2,
+    // 2026-11-09). A writer that waits is absorbed by the queue, and a mkdir stuck on a removed medium is covered by
+    // stop()'s bounded wait. A failed mkdir is logged; the open then fails and the take ends as on any write failure.
     void ensurePartFolder(uint64_t part)
     {
         std::lock_guard<std::mutex> partLock(partMutex_);
@@ -4970,8 +5164,6 @@ public:
                  RawFrameView frame,
                  CdngEncoder::Metadata metadata)
     {
-        if (framesPerFolder_ > 0 && recordingFormat_ != RecordingFormat::Mlv)
-            ensurePartFolder(framepath::partIndex(metadata.frameIndex, framesPerFolder_));
         std::lock_guard<std::mutex> lock(mutex_);
         if (stopping_ || workers_.empty())
             return false;
@@ -5204,7 +5396,7 @@ private:
                                                     const std::string &sensor = std::string())
     {
         // The template decides the name (default {format}_{date}_{clip} = cDNG_26-10-28_C0001, as always);
-        // the number is the lowest C#### whose folder does not exist yet.
+        // the number is the lowest C#### not used yet that day (src/util/ClipName.hpp nextClipNumber).
         const std::filesystem::path root = mediaRootPath(mediaRoot);
         return root / nextClipFolderName(root, settings, sensor, std::chrono::system_clock::now());
     }
@@ -5270,12 +5462,16 @@ private:
             }
 
             job.frame.data = job.rawBytes.data();
+            if (framesPerFolder_ > 0)
+                ensurePartFolder(framepath::partIndex(job.metadata.frameIndex, framesPerFolder_));
             const bool timeLossless = settings_.recordingFormat == RecordingFormat::Cdng &&
                 settings_.cdngCompression == CdngCompression::LosslessJpeg;
             const auto wallStarted = std::chrono::steady_clock::now();
             const uint64_t cpuStartedUs = timeLossless ? currentThreadCpuTimeUs() : 0;
             bool completed = false;
             try {
+                if (framesPerFolder_ > 0)
+                    ensurePartFolder(framepath::partIndex(job.metadata.frameIndex, framesPerFolder_));
                 if (lossyEncoder) {
                     lossyEncoder->writeDngFile(job.path, job.frame, job.metadata);
                     // The lossy writer stores asynchronously and only logged its
@@ -5566,6 +5762,8 @@ private:
     std::string clipName_;
     std::atomic<uint64_t> frameIndex_{0};
     int64_t firstFrameTimestampUs_ = 0;
+    int64_t lastFrameTimestampUs_ = 0;   // previous frame's sensor time (nextFrameIndex, the completion thread only)
+    std::atomic<uint64_t> indexJumps_{0}; // frames whose time index ran ahead of the count (nextFrameIndex)
     uint64_t droppedFrames_ = 0;
     RecordingDropWarning *dropWarning_ = nullptr;
     uint64_t discardedOnStopFrames_ = 0;
@@ -5582,8 +5780,8 @@ private:
     std::atomic<int64_t> lastWriteProgressNs_{0};
     int mediaDirFd_ = -1;   // the clip folder, for the once-a-second sync
     // [storage] frames_per_folder of this take (0 = every frame in the clip folder). Set in startAtFolder before any
-    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made on the copy side
-    // (ensurePartFolder, before the frame is queued), never by a writer.
+    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made by the writers
+    // (ensurePartFolder, before the frame is written), so stop()'s bounded wait covers a mkdir on a dead medium.
     unsigned framesPerFolder_ = 0;
     std::mutex partMutex_;
     std::unordered_set<uint64_t> partsCreated_;
@@ -5667,6 +5865,8 @@ public:
     {
         stop();
     }
+
+    void setTimecodeSlot(const TimecodeSlot &slot) { timecodeSlot_ = slot; }
 
     bool startAtFolder(const std::filesystem::path &folderPath,
                        const CaptureSettings &settings,
@@ -6262,6 +6462,9 @@ private:
         config.height = height_;
         config.fps = fps_;
         config.freeRunTimecode = freeRunTimecode_;
+        config.tcOffsetUs = timecodeSlot_.offsetUs;
+        config.tcPeriodNum = timecodeSlot_.periodNum;
+        config.tcPeriodDen = timecodeSlot_.periodDen;
         return libavEncoder_.open(config, error);
     }
 
@@ -6696,6 +6899,7 @@ private:
     RecordingFailure failure_;
     std::function<void(int64_t)> frameWritten_;
     bool freeRunTimecode_ = false;
+    TimecodeSlot timecodeSlot_;   // the take's slot timecode (design 6.3); set before startAtFolder
     bool copyingDone_ = false;
     std::atomic<bool> finalizing_{false};
     std::atomic<bool> active_{false};
@@ -6951,24 +7155,29 @@ private:
 
 #if APERTARCORE_HAS_LIBCAMERA
 
-// Returns an open descriptor for the imx585 subdev, or -1.
+// The I2C node the Core's subdev lookups are limited to, "" = every subdev (today's behaviour). A secondary is
+// always limited to its node (one that matched no node gets a scope nothing lies under). The primary is limited to
+// cam0's node when a sensor subdev is there; with none (a one-sensor rig on cam1, or cam0's sensor missing) it
+// looks everywhere as before.
+std::string subdevScopeNode()
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    resolveCameraSelectionLocked(state);
+    if (cameraIsSecondary(state.value))
+        return state.node.valid ? state.node.path : std::string("/-");
+    if (!state.node.valid)
+        return {};
+    return cameraport::sensorSubdevUnder({}, state.node.path) ? state.node.path : std::string();
+}
+
+// Returns an open descriptor for the imx585 subdev under the Core's I2C node, or -1.
 int openImx585Subdev()
 {
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
-        if (ec)
-            break;
-        const std::string node = entry.path().filename().string();
-        if (node.rfind("v4l-subdev", 0) != 0)
-            continue;
-        std::ifstream nameFile(entry.path() / "name");
-        std::string name;
-        std::getline(nameFile, name);
-        if (name.find("imx585") == std::string::npos)
-            continue;
-        return ::open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
-    }
-    return -1;
+    const std::string node = cameraport::findSubdevNode({}, subdevScopeNode(), "imx585");
+    if (node.empty())
+        return -1;
+    return ::open(("/dev/" + node).c_str(), O_RDWR | O_CLOEXEC);
 }
 
 bool imx585SubdevPresent()
@@ -6980,24 +7189,91 @@ bool imx585SubdevPresent()
     return true;
 }
 
-// True when a sensor subdev of another known family (IMX283, IMX294, IMX477, IMX577) is on the bus: the sensor is
-// positively not an IMX585. A missing imx585 subdev alone proves nothing (the driver may still be binding at boot).
+// True when a sensor subdev of another known family (IMX283, IMX294, IMX477, IMX577) is on the Core's I2C node: the
+// sensor is positively not an IMX585. A missing imx585 subdev alone proves nothing (the driver may still be binding
+// at boot).
 bool otherSensorSubdevPresent()
 {
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
-        if (ec)
-            break;
-        if (entry.path().filename().string().rfind("v4l-subdev", 0) != 0)
-            continue;
-        std::ifstream nameFile(entry.path() / "name");
-        std::string name;
-        std::getline(nameFile, name);
-        const SensorFamily family = detectSensorFamily(name);
+    for (const auto &subdev : cameraport::subdevsUnder({}, subdevScopeNode())) {
+        const SensorFamily family = detectSensorFamily(subdev.name);
         if (family != SensorFamily::Unknown && family != SensorFamily::Imx585)
             return true;
     }
     return false;
+}
+
+// The camera this Core opens, from the libcamera list: a secondary takes the camera on its own port or nothing
+// (never front()); the primary prefers cam0's port, else the first non-USB camera, else front() as before.
+std::shared_ptr<libcamera::Camera> pickCamera(const std::vector<std::shared_ptr<libcamera::Camera>> &cameras)
+{
+    std::string value;
+    cameraport::Node node;
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        value = state.value;
+        node = state.node;
+    }
+    const auto notUsb = [](const auto &camera) {
+        return camera && camera->id().find("/usb") == std::string::npos;
+    };
+    if (cameraIsSecondary(value) || node.valid) {
+        const auto own = std::find_if(cameras.begin(), cameras.end(), [&](const auto &camera) {
+            return notUsb(camera) && cameraport::cameraIdUnder(camera->id(), node.path);
+        });
+        if (own != cameras.end())
+            return *own;
+        if (cameraIsSecondary(value))
+            return nullptr;
+    }
+    const auto selected = std::find_if(cameras.begin(), cameras.end(), notUsb);
+    return selected != cameras.end() ? *selected : cameras.empty() ? nullptr : cameras.front();
+}
+
+// What the session opened: its id and port for the state, and the primary's fallback guard. When config.txt names a
+// sensor on cam0 and the camera opened lies on another port (cam0's sensor failed to probe), the primary records as
+// today but saves no camera settings, so cam0's saved choice (Clear HDR, 16 bit, 4K) survives until the IMX585 is back.
+void recordOpenedCamera(const std::string &cameraId)
+{
+    auto &state = cameraSelection();
+    bool fallback = false;
+    std::string port;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        state.openedId = cameraId;
+        state.openedPort = cameraport::portOfCameraId({}, cameraId);
+        port = state.openedPort;
+        fallback = !cameraIsSecondary(state.value) && state.node.valid &&
+                   !cameraport::cameraIdUnder(cameraId, state.node.path) && cameraport::configNamesPort({}, "cam0");
+        state.noPersist = fallback;
+    }
+    if (fallback)
+        std::cerr << "ApertarCore camera: config.txt names a sensor on cam0 but " << cameraId
+                  << " is open (port " << (port.empty() ? "?" : port)
+                  << "); camera settings are not saved in this fallback.\n";
+}
+
+// The primary's wait for cam0's sensor subdev when config.txt names a sensor on cam0: a boot may not have probed it
+// yet, and the primary would otherwise hand cam1's sensor to itself. Once per process; 0.5 s polls up to 20 s.
+void waitForCam0Subdev()
+{
+    cameraport::Node node;
+    {
+        auto &state = cameraSelection();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        resolveCameraSelectionLocked(state);
+        if (state.cam0Waited || cameraIsSecondary(state.value) || !state.node.valid)
+            return;
+        state.cam0Waited = true;
+        node = state.node;
+    }
+    if (!cameraport::configNamesPort({}, "cam0") || cameraport::sensorSubdevUnder({}, node.path))
+        return;
+    if (!cameraport::waitForSensorSubdev({}, node.path, 20000, 500))
+        std::cerr << "ApertarCore camera: config.txt names a sensor on cam0 but no subdev appeared under " << node.path
+                  << " in 20 s; going on with the first camera libcamera lists.\n";
 }
 
 // Writes wide_dynamic_range and reads it back. Must run before libcamera's
@@ -7140,22 +7416,14 @@ std::vector<CameraController::SensorMode> probeSensorModes()
         }
         {
             const auto cameras = manager.cameras();
-            const auto selected = std::find_if(cameras.begin(), cameras.end(), [](const auto &camera) {
-                return camera && camera->id().find("/usb") == std::string::npos;
-            });
-            const std::shared_ptr<libcamera::Camera> camera = selected != cameras.end() ? *selected
-                : cameras.empty() ? nullptr : cameras.front();
+            const std::shared_ptr<libcamera::Camera> camera = pickCamera(cameras);
             if (camera && camera->acquire() == 0) {
                 auto config = camera->generateConfiguration({libcamera::StreamRole::Raw});
                 if (config && config->size() > 0) {
                     const libcamera::StreamFormats formats = config->at(0).formats();
                     // An IMX585 is probed by its mode tables (one configure per offered row of the class);
                     // any other sensor by the sizes it advertises.
-                    const auto model = camera->properties().get(libcamera::properties::Model);
-                    std::string modelName = model ? std::string(*model) : std::string();
-                    std::transform(modelName.begin(), modelName.end(), modelName.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    const bool tableProbe = modelName.find("imx585") != std::string::npos;
+                    const bool tableProbe = detectSensorFamily(camera->id()) == SensorFamily::Imx585;
                     for (const auto &pixelFormat : formats.pixelformats()) {
                         RawBitDepth depth;
                         PixelPacking packing;
@@ -7173,6 +7441,16 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                                 const auto transport = apertar::imx585::transportFor(cls, row);
                                 probeSizes.emplace_back(transport.width, transport.height);
                                 probeBinning.push_back(row.binned ? 2u : 1u);
+                            }
+                            for (const auto &advertised : formats.sizes(pixelFormat)) {
+                                bool covered = false;
+                                for (const auto &row : apertar::imx585::all(cls))
+                                    covered = covered || apertar::imx585::transportFor(cls, row) ==
+                                        apertar::imx585::Size{ advertised.width, advertised.height };
+                                if (!covered)
+                                    std::cerr << "ApertarCore sensor probe: " << pixelFormat.toString() << " "
+                                              << advertised.toString() << (clearHdr ? " clear_hdr" : " sdr")
+                                              << " is a driver mode with no IMX585 table row\n";
                             }
                         } else {
                             probeSizes = formats.sizes(pixelFormat);
@@ -7234,13 +7512,19 @@ void probeSensorModesOnce()
         std::lock_guard<std::mutex> lock(probedSensorModesMutex);
         if (sensorModesProbed)
             return;
-        sensorModesProbed = true;
+        if (!boolEnvValue("APERTAR_SENSOR_PROBE", true)) {
+            sensorModesProbed = true;
+            return;
+        }
     }
-    if (!boolEnvValue("APERTAR_SENSOR_PROBE", true))
-        return;
     auto modes = probeSensorModes();
     std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    // Done only after a probe that found modes: a WDR EBUSY, a failed manager start or the wrong camera leaves the
+    // pool empty, and the next start probes again.
+    if (modes.empty())
+        return;
     probedSensorModes = std::move(modes);
+    sensorModesProbed = true;
 }
 
 #endif
@@ -7281,6 +7565,7 @@ public:
         // sanitiser does for the family later. A subdev that is merely not found yet (the driver still binding at
         // boot, or an open() failure) keeps the setting: setSensorWideDynamicRange fails the start with its error
         // and the saved choice is not rewritten.
+        waitForCam0Subdev();
         const bool otherSensor = (sensorFamily_ != SensorFamily::Unknown && sensorFamily_ != SensorFamily::Imx585) ||
                                  otherSensorSubdevPresent();
         if (settings.clearHdr && otherSensor && !imx585SubdevPresent()) {
@@ -7303,12 +7588,14 @@ public:
         const auto automaticTuningPath = [&](std::string path) {
             return settings.clearHdr ? tuning::clearHdrVariant(path, tuningPipeline) : path;
         };
-        // Preview temporal denoise off (the default): libcamera loads a copy of the resolved tuning file without
+        // Preview temporal denoise switched off: libcamera loads a copy of the resolved tuning file without
         // its rpi.denoise tdn blocks. tuningPath stays the resolved file; activePath is what libcamera loads.
+        // H.264 and ProRes record the ISP output, so they always get the tuning file as it is.
+        const bool ispOutputRecorded = !settings.photoModeEnabled && isProcessedVideoFormat(settings.recordingFormat);
         std::string activePath;
         const auto loadablePath = [&](const std::string &path) {
             activePath = path;
-            if (!settings.previewTdn) {
+            if (!settings.previewTdn && !ispOutputRecorded) {
                 std::string note;
                 activePath = tuning::previewTuningPath(path, tuningPipeline, note);
                 if (!note.empty())
@@ -7318,7 +7605,8 @@ public:
             return activePath;
         };
         std::string tuningPath = automaticTuning
-            ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline))
+            ? automaticTuningPath(tuning::preselectDefault(tuningDirectories, tuningPipeline,
+                                                                       "/sys/class/video4linux", subdevScopeNode()))
             : settings.tuningFile;
         if (automaticTuning && settings.clearHdr && tuningPath.find("_clearHDR") == std::string::npos)
             std::cerr << "ApertarCore Clear HDR tuning variant (<sensor>_clearHDR.json) not found; "
@@ -7353,10 +7641,7 @@ public:
                 return false;
             }
 
-            auto selected = std::find_if(cameras.begin(), cameras.end(), [](const auto &camera) {
-                return camera && camera->id().find("/usb") == std::string::npos;
-            });
-            camera_ = selected != cameras.end() ? *selected : cameras.front();
+            camera_ = pickCamera(cameras);
 
             if (!camera_) {
                 setError(error, "Failed to select a libcamera camera.");
@@ -7441,8 +7726,14 @@ public:
 
         sensorFamily_ = detectSensorFamily(camera_->id());
         settings_ = sanitizeSettingsForSensor(settings, sensorFamily_, monochromeSensor_);
+        recordOpenedCamera(camera_->id());
 
-        if (camera_->acquire() != 0) {
+        if (const int acquired = camera_->acquire(); acquired != 0) {
+            if (acquired == -EBUSY && cameraIsSecondary(cameraSelection().value)) {
+                std::cerr << "ApertarCore camera " << cameraSelection().value << ": " << cameraIdForLog(camera_)
+                          << " is held by another process (EBUSY); exiting.\n";
+                cameraport::busyExitRequested().store(true);
+            }
             setError(error, "Failed to acquire camera " + cameraIdForLog(camera_) + ".");
             stop();
             return false;
@@ -7485,7 +7776,12 @@ public:
     void stop()
     {
 #if APERTARCORE_HAS_LIBCAMERA
-        { std::lock_guard lock(recordingFrameMutex_); recordingFramesEnabled_ = false; }
+        {
+            std::lock_guard lock(recordingFrameMutex_);
+            recordingFramesEnabled_ = false;
+            takePending_ = false;
+            phaseLockReleasedForRamp_ = false;
+        }
         running_ = false;
 
         if (camera_) {
@@ -7499,8 +7795,10 @@ public:
         {
             std::lock_guard<std::mutex> lock(controlsMutex_);
             pendingControls_.clear();
-            phaseLock_.release();
+            phaseLock_.release(PhaseLockArmReason::Stream);
             phaseLockDurationUs_.reset();
+            forgetPhaseLockStretch();
+            phaseLockLineUs_ = 0.0;   // read again at the next stream start
         }
         setPrerollFps(0.0);   // a reconfigure ends a storage pre-roll's frame-rate override
 
@@ -7551,7 +7849,13 @@ public:
     bool reconfigure(const CaptureSettings &settings, std::string *error, bool forPhoto = false)
     {
 #if APERTARCORE_HAS_LIBCAMERA
+        // Leaving photo mode restarts the stream: the phase lock's next arm reports the photo exit, not the restart.
+        const bool photoModeExit = settings_.photoModeEnabled && !settings.photoModeEnabled;
         stop();
+        if (photoModeExit) {
+            std::lock_guard<std::mutex> lock(controlsMutex_);
+            phaseLock_.release(PhaseLockArmReason::PhotoModeExit);
+        }
         photoStreamOverride_ = forPhoto;
         return start(settings, error);
 #else
@@ -7578,6 +7882,7 @@ public:
         constrainExposureMetering(sanitized, exposureMeteringModes());
         longExposureTimingUsed_ |= sanitized.photoModeEnabled && sanitized.longExposureEnabled;
 
+        bool fpsChanged = false;
         {
             std::unique_lock settingsLock(sessionSettingsMutex_);
             std::lock_guard<std::mutex> lock(controlsMutex_);
@@ -7586,14 +7891,27 @@ public:
                                                    camera_->controls(),
                                                    Resolution{ configuredSensorWidth_, configuredSensorHeight_ },
                                                    camera_->properties(), monochromeSensor_);
-            if (std::fabs(settings_.fps - sanitized.fps) > 1e-9 || settings_.fpsPhaseLock != sanitized.fpsPhaseLock ||
+            fpsChanged = std::fabs(settings_.fps - sanitized.fps) > 1e-9;
+            if (fpsChanged || settings_.fpsPhaseLock != sanitized.fpsPhaseLock ||
                 settings_.photoModeEnabled != sanitized.photoModeEnabled) {
-                phaseLock_.release();
+                // The next arm reports why (the trace's arm=): the fps change once its grace has passed, a photo
+                // mode exit, or the switch. A stretch already sent stays tracked: its request is still queued.
+                phaseLock_.release(fpsChanged ? PhaseLockArmReason::FpsChange
+                                   : settings_.photoModeEnabled != sanitized.photoModeEnabled ? PhaseLockArmReason::PhotoModeExit
+                                   : PhaseLockArmReason::Enable);
                 phaseLockDurationUs_.reset();
             }
-            if (std::fabs(settings_.fps - sanitized.fps) > 1e-9)
+            if (fpsChanged)
                 noteFpsChange(settings_.fps, sanitized.fps, sanitized.shutterUs);
             settings_ = sanitized;
+            vblankOnlyPins_ = sanitized.fpsPhaseLock && !sanitized.photoModeEnabled;
+        }
+        // A Speed Ramp take: its first fps change releases the phase lock until the take stops, so no arm pulls a
+        // ramp's frames off their rate. The grace noteFpsChange started covers the frames before this is set.
+        if (fpsChanged) {
+            std::lock_guard lock(recordingFrameMutex_);
+            if (takePending_ || recordingFramesEnabled_)
+                phaseLockReleasedForRamp_ = true;
         }
         return true;
 #else
@@ -7604,19 +7922,73 @@ public:
     }
 
     bool startRecording(const std::string &mediaRoot,
-                        const CaptureSettings &settings,
+                        const CaptureSettings &requestedSettings,
                         const AudioRecordingOptions &audioOptions,
                         const GyroRecordingOptions &gyroOptions,
-                        std::string *error)
+                        std::string *error,
+                        const TakeOptions &take = TakeOptions{})
     {
 #if APERTARCORE_HAS_LIBCAMERA
+        // The {cam} rule (design 6.2): with cam1 configured a template-made name always holds {cam}. The stored
+        // template is not touched; only this take's copy is. A verbatim clip_name is used as it is.
+        CaptureSettings settings = requestedSettings;
+        if (take.clipName.empty() && take.twoCameras) {
+            const auto parsed = apertar::clipname::parseForTwoCameras(settings.clipNameTemplate);
+            if (!parsed.ok) {
+                setError(error, parsed.error);
+                return false;
+            }
+            settings.clipNameTemplate = apertar::clipname::ensureCamToken(settings.clipNameTemplate);
+        }
+        if (!take.clipName.empty() && !apertar::clipname::validVerbatimName(take.clipName)) {
+            setError(error, apertar::clipname::kInvalidClipName);
+            return false;
+        }
         if (photoStreamOverride_ && !reconfigure(settings, error))
             return false;
         if (monochromeSensor_ && settings.recordingFormat == RecordingFormat::Mlv) {
             setError(error, "Monochrome MLV is not supported. Select cDNG or H.264 instead.");
             return false;
         }
-        recordingClock_ = RecordingClock();
+        // takePending_ (design §6.2 step 5): this camera's take is decided, so the phase lock starts no stretch
+        // from here on. Every failure below withdraws it; a take that opened its gate keeps it until its stop.
+        { std::lock_guard lock(recordingFrameMutex_); takePending_ = true; }
+        struct TakePendingGuard {
+            CameraSession *session;
+            ~TakePendingGuard() {
+                std::lock_guard lock(session->recordingFrameMutex_);
+                if (!session->recordingFramesEnabled_) {
+                    session->takePending_ = false;
+                    session->phaseLockReleasedForRamp_ = false;
+                }
+            }
+        } withdrawOnFailure{this};
+        // Timecode from the slot (design 6.3): with tc_offset_us every frame is stamped slot time + offset.
+        const auto frameRate = recordingFrameRate(settings.fps);
+        TimecodeSlot timecodeSlot;
+        if (take.hasTcOffset)
+            timecodeSlot = TimecodeSlot{take.tcOffsetUs, frameRate.first, frameRate.second};
+        recordingClock_ = RecordingClock(timecodeSlot);
+        h264Recorder_.setTimecodeSlot(timecodeSlot);
+        proresRecorder_.setTimecodeSlot(timecodeSlot);
+        takeSlotted_ = take.startUs > 0;
+        takeRate_ = takeslots::Rate{frameRate.first, frameRate.second};
+        takeStartUs_ = take.startUs;
+        takeInfo_ = take.info;
+        takeUnsyncedReason_ = take.unsyncedReason;
+        firstRecordedTsUs_.store(0, std::memory_order_relaxed);
+        lastRecordedTsUs_.store(0, std::memory_order_relaxed);
+        unsyncedFromTsUs_.store(0, std::memory_order_relaxed);
+        rampCountNumbering_ = false;
+        rampSwitchFrame_ = -1;
+        takeGateFrames_ = 0;
+        testDropFrame_ = 0;
+        if (const char *drop = std::getenv("APERTAR_TEST_DROP_FRAME"); drop && *drop) {   // test only (design 8, 2.3)
+            char *end = nullptr;
+            const long long n = std::strtoll(drop, &end, 10);
+            if (end != drop && n > 0)
+                testDropFrame_ = static_cast<uint64_t>(n);
+        }
         recordingGapEstimate_ = 0;
         {
             std::lock_guard<std::mutex> lock(rampMutex_);
@@ -7639,12 +8011,31 @@ public:
 
         std::filesystem::path clipFolder;
         try {
-            clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings, sensorFamilyName(sensorFamily_));
-            std::filesystem::create_directories(clipFolder);
+            if (!take.clipName.empty()) {
+                // A given name is the folder name, made exclusively: a folder that exists refuses the take.
+                const std::filesystem::path root = mediaRootPath(mediaRoot);
+                std::error_code ec;
+                std::filesystem::create_directories(root, ec);
+                clipFolder = root / take.clipName;
+                ec.clear();
+                if (!std::filesystem::create_directory(clipFolder, ec)) {
+                    setError(error, ec ? "Could not create the clip folder: " + ec.message()
+                                       : "A clip folder named " + take.clipName + " already exists.");
+                    return false;
+                }
+            } else {
+                clipFolder = DngRecordingQueue::reserveClipFolder(mediaRoot, settings, sensorFamilyName(sensorFamily_));
+                std::filesystem::create_directories(clipFolder);
+            }
         } catch (const std::exception &e) {
             setError(error, e.what());
             return false;
         }
+        takeFolder_ = clipFolder;
+        if (takeInfo_)
+            takeInfo_->begin(clipFolder.filename().string());
+        if (!takeUnsyncedReason_.empty())
+            std::cerr << "ApertarCore take NOT SYNCED: " << takeUnsyncedReason_ << "\n";
 
         if (gyroOptions.enabled) {
             const std::string clipFolderString = clipFolder.string();
@@ -7727,7 +8118,7 @@ public:
             }
             lastRecordingFormat_ = settings.recordingFormat;
             dropWarning_.reset();
-            { std::lock_guard lock(recordingFrameMutex_); recordingStartBootUs_ = clockMicroseconds(CLOCK_BOOTTIME); waitingForRecordingCadence_ = true; recordingFramesEnabled_ = true; }
+            armRecordingGate(take);
             return true;
         }
 
@@ -7745,17 +8136,136 @@ public:
         }
         lastRecordingFormat_ = settings.recordingFormat;
         dropWarning_.reset();
-        { std::lock_guard lock(recordingFrameMutex_); recordingStartBootUs_ = clockMicroseconds(CLOCK_BOOTTIME); waitingForRecordingCadence_ = true; recordingFramesEnabled_ = true; }
+        armRecordingGate(take);
         return true;
 #else
         (void)mediaRoot;
-        (void)settings;
+        (void)requestedSettings;
         (void)audioOptions;
         (void)gyroOptions;
         (void)error;
+        (void)take;
         return true;
 #endif
     }
+
+#if APERTARCORE_HAS_LIBCAMERA
+    // Opens the frame gate. Without start_us the first frame is the first after now (as before); with it, the first
+    // frame whose SensorTimestamp is at or after start_us, so the gate waits for the slot (design 6.2 step 5). A
+    // stop_us given at the start is armed with the gate.
+    void armRecordingGate(const TakeOptions &take)
+    {
+        std::lock_guard lock(recordingFrameMutex_);
+        recordingStartBootUs_ = take.startUs > 0 ? take.startUs : clockMicroseconds(CLOCK_BOOTTIME);
+        recordingStopBootUs_ = take.stopUs > 0 ? take.stopUs : 0;
+        stopGateSeen_ = false;
+        waitingForRecordingCadence_ = true;
+        recordingFramesEnabled_ = true;
+    }
+
+    // record_stop with a stop_us (design 6.2): returns when the gate has seen a frame at or after stopUs, or when
+    // CLOCK_MONOTONIC has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
+    // once T62's journal has it). A stopUs already past arms the stop and returns at once. The caller holds no lock
+    // of the controller; the gate's own mutex is released while waiting. The frames after stopUs are requeued by the
+    // gate, so the clip ends on slot k1 - 1.
+    void waitForStopSlot(int64_t stopUs)
+    {
+        if (stopUs <= 0)
+            return;
+        std::unique_lock<std::mutex> lock(recordingFrameMutex_);
+        if (!recordingFramesEnabled_)
+            return;
+        recordingStopBootUs_ = stopUs;
+        stopGateSeen_ = false;
+        const int64_t nowUs = clockMicroseconds(CLOCK_BOOTTIME);
+        const double periodUs = takeRate_.valid() ? 1000000.0 * double(takeRate_.den) / double(takeRate_.num) : 40000.0;
+        const int64_t graceUs = std::max<int64_t>(100000, static_cast<int64_t>(3.0 * periodUs));
+        const int64_t waitUs = stopUs + graceUs - nowUs;
+        if (nowUs >= stopUs) {
+            std::cerr << "ApertarCore stop_us already past by " << (nowUs - stopUs) << " us: stopping at once\n";
+            return;
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const bool seen = stopGateCv_.wait_for(lock, std::chrono::microseconds(std::max<int64_t>(0, waitUs)),
+                                               [this] { return stopGateSeen_ || !recordingFramesEnabled_; });
+        std::cerr << "ApertarCore stop gate: " << (seen ? "frame at stop_us seen" : "timed out without a frame at stop_us")
+                  << " after "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+                  << " ms\n";
+    }
+
+    // The frame is recorded (or, for raw, numbered): the first one fixes the take's first slot.
+    void noteFirstFrame(int64_t timestampUs)
+    {
+        if (timestampUs <= 0)
+            return;
+        int64_t expected = 0;
+        if (!firstRecordedTsUs_.compare_exchange_strong(expected, timestampUs, std::memory_order_acq_rel))
+            return;
+        if (takeSlotted_ && takeInfo_)
+            takeInfo_->firstSlot.store(takeslots::slotOfUs(timestampUs, takeRate_), std::memory_order_release);
+    }
+
+    // A Speed Ramp step was requested in this take (the events are cleared at its start).
+    bool rampStepSeen()
+    {
+        std::lock_guard<std::mutex> lock(rampMutex_);
+        return !rampEvents_.empty();
+    }
+
+    // slots.txt in the clip folder (a take with start_us), and the take's last slot for get_state.
+    void finishTakeSlots(int64_t stopUs, bool mediumGone)
+    {
+        takeSlotted_ = false;   // once per take: a later stopRecording must not write it again
+        const int64_t lastTs = lastRecordedTsUs_.load(std::memory_order_acquire);
+        const int64_t firstTs = firstRecordedTsUs_.load(std::memory_order_acquire);
+        takeslots::SlotLog log;
+        log.rate = takeRate_;
+        log.startUs = takeStartUs_;
+        log.stopUs = stopUs;
+        if (firstTs > 0)
+            log.firstSlot = takeslots::slotOfUs(firstTs, takeRate_);
+        if (lastTs > 0)
+            log.lastSlot = takeslots::slotOfUs(lastTs, takeRate_);
+        if (log.lastSlot && stopUs > 0) {
+            const int64_t late = takeslots::framesLate(*log.lastSlot, takeslots::expectedLastSlot(stopUs, takeRate_));
+            if (late > 0) {
+                log.stoppedLateFrames = late;
+                std::cerr << "ApertarCore take " << takeslots::stoppedLateLine(late) << " (stop_us=" << stopUs << ")\n";
+            }
+        }
+        if (log.firstSlot && takeStartUs_ > 0) {
+            const int64_t late = takeslots::framesLate(*log.firstSlot, takeslots::expectedFirstSlot(takeStartUs_, takeRate_));
+            if (late > 0)
+                std::cerr << "ApertarCore take started " << late << (late == 1 ? " frame" : " frames")
+                          << " late (start_us=" << takeStartUs_ << ")\n";
+        }
+        if (!takeUnsyncedReason_.empty()) {
+            log.unsynced = true;
+            log.unsyncedReason = takeUnsyncedReason_;
+        } else if (const int64_t from = unsyncedFromTsUs_.load(std::memory_order_acquire); from > 0) {
+            log.unsynced = true;
+            log.unsyncedReason = "Speed Ramp step";
+            log.unsyncedFromSlot = takeslots::slotOfUs(from, takeRate_);
+        }
+        if (takeInfo_ && log.lastSlot)
+            takeInfo_->lastSlot.store(*log.lastSlot, std::memory_order_release);
+        std::cerr << "ApertarCore take slots: first=" << (log.firstSlot ? std::to_string(*log.firstSlot) : std::string("-"))
+                  << " last=" << (log.lastSlot ? std::to_string(*log.lastSlot) : std::string("-"))
+                  << (log.unsynced ? " NOT SYNCED" : "") << "\n";
+        if (mediumGone || takeFolder_.empty())
+            return;
+        const std::string path = (takeFolder_ / "slots.txt").string();
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) {
+            std::cerr << "ApertarCore slots: could not write " << path << "\n";
+            return;
+        }
+        out << takeslots::formatSlotsTxt(log);
+    }
+#else
+    void waitForStopSlot(int64_t) {}
+#endif
 
     // mediumGone: the recording medium is no longer there. Every recorder then
     // skips the finalisation that would reopen it (MLV header patch, H.264
@@ -7767,7 +8277,17 @@ public:
         emitMediaWriteState();
         // Close the frame gate before finalizing audio, and wait for an in-flight
         // enqueue/observe pair. Video must not grow after the WAV endpoint is fixed.
-        { std::lock_guard lock(recordingFrameMutex_); recordingFramesEnabled_ = false; }
+        // takePending_ goes with the gate: the phase lock may stretch again, and a Speed Ramp's release ends.
+        int64_t takeStopUs = 0;
+        {
+            std::lock_guard lock(recordingFrameMutex_);
+            recordingFramesEnabled_ = false;
+            takePending_ = false;
+            phaseLockReleasedForRamp_ = false;
+            takeStopUs = recordingStopBootUs_;
+            recordingStopBootUs_ = 0;
+            stopGateCv_.notify_all();
+        }
         if (recordingGapEstimate_ > 0 || requeueFailures_ > 0) {
             std::cerr << "ApertarCore capture stats: "
                       << "dropped_gap_estimate=" << recordingGapEstimate_
@@ -7799,6 +8319,8 @@ public:
         h264Recorder_.setMediumDead(false);
         timed("raw_ms", [&] { recorder_.stop(mediumGone); });
         writeFpsRampLog(mediumGone);
+        if (takeSlotted_)
+            finishTakeSlots(takeStopUs, mediumGone);
         timed("prores_ms", [&] { proresRecorder_.stop(); });
         timed("audio_ms", [&] { audioRecorder_.stop(/*finalize=*/!mediumGone); });
         if (!mediumGone)
@@ -7835,7 +8357,8 @@ public:
 #endif
     }
     // Storage pre-roll frame rate: fps > 0 makes applyControls keep exactly that fps (no lossless/ladder clamp) and pins
-    // {period, period} FrameDurationLimits on every request; 0 ends both. Idempotent, callable at any time.
+    // {period, period}, or {period, period + 1} with the phase lock on (fix A), FrameDurationLimits on every request;
+    // 0 ends both. Idempotent, callable at any time.
     void setPrerollFps(double fps)
     {
 #if APERTARCORE_HAS_LIBCAMERA
@@ -8211,6 +8734,7 @@ public:
         status.durationUs = phaseLockDurationUs_.value_or(0);
         status.pushes = phaseLock_.pushes;
         status.saturated = phaseLockSaturated_;
+        status.locked = phaseLock_.locked;
         return status;
 #else
         return {};
@@ -8267,6 +8791,61 @@ private:
         std::cerr << "ApertarCore could not reset stopped sensor timing after long exposure.\n";
     }
 
+    // Q's line time H (design §7.3): (mode width + HBLANK) / PIXEL_RATE from this camera's own subdev, found by
+    // of_node as resetStoppedSensorTiming finds it. HBLANK is the control's minimum: the lock's {d, d+1} pins keep
+    // it there (fix A), whatever a {d, d} pin set before the lock came on. Read once per stream start, after the
+    // mode is configured; 0 when a read fails, and the lock then pins whole microseconds. Logged only with the lock
+    // on or APERTAR_PHASE_LOCK_LOG set.
+    double readSensorLineUs()
+    {
+        const bool log = settings_.fpsPhaseLock || boolEnvValue("APERTAR_PHASE_LOCK_LOG", false);
+        const std::string cameraId = camera_->id();
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator("/sys/class/video4linux", ec)) {
+            if (ec) break;
+            const std::string node = entry.path().filename().string();
+            if (node.rfind("v4l-subdev", 0) != 0) continue;
+            const auto ofNode = std::filesystem::canonical(entry.path() / "device/of_node", ec);
+            const bool matchesDeviceTree = !ec && ofNode.string() == "/sys/firmware/devicetree" + cameraId;
+            ec.clear();
+            std::ifstream nameFile(entry.path() / "name");
+            std::string name;
+            std::getline(nameFile, name);
+            if (!matchesDeviceTree && name != cameraId) continue;
+
+            const int fd = ::open(("/dev/" + node).c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) break;
+            v4l2_subdev_format format{};
+            format.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+            format.pad = 0;
+            v4l2_query_ext_ctrl hblank{};
+            hblank.id = V4L2_CID_HBLANK;
+            v4l2_ext_control pixelRate{};
+            pixelRate.id = V4L2_CID_PIXEL_RATE;
+            v4l2_ext_controls controls{};
+            controls.which = V4L2_CTRL_WHICH_CUR_VAL;
+            controls.count = 1;
+            controls.controls = &pixelRate;
+            const bool read = ::ioctl(fd, VIDIOC_SUBDEV_G_FMT, &format) == 0 &&
+                              ::ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &hblank) == 0 &&
+                              ::ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0;
+            ::close(fd);
+            if (!read || format.format.width == 0 || pixelRate.value64 <= 0)
+                break;
+            const double lineUs = (static_cast<double>(format.format.width) + static_cast<double>(hblank.minimum)) * 1e6 /
+                                  static_cast<double>(pixelRate.value64);
+            if (log)
+                std::cerr << "ApertarCore phase-lock: line_ns=" << std::llround(lineUs * 1000.0)
+                          << " width=" << format.format.width << " hblank_min=" << hblank.minimum
+                          << " pixel_rate=" << pixelRate.value64 << " vmax_step=" << phaseLockVmaxStep() << "\n";
+            return lineUs;
+        }
+        if (log)
+            std::cerr << "ApertarCore phase-lock: no line time from the sensor subdev, the lock pins whole microseconds and lands "
+                         "within 50 us\n";
+        return 0.0;
+    }
+
     bool configureAndStart(const CaptureSettings &settings, std::string *error)
     {
         capturePriorityAdjusted_ = false;
@@ -8293,7 +8872,10 @@ private:
             ? std::array<bool, 2>{ false, true }
             : std::array<bool, 2>{ true, false };
         const bool allowAutoSensorConfigFallback = monochromeSensor_ || sensorFamily_ == SensorFamily::Imx294 ||
-                                                   sensorFamily_ == SensorFamily::Imx577;
+                                                   sensorFamily_ == SensorFamily::Imx577 ||
+                                                   (sensorFamily_ == SensorFamily::Imx585 &&
+                                                    sanitized.resolution.width == 3840 &&
+                                                    isImx585LegacyCropResolution(sanitized.resolution));
         std::ostringstream rejectionLog;
 
         for (const SensorModeSelection &sensorMode : sensorModes) {
@@ -8461,7 +9043,8 @@ private:
 
                 if (includeRawStream &&
                     (sensorFamily_ == SensorFamily::Imx477 || sensorFamily_ == SensorFamily::Imx577 ||
-                     sensorFamily_ == SensorFamily::Imx294)) {
+                     sensorFamily_ == SensorFamily::Imx294 ||
+                     (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && !useExplicitSensorConfig))) {
                     const libcamera::StreamConfiguration &candidateRawConfig =
                         candidateConfig->at(rawStreamIndex);
                     const bool invalidReadout = sensorFamily_ == SensorFamily::Imx294
@@ -8482,10 +9065,10 @@ private:
                     }
                 }
 
-                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_) {
-                    // A colour IMX585 is configured explicitly, so the driver must hand over exactly the
-                    // mode asked for: raw size, bit depth, and a ScalerCropMaximum of active size x binning
-                    // (the window the driver reports in native pixels). A mode it adjusted is refused.
+                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && useExplicitSensorConfig) {
+                    // Configured explicitly, a colour IMX585 driver must hand over exactly the mode asked
+                    // for: raw size, bit depth, and a ScalerCropMaximum of active size x binning (the
+                    // window the driver reports in native pixels). A mode it adjusted is refused.
                     std::string adjusted;
                     if (includeRawStream) {
                         const libcamera::StreamConfiguration &candidateRawConfig =
@@ -8512,7 +9095,8 @@ private:
                     const auto *imx585Row = apertar::imx585::find(imx585Class, sanitized.resolution.width,
                                                                   sanitized.resolution.height, 0);
                     const auto cropMaximum = camera_->properties().get(libcamera::properties::ScalerCropMaximum);
-                    if (adjusted.empty() && imx585Row && cropMaximum) {
+                    // A driver that reports its crop as the output size gives no window to compare.
+                    if (adjusted.empty() && imx585Row && cropMaximum && cropMaximum->size() != rawSize) {
                         const uint32_t binning = imx585Row->binned ? 2u : 1u;
                         if (cropMaximum->width != imx585Row->width * binning ||
                             cropMaximum->height != imx585Row->height * binning)
@@ -8748,6 +9332,19 @@ private:
             std::cerr << "ApertarCore preview crop: native_max=" << maximum->toString()
                       << " applied=" << (applied ? applied->toString() : "pipeline-default") << '\n';
         }
+        // Phase lock: Q's line time for this mode, and the start controls' pin, which every initial request runs
+        // with, so the stretch can count the frames already decided from the first frame on.
+        const double lineUs = readSensorLineUs();
+        {
+            std::lock_guard<std::mutex> lock(controlsMutex_);
+            phaseLockLineUs_ = lineUs;
+            vblankOnlyPins_ = settings_.fpsPhaseLock && !settings_.photoModeEnabled;
+            forgetPhaseLockStretch();
+            const auto limits = initialControls.get(libcamera::controls::FrameDurationLimits);
+            phaseLockSentPeriodNs_ = limits && limits->size() == 2 ? pinPeriodNs((*limits)[0], (*limits)[1]) : 0;
+            phaseLockRequestPeriodNs_.assign(requests_.size(), phaseLockSentPeriodNs_);
+            phaseLockCompletedNs_.fill(phaseLockSentPeriodNs_);
+        }
         if (camera_->start(&initialControls) != 0) {
             setError(error, "Failed to start libcamera capture.");
             return false;
@@ -8881,27 +9478,131 @@ private:
         return true;
     }
 
-    // Frame-rate phase lock: one servo step per completed frame, referenced to
-    // CLOCK_BOOTTIME (the SensorTimestamp domain, which is also where the audio
-    // samples are stamped, so no audio change is needed). Runs on the completion thread.
-    void stepFramePhaseLock(libcamera::Request *request)
+    // The VMAX quantum in lines (design §7.3): IMX585 2 (MEASURED, T56: 14.8 µs steps at HMAX 550); every other
+    // family 1 (UNCONFIRMED; the IMX283's comes from its driver map later).
+    int phaseLockVmaxStep() const
+    {
+        return sensorFamily_ == SensorFamily::Imx585 ? 2 : 1;
+    }
+
+    // The period in ns that a FrameDurationLimits {min, max} pin gives (controlsMutex_, for H). min != max takes
+    // libcamera's default blanking: whole lines of H, VMAX floored to the step. {d, d} lands on the helper's
+    // (HMAX, VMAX) lattice next to d. Without H: whole microseconds.
+    int64_t pinPeriodNs(int64_t minUs, int64_t maxUs) const
+    {
+        if (maxUs == minUs || !(phaseLockLineUs_ > 0.0))
+            return minUs * 1000;
+        const int64_t step = phaseLockVmaxStep();
+        const int64_t lines = static_cast<int64_t>(std::floor(static_cast<double>(minUs) / phaseLockLineUs_)) / step * step;
+        return std::llround(static_cast<double>(lines) * phaseLockLineUs_ * 1000.0);
+    }
+
+    // controlsMutex_: no stretch waits for a request, and none is awaited. Called when FramePhaseLock's hold has
+    // ended, and when a stretch never runs (its request could not carry it or failed to queue, the stream stopped):
+    // then nothing holds the PI or a take's gate for it, and no "not seen" follows.
+    void forgetPhaseLockStretch()
+    {
+        phaseLockStretchPendingUs_ = 0;
+        phaseLockStretchSentUs_ = 0;
+        phaseLockStretchNs_ = 0;
+        phaseLockStretchEchoed_ = false;
+        phaseLock_.cancelStretch();
+    }
+
+    // APERTAR_PHASE_LOCK_LOG for the trace, read at most once per second of sensor time, not per frame
+    // (controlsMutex_).
+    bool phaseLockTraceOn(int64_t timestampNs)
+    {
+        if (phaseLockTraceReadNs_ < 0 || timestampNs < phaseLockTraceReadNs_ ||
+            timestampNs - phaseLockTraceReadNs_ >= 1000000000) {
+            phaseLockTraceReadNs_ = timestampNs;
+            phaseLockTraceOn_ = boolEnvValue("APERTAR_PHASE_LOCK_LOG", false);
+        }
+        return phaseLockTraceOn_;
+    }
+
+    // One trace line per frame (design §7.4, §10 Part 1): the grid slot and error, the lines the frame ran (v, 0
+    // without H or a FrameDuration, or with the lock off), the lock state, and on the frame they come from the arm,
+    // the pin pushed and the stretch requested for the next request, "echo" on the frame that echoes the stretch's
+    // pin and "landed" on the stretched frame. Integers only, built in one string (controlsMutex_), which the caller
+    // writes with one call.
+    std::string phaseLockTraceLine(const FramePhaseLock::Decision &decision, int64_t timestampNs, int64_t lines,
+                                   bool echo)
+    {
+        std::string line;
+        line.reserve(256);
+        char number[24];
+        const auto put = [&](const char *key, int64_t value) {
+            line += key;
+            const int length = std::snprintf(number, sizeof(number), "%lld", static_cast<long long>(value));
+            if (length > 0)
+                line.append(number, static_cast<size_t>(length));
+        };
+        line += "ApertarCore phase-lock trace:";
+        put(" slot=", decision.slot);
+        put(" ts=", timestampNs);
+        put(" err_ns=", decision.errorNs);
+        put(" v=", lines);
+        put(" lock=", decision.active ? 1 : 0);
+        put(" locked=", decision.locked ? 1 : 0);
+        if (decision.rearmed) {
+            line += " arm=";
+            line += phaseLockArmReasonName(decision.armReason);
+        }
+        if (decision.pushDuration)
+            put(" push=", decision.durationUs);
+        if (decision.stretch)
+            put(" stretch=", decision.stretchUs);
+        if (echo)
+            line += " echo";
+        if (decision.stretchLanded)
+            line += " landed";
+        line += '\n';
+        return line;
+    }
+
+    // Frame-rate phase lock on one absolute grid (design §7.2-§7.4): one step per completed
+    // frame, referenced to CLOCK_BOOTTIME (the SensorTimestamp domain, which is also where the
+    // audio samples are stamped, so no audio change is needed). Runs on the completion thread.
+    // Returns true while a stretch is in flight, lock on or off: the take's first-frame gate waits it out. With
+    // APERTAR_PHASE_LOCK_LOG on, `trace` gets the frame's trace line, for the caller to write outside controlsMutex_.
+    bool stepFramePhaseLock(libcamera::Request *request, std::string &trace)
     {
         const auto timestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
-        if (!timestamp)
-            return;
         bool recording = false;
+        bool releasedForRamp = false;
         {
             std::lock_guard lock(recordingFrameMutex_);
-            recording = recordingFramesEnabled_;
+            // A decided take counts from its start, not from its gate: no stretch may land in it (§6.2 step 5).
+            recording = takePending_ || recordingFramesEnabled_;
+            releasedForRamp = phaseLockReleasedForRamp_;
+        }
+        // A still capture owns the request controls (requeueRequest), so no stretch is decided meanwhile.
+        bool photoBusy = false;
+        {
+            std::lock_guard lock(photoCaptureMutex_);
+            photoBusy = !pendingPhotoCaptures_.empty() || stillExposureActive_ || restoreStillPreviewControls_;
         }
         // settings_ is read here under the shared session-settings lock the
         // completion callback holds; controlsMutex_ guards the lock state itself.
         std::lock_guard<std::mutex> lock(controlsMutex_);
+        // This request has left the queue; its pin still decides the frames up to kPhaseLockPinDelayFrames after
+        // its own (the sensor's VBLANK delay, fpsRampGraceFrames).
+        int64_t completedNs = 0;
+        if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size()) {
+            completedNs = phaseLockRequestPeriodNs_[cookie];
+            phaseLockRequestPeriodNs_[cookie] = 0;
+        }
+        std::copy_backward(phaseLockCompletedNs_.begin(), phaseLockCompletedNs_.end() - 1, phaseLockCompletedNs_.end());
+        phaseLockCompletedNs_[0] = completedNs;
+        if (!timestamp)
+            return phaseLock_.stretchAge >= 0;
         // After an FPS change the sensor runs the old period for a few frames; a servo
         // armed on the new nominal would bank that as phase error and sit on its clamp
-        // for hundreds of frames. Stay released until the ramp grace has passed (T31).
+        // for hundreds of frames. Stay released until the ramp grace has passed (T31), and for the rest of a
+        // Speed Ramp take once it has changed its fps.
         const bool enabled = settings_.fpsPhaseLock && !settings_.photoModeEnabled && settings_.fps > 1.0 &&
-            !inFpsRampGrace(static_cast<int64_t>(*timestamp / 1000));
+            !releasedForRamp && !inFpsRampGrace(static_cast<int64_t>(*timestamp / 1000));
         const bool wasActive = phaseLock_.active;
         if (!wasActive) {
             // Gains tune on the Pi without a rebuild (Cinemate kept them as live keys
@@ -8923,31 +9624,100 @@ private:
             }();
             phaseLock_.tuning = tuning;
         }
-        const FramePhaseLock::Decision decision =
-            phaseLock_.step(enabled, recording, settings_.fps, static_cast<int64_t>(*timestamp));
+        // The grid's period is the take's exact rational rate (25 -> 25000/1000, 23.976 -> 24000/1001).
+        const auto [rateNum, rateDen] = recordingFrameRate(settings_.fps);
+        const double periodNs = 1e9 * static_cast<double>(rateDen) / static_cast<double>(rateNum);
+        const bool traceOn = phaseLockTraceOn(static_cast<int64_t>(*timestamp));
+        // This frame's FrameDuration, for the in-flight sum, the stretched frame and the trace's v only.
+        int64_t frameDurationUs = 0;
+        if (enabled || phaseLockStretchSentUs_ > 0 || traceOn) {
+            if (const auto frameDuration = request->metadata().get(libcamera::controls::FrameDuration);
+                frameDuration && *frameDuration > 0)
+                frameDurationUs = normalizeFrameDurationToUs(static_cast<int64_t>(*frameDuration), settings_.fps);
+        }
+        const bool prerollPinned = prerollPinUs_.load(std::memory_order_acquire) > 0;
+        FramePhaseLock::Input in;
+        in.enabled = enabled;
+        in.recording = recording;
+        // No stretch while this arm's saturated flag is latched (at a mode's top fps the frames cannot hold T, so
+        // the phase would drift off again after every stretch), while a storage pre-roll pin owns every request, or
+        // while a still capture does (its requests carry no stretch, which would be decided and cancelled every frame).
+        in.stretchAllowed = !(phaseLockSaturated_ && wasActive) && !prerollPinned && !photoBusy;
+        in.prerollPinned = prerollPinned;
+        in.rateNum = rateNum;
+        in.rateDen = rateDen;
+        in.timestampNs = static_cast<int64_t>(*timestamp);
+        in.lineUs = phaseLockLineUs_;
+        in.vmaxStep = phaseLockVmaxStep();
+        if (enabled) {
+            // Everything already decided between this frame's start and the frame a stretch sent now
+            // would lengthen (design §7.4): this frame's own FrameDuration, the kPhaseLockPinDelayFrames
+            // requests completed last, and the requests still queued. With fewer, the stretch misses the slot
+            // by what it leaves out (at 24 fps about 7.4 µs per base pin).
+            double excessNs = frameDurationUs > 0 ? static_cast<double>(frameDurationUs) * 1000.0 - periodNs : 0.0;
+            for (const int64_t ns : phaseLockCompletedNs_)
+                if (ns > 0) excessNs += static_cast<double>(ns) - periodNs;
+            for (const int64_t ns : phaseLockRequestPeriodNs_)
+                if (ns > 0) excessNs += static_cast<double>(ns) - periodNs;
+            in.inFlightExcessNs = std::llround(excessNs);
+        }
+        // The stretch in flight, lock on or off: the echo of its pin (the IPA reports the limits it validated for
+        // the request) shows it went out; from that frame on, the stretched frame is the first whose FrameDuration
+        // is the stretch's own period, kPhaseLockPinDelayFrames later on this sensor.
+        bool echo = false;
+        if (phaseLockStretchSentUs_ > 0) {
+            if (!phaseLockStretchEchoed_) {
+                const auto echoedLimits = request->metadata().get(libcamera::controls::FrameDurationLimits);
+                echo = echoedLimits && echoedLimits->size() == 2 && (*echoedLimits)[0] == phaseLockStretchSentUs_;
+                phaseLockStretchEchoed_ = echo;
+            }
+            in.stretchLanded = phaseLockStretchEchoed_ && frameDurationUs > 0 &&
+                std::llabs(frameDurationUs * 1000 - phaseLockStretchNs_) <=
+                    FramePhaseLock::landingToleranceNs(phaseLockLineUs_);
+        }
+        in.requestCount = static_cast<int>(requests_.size());
+        const FramePhaseLock::Decision decision = phaseLock_.step(in);
+        // The grid error of every frame, lock on or off (fps_phase_lock_err_us).
+        lastPhaseErrorUs_ = decision.phaseErrorUs;
+        // Before the early return below, so the trace also runs with the lock off (test 1.2). v only with the
+        // lock's {d, d+1} pins, which keep the line at HBLANK's minimum (fix A); a {d, d} pin re-chooses it.
+        if (traceOn)
+            trace = phaseLockTraceLine(decision, in.timestampNs,
+                vblankOnlyPins_ && frameDurationUs > 0 && phaseLockLineUs_ > 0.0
+                    ? std::llround(static_cast<double>(frameDurationUs) / phaseLockLineUs_) : 0, echo);
+        if (decision.stretchNotSeen && phaseLockStretchSentUs_ > 0)
+            std::cerr << "ApertarCore phase-lock: stretch not seen stretch_us=" << phaseLockStretchSentUs_
+                      << " echo=" << (phaseLockStretchEchoed_ ? 1 : 0) << "\n";
+        if (decision.stretchesStopped)
+            std::cerr << "ApertarCore phase-lock: stretches stopped after " << FramePhaseLock::kStopStretchesAfterNotSeen
+                      << " not seen in a row, the PI pulls in alone until the next arm\n";
+        if (!decision.holding)
+            forgetPhaseLockStretch();
         if (!decision.active) {
             if (wasActive)
                 std::cerr << "ApertarCore phase-lock: released\n";
             phaseLockDurationUs_.reset();
             phaseLockSaturated_ = false;
-            return;
+            return decision.holding;
         }
         if (decision.rearmed) {
+            // No return: the arm frame is a full frame, and its push and stretch go out below.
             phaseLockDurationUs_.reset();
             phaseLockSaturated_ = false;
-            // Requests already in flight carry Core's own pin (controlsForSettings: the
-            // truncated nominal period); their echoes are not saturation.
-            recentPhaseLockPins_.fill(0);
-            recentPhaseLockPins_[0] = static_cast<int64_t>(1000000.0 / settings_.fps);
-            recentPhaseLockPinIndex_ = 1;
+            // Requests already in flight carry Core's own pin (controlsForSettings: the truncated nominal period)
+            // or the last arm's; their echoes are not saturation. The ring keeps what it has.
+            recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] =
+                static_cast<int64_t>(1000000.0 / settings_.fps);
             std::cerr << "ApertarCore phase-lock: armed fps=" << settings_.fps
                       << " nominal_us=" << phaseLock_.nominalUs << " ref=boottime"
                       << " kp=" << phaseLock_.tuning.proportional << " ki=" << phaseLock_.tuning.integral
-                      << " deadband_us=" << phaseLock_.tuning.deadbandUs << " clamp_us=" << phaseLock_.tuning.clampUs << "\n";
-            return;
+                      << " deadband_us=" << phaseLock_.tuning.deadbandUs << " clamp_us=" << phaseLock_.tuning.clampUs
+                      << " reason=" << phaseLockArmReasonName(decision.armReason) << "\n";
         }
+        if (decision.takePhaseKept)
+            std::cerr << "ApertarCore phase-lock: the take keeps its own phase err_us="
+                      << std::lround(decision.phaseErrorUs) << " (not synced)\n";
         if (decision.servoRan) {
-            lastPhaseErrorUs_ = decision.phaseErrorUs;
             // Saturation: the IPA echoes the validated FrameDurationLimits in the
             // metadata. A pinned {d,d+1} (or Core's own {d,d}) whose lower end comes
             // back as something we never pinned was clamped to the mode's limits; at
@@ -8959,7 +9729,7 @@ private:
                 bool pinned = false;
                 for (const int64_t pin : recentPhaseLockPins_)
                     pinned = pinned || (pin != 0 && pin == echoedUs);
-                if (!pinned && recentPhaseLockPins_[0] != 0) {
+                if (!pinned) {
                     phaseLockSaturated_ = true;
                     std::cerr << "ApertarCore phase-lock: saturated echoed_us=" << echoedUs
                               << " requested_us=" << decision.durationUs << " nominal_us=" << phaseLock_.nominalUs << "\n";
@@ -8968,11 +9738,21 @@ private:
         }
         if (decision.pushDuration)
             phaseLockDurationUs_ = decision.durationUs;
+        // The stretch rides the next request only (requeueRequest); the lock pin follows it.
+        // A stretch decided on the frame the previous hold ends keeps nothing of the old one: its echo and its
+        // sent pin are cleared before it goes out.
+        if (decision.stretch) {
+            phaseLockStretchPendingUs_ = decision.stretchUs;
+            phaseLockStretchSentUs_ = 0;
+            phaseLockStretchNs_ = decision.stretchNs;
+            phaseLockStretchEchoed_ = false;
+        }
         if (decision.servoRan && (phaseLock_.frames % 250) == 0 && boolEnvValue("APERTAR_PHASE_LOCK_LOG", false))
             std::cerr << "ApertarCore phase-lock: frames=" << phaseLock_.frames
                       << " err_us=" << std::lround(decision.phaseErrorUs)
                       << " dur_us=" << decision.durationUs
                       << " pushes=" << phaseLock_.pushes << "\n";
+        return decision.holding;
     }
 
     void requeueRequest(libcamera::Request *request)
@@ -9048,6 +9828,8 @@ private:
 
         // Phase lock: pin this request's frame duration. Set after every merge above,
         // so it wins; skipped while a still capture owns the exposure.
+        bool carriesStretch = false;
+        int64_t sentPeriodBeforeNs = 0;
         {
             bool photoBusy = false;
             {
@@ -9059,6 +9841,7 @@ private:
             // clears the pin under controlsMutex_ when photo mode, fps or the switch
             // changes, so the pin's presence is the only condition needed.
             std::lock_guard<std::mutex> lock(controlsMutex_);
+            int64_t stretchUs = 0;
             if (phaseLockDurationUs_ && !photoBusy) {
                 // {d, d+1}, not {d, d}: the qbc libcamera's IMX585 helper re-chooses the
                 // line length (HMAX) for every single-value pin, so 1 us pushes became
@@ -9066,17 +9849,41 @@ private:
                 // hardware-log 2026-10-26). A range takes libcamera's default blanking:
                 // HMAX stays at the mode minimum and the frame rounds down to whole lines,
                 // as on Cinemate's libcamera, so the servo dithers adjacent line counts.
-                const int64_t range[2] = { *phaseLockDurationUs_, *phaseLockDurationUs_ + 1 };
+                // A stretch (design §7.4) replaces the lock pin on this one request.
+                stretchUs = phaseLockStretchPendingUs_;
+                const int64_t pinUs = stretchUs > 0 ? stretchUs : *phaseLockDurationUs_;
+                const int64_t range[2] = { pinUs, pinUs + 1 };
                 request->controls().set(libcamera::controls::FrameDurationLimits,
                                         libcamera::Span<const int64_t, 2>(range));
-                recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = *phaseLockDurationUs_;
             }
             // Storage pre-roll: the exact period on every request, so the take cannot fall back to an older limit.
+            // {p, p+1} with the lock on (fix A), like the base pin; it overrides a lock or stretch pin.
             if (const int64_t prerollPin = prerollPinUs_.load(std::memory_order_acquire); prerollPin > 0 && !photoBusy) {
-                const int64_t range[2] = { prerollPin, prerollPin };
+                const int64_t range[2] = { prerollPin, vblankOnlyPins_ ? prerollPin + 1 : prerollPin };
                 request->controls().set(libcamera::controls::FrameDurationLimits,
                                         libcamera::Span<const int64_t, 2>(range));
+                stretchUs = 0;
             }
+            // A stretch sent now: the lock looks for its echo and its frame. One this request cannot carry (no lock
+            // pin, a still capture, the pre-roll pin) never runs, so nothing waits for it.
+            if (stretchUs > 0) {
+                phaseLockStretchSentUs_ = stretchUs;
+                phaseLockStretchPendingUs_ = 0;
+            } else if (phaseLockStretchPendingUs_ > 0) {
+                forgetPhaseLockStretch();
+            }
+            carriesStretch = stretchUs > 0;
+            // The pin this request actually carries, from the merges above or from here: the saturation ring
+            // takes it (so a pre-roll's p is no false "saturated"), and so does the period record the stretch
+            // counts. A request without the control keeps the limits the IPA was given last.
+            sentPeriodBeforeNs = phaseLockSentPeriodNs_;
+            if (const auto limits = request->controls().get(libcamera::controls::FrameDurationLimits);
+                limits && limits->size() == 2) {
+                recentPhaseLockPins_[recentPhaseLockPinIndex_++ % recentPhaseLockPins_.size()] = (*limits)[0];
+                phaseLockSentPeriodNs_ = pinPeriodNs((*limits)[0], (*limits)[1]);
+            }
+            if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size())
+                phaseLockRequestPeriodNs_[cookie] = phaseLockSentPeriodNs_;
         }
 
         if (running_.load() && camera_) {
@@ -9086,6 +9893,13 @@ private:
                     std::cerr << "ApertarCore drop[requeue-failed]: total="
                               << requeueFailures_ << "\n";
                 }
+                // Not in flight after all, nor the stretch it carried, and the IPA never got its limits.
+                std::lock_guard<std::mutex> lock(controlsMutex_);
+                phaseLockSentPeriodNs_ = sentPeriodBeforeNs;
+                if (const uint64_t cookie = request->cookie(); cookie < phaseLockRequestPeriodNs_.size())
+                    phaseLockRequestPeriodNs_[cookie] = 0;
+                if (carriesStretch)
+                    forgetPhaseLockStretch();
             }
         }
     }
@@ -9165,7 +9979,10 @@ private:
             }
         }
 
-        stepFramePhaseLock(request);
+        std::string phaseLockTrace;
+        const bool phaseLockHolding = stepFramePhaseLock(request, phaseLockTrace);
+        if (!phaseLockTrace.empty())
+            std::cerr << phaseLockTrace;
         capturePhotoFrame(request, whiteBalance);
         bool recoveredPreview = false;
         bool exposePreview = true;
@@ -9186,17 +10003,39 @@ private:
             std::lock_guard lock(recordingFrameMutex_);
             if (recordingFramesEnabled_) {
                 bool ready = true;
-                if (waitingForRecordingCadence_) {
+                const auto gateTimestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
+                const int64_t gateTsUs = gateTimestamp ? static_cast<int64_t>(*gateTimestamp / 1000) : 0;
+                // The stop gate (design 6.2): a frame at or after stop_us is requeued, not recorded, and wakes the
+                // stopper that waits for it.
+                if (recordingStopBootUs_ > 0 && gateTsUs > 0 && gateTsUs >= recordingStopBootUs_) {
+                    ready = false;
+                    stopGateSeen_ = true;
+                    stopGateCv_.notify_all();
+                }
+                if (ready && waitingForRecordingCadence_) {
                     const auto timestamp = request->metadata().get(libcamera::controls::SensorTimestamp);
                     const auto duration = request->metadata().get(libcamera::controls::FrameDuration);
                     const int64_t expected = int64_t(std::llround(1000000 / settings_.fps));
                     ready = (!timestamp || *timestamp / 1000 >= recordingStartBootUs_) &&
                         (!duration || std::abs(normalizeFrameDurationToUs(*duration, settings_.fps) - expected) <= std::max<int64_t>(500, expected / 50));
+                    // A stretch the lock sent before the take was decided must not land in it: wait until the
+                    // stretched frame has run plus 2 frames, lock on or off (design §6.2 step 5), at most N + 6
+                    // frames. A stretch that never went out holds nothing.
+                    ready = ready && !phaseLockHolding;
                     if (ready) waitingForRecordingCadence_ = false;
                 }
+                // Test only (APERTAR_TEST_DROP_FRAME=n): the take's n-th frame is discarded before the record path.
+                if (ready && testDropFrame_ > 0 && ++takeGateFrames_ == testDropFrame_) {
+                    std::cerr << "ApertarCore test: dropped frame " << takeGateFrames_ << " of the take (ts_us=" << gateTsUs << ")\n";
+                    ready = false;
+                }
                 if (ready) {
-                    if (recordProcessedPreviewFrame(request)) return;
-                    if (recordRawFrame(request, whiteBalance)) return;
+                    if (recordProcessedPreviewFrame(request) || recordRawFrame(request, whiteBalance)) {
+                        noteFirstFrame(gateTsUs);   // the processed formats; raw has set it at its index anchor
+                        if (gateTsUs > 0)
+                            lastRecordedTsUs_.store(gateTsUs, std::memory_order_release);
+                        return;
+                    }
                 }
             }
         }
@@ -9452,7 +10291,26 @@ private:
         // at the start rate would run ahead (ramp down) or fall behind (ramp up), so
         // frames are numbered by count and the clip keeps its start rate as the
         // timeline rate; fps-ramp.txt in the clip folder carries the capture rates.
-        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs, /*countOnly=*/settings_.fpsSpeedRamp);
+        // A take with start_us keeps the time index (a hole where a frame was lost, the same index in both clips) until
+        // its first Speed Ramp step, and counts after it; that frame is where the take turns unsynced (design 6.2).
+        bool countOnly = settings_.fpsSpeedRamp;
+        bool numberingSwitched = false;
+        if (countOnly && takeSlotted_ && !rampCountNumbering_) {
+            if (rampStepSeen()) {
+                rampCountNumbering_ = true;
+                numberingSwitched = true;
+            } else {
+                countOnly = false;
+            }
+        }
+        const uint64_t frameIndex = recorder_.nextFrameIndex(timestampUs, countOnly);
+        noteFirstFrame(timestampUs);   // nextFrameIndex has anchored the take on this frame if it is the first
+        if (numberingSwitched) {
+            rampSwitchFrame_ = static_cast<int64_t>(frameIndex);
+            unsyncedFromTsUs_.store(timestampUs, std::memory_order_release);
+            std::cerr << "ApertarCore take NOT SYNCED from frame " << frameIndex
+                      << ": Speed Ramp step, numbering by count from here\n";
+        }
         const uint64_t wallClockTimestampUs = wallClockForSensorTimestamp(timestampUs);
         CdngEncoder::Metadata metadata = metadataFromRequest(
             settings_,
@@ -9898,8 +10756,11 @@ private:
             return std::string(text);
         };
         out << "# Apertar speed ramp log. Frames are numbered by count; the clip's timeline rate is base_fps.\n"
-            << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n"
-            << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
+            << "# base_fps=" << baseFps << " min_fps=" << minFps << " max_fps=" << maxFps << "\n";
+        if (rampSwitchFrame_ >= 0)
+            out << "# numbering: by time (slot) up to frame " << rampSwitchFrame_ - 1 << ", by count from frame "
+                << rampSwitchFrame_ << " (a take with start_us)\n";
+        out << "# seen=0: the sensor skipped this period (superseded by a later request before it took effect)\n"
             << "# requested_frame applied_frame frame_us seen tc_at_base boot_us from_fps to_fps shutter_us applied_us\n";
         for (const FpsRampEvent &event : events) {
             out << event.frameIndex << ' ';
@@ -10358,6 +11219,30 @@ private:
     // of an older pin reads as saturation.
     std::array<int64_t, 16> recentPhaseLockPins_{};
     size_t recentPhaseLockPinIndex_ = 0;
+    // The grid lock's inputs (T57, all controlsMutex_). Q's line time H in µs, read from this camera's subdev at
+    // each stream start (0: unknown, whole-µs pins). Whether the base and pre-roll pins are {d, d+1}
+    // (settings_.fpsPhaseLock and not photo mode), mirrored for requeueRequest, which cannot read settings_.
+    double phaseLockLineUs_ = 0.0;
+    bool vblankOnlyPins_ = false;
+    // The stretch (design §7.4): decided for the next request (pending), then the pin that request carries
+    // (sent), the period its frame gets and whether the IPA has echoed the pin, until FramePhaseLock stops
+    // tracking it (forgetPhaseLockStretch). 0: none.
+    int64_t phaseLockStretchPendingUs_ = 0;
+    int64_t phaseLockStretchSentUs_ = 0;
+    int64_t phaseLockStretchNs_ = 0;
+    bool phaseLockStretchEchoed_ = false;
+    // A request's pin decides the frame this many frames after the request's own (the sensor's VBLANK delay;
+    // test 1.5 checks it on the rig from the trace's echo-to-landed distance).
+    static constexpr size_t kPhaseLockPinDelayFrames = 2;
+    // The period in ns each queued request's FrameDurationLimits gives, by request cookie (0: not in flight);
+    // the period of the limits the IPA was given last, which a request without the control keeps; and the
+    // periods of the kPhaseLockPinDelayFrames requests completed last, whose pins still act on the next frames.
+    std::vector<int64_t> phaseLockRequestPeriodNs_;
+    int64_t phaseLockSentPeriodNs_ = 0;
+    std::array<int64_t, kPhaseLockPinDelayFrames> phaseLockCompletedNs_{};
+    // APERTAR_PHASE_LOCK_LOG for the per-frame trace, and the sensor time it was read at (-1: not yet).
+    bool phaseLockTraceOn_ = false;
+    int64_t phaseLockTraceReadNs_ = -1;
     mutable std::mutex whiteBalanceMutex_;
 
     WhiteBalanceMeasurement whiteBalanceMeasured_;
@@ -10380,8 +11265,33 @@ private:
     RecordingClock recordingClock_;
     std::mutex recordingFrameMutex_;
     bool recordingFramesEnabled_ = false;
+    // A take of this camera is decided: set in startRecording after its refusals, withdrawn by its failures, and
+    // cleared with the gate at the stop (design §6.2 step 5). The phase lock's "recording" (recordingFrameMutex_).
+    bool takePending_ = false;
+    // A Speed Ramp take changed its fps (applyControls): the phase lock stays released until the take stops, is
+    // withdrawn or the stream stops (recordingFrameMutex_).
+    bool phaseLockReleasedForRamp_ = false;
     bool waitingForRecordingCadence_ = false;
     int64_t recordingStartBootUs_ = 0;
+    // A take on the grid (design 6.2). The stop gate: no frame at or after recordingStopBootUs_ is recorded
+    // (recordingFrameMutex_, with stopGateCv_ and stopGateSeen_). The rest is written by the completion thread and
+    // read by the stop, which runs after the gate is closed.
+    int64_t recordingStopBootUs_ = 0;
+    bool stopGateSeen_ = false;
+    std::condition_variable stopGateCv_;
+    bool takeSlotted_ = false;          // the take has a start_us: slots.txt, first and last slot, Speed Ramp numbering
+    takeslots::Rate takeRate_;
+    int64_t takeStartUs_ = 0;
+    std::filesystem::path takeFolder_;
+    TakeInfo *takeInfo_ = nullptr;
+    std::string takeUnsyncedReason_;    // NOT SYNCED from the first frame (two frame rates)
+    std::atomic<int64_t> firstRecordedTsUs_{0};   // sensor timestamps (us) of the first and last frame of the take
+    std::atomic<int64_t> lastRecordedTsUs_{0};
+    std::atomic<int64_t> unsyncedFromTsUs_{0};    // the frame where Speed Ramp numbering switched to count
+    bool rampCountNumbering_ = false;             // a slotted Speed Ramp take is numbered by count from now on
+    int64_t rampSwitchFrame_ = -1;
+    uint64_t takeGateFrames_ = 0;       // APERTAR_TEST_DROP_FRAME: frames the gate has passed in this take
+    uint64_t testDropFrame_ = 0;
     Mpu6050RecordingSession gyroRecorder_;
     PhotoCaptureWriter photoWriter_;
     mutable std::shared_mutex sessionSettingsMutex_;
@@ -10495,6 +11405,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
     , session_(std::make_unique<CameraSession>(
           previewCallback_,
           [this](int level) {
+              audioInputLevel_.store(std::clamp(level, 0, 100), std::memory_order_relaxed);
               if (!eventCallback_)
                   return;
 
@@ -10511,7 +11422,6 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
         std::stringstream ladderText;
         ladderText << ladderFile.rdbuf();
         modeLadder_ = ladder::parseFile(ladderText.str());   // a missing or broken file: ladder off
-        migrateImx585LadderRungs(modeLadder_.rungs);
     }
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
@@ -10536,6 +11446,15 @@ CameraController::~CameraController()
     captureSettingsPersister().flush();
 }
 
+void CameraController::selectCamera(const std::string &value)
+{
+    auto &state = cameraSelection();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.value = value;
+    state.resolved = false;
+    state.cam0Waited = false;
+}
+
 bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -10554,6 +11473,7 @@ bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
         settings_ = session_->currentSettings();
     else if (simulateCamera_)
         settings_ = sanitizeSettingsForSensor(settings_, SensorFamily::Unknown);
+    followDriverCropSizes(modeLadder_.rungs);   // after the startup probe, which the session start ran
 
     if (simulateCamera_)
         constrainExposureMetering(settings_, std::getenv("LIBCAMERA_RPI_TUNING_FILE")
@@ -10645,7 +11565,6 @@ bool CameraController::setResolution(Resolution resolution)
         return false;
     }
 
-    resolution = migratedImx585CropResolution(resolution);   // a client that still sends 3840x2076 / 1920x1038
     if (!validateResolution(resolution))
         return false;
 
@@ -10655,10 +11574,10 @@ bool CameraController::setResolution(Resolution resolution)
     CaptureSettings current = sanitizeSettingsForSensor(settings_, sensorFamily, (!simulateCamera_ && session_ && session_->monochromeSensor()));
     if (sensorFamily == SensorFamily::Imx585) {
         // An explicit size must be a mode of the current class (bit depth, Clear HDR); derived changes
-        // (bit depth, Clear HDR) take the nearest row instead, in the sanitiser.
-        const Resolution wanted = imx585AliasResolution(resolution);
-        if (!apertar::imx585::find(apertar::imx585::classFor(current.rawBitDepth, current.clearHdr),
-                                   wanted.width, wanted.height)) {
+        // (bit depth, Clear HDR) take the nearest row in the sanitiser, except Clear HDR on: setClearHdr starts at 3840x2160.
+        const auto cls = apertar::imx585::classFor(current.rawBitDepth, current.clearHdr);
+        const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(resolution));
+        if (!apertar::imx585::find(cls, wanted.width, wanted.height)) {
             setErrorLocked(wanted.toString() + " is not a mode of the IMX585 at " + std::to_string(current.rawBitDepth) +
                            "-bit" + (current.clearHdr ? " Clear HDR." : "."));
             return false;
@@ -10936,12 +11855,43 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     }
 }
 
-void CameraController::saveModeLadderLocked() const
+bool CameraController::saveModeLadderLocked() const
 {
     std::error_code ec;
     std::filesystem::create_directories(modeLadderPath().parent_path(), ec);
-    if (!settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
-        std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
+    if (settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
+        return true;
+    std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
+    return false;
+}
+
+// A filter save keeps the rest of mode_ladder.conf as it is on disk: memory can hold less than the file (a
+// resolutions line this Core could not read loads as no ladder), and a filter click must not erase it.
+bool CameraController::saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const
+{
+    const std::filesystem::path path = modeLadderPath();
+    std::error_code ec;
+    std::string text;
+    // Never write over a file that could not be read whole. When exists ends in an error rather than "no such
+    // file", the path is read too, so a lookup error is refused as a read error is.
+    if ((std::filesystem::exists(path, ec) || ec) && !readModeLadderFile(path, text)) {
+        std::cerr << "ApertarCore mode ladder: could not read " << path << "\n";
+        *error = "Could not read mode_ladder.conf: the aspect filter is not saved.";
+        return false;
+    }
+    ladder::Ladder fresh = modeLadder_;
+    fresh.aspects = aspects;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (settingsFile::atomicWrite(path, text.empty() ? ladder::fileText(fresh) : ladder::withAspectsLine(text, aspects)))
+        return true;
+    // atomicWrite also fails after its rename, when the directory cannot be synced: the file then holds the
+    // new filter, and the reply must say so. Only a file read back whole is trusted.
+    std::cerr << "ApertarCore mode ladder: could not write " << path << "\n";
+    std::string after;
+    if (readModeLadderFile(path, after) && ladder::parseFile(after).aspects == aspects)
+        return true;
+    *error = "Could not write mode_ladder.conf: the aspect filter is not saved.";
+    return false;
 }
 
 // The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
@@ -11043,26 +11993,54 @@ std::string CameraController::modeLadderJson() const
 }
 
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                                     std::optional<bool> rampReady, bool dryRun, std::string *json, std::string *error)
+                                     std::optional<bool> rampReady, const std::optional<std::string> &aspects,
+                                     bool dryRun, std::string *json, std::string *error)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> aspectList;
+    if (aspects) {
+        std::string parseError;
+        if (!ladder::parseAspects(*aspects, aspectList, parseError)) {
+            *error = parseError;
+            return false;
+        }
+    }
+    // The aspect filter alone changes only what the WebUI lists, never the mode: no take refusal, no check
+    // that could refuse it, no apply, no settings event. Only the file's aspects= line is replaced (a missing
+    // or empty file is written whole), and a filter unchanged from Core's copy writes nothing. The reply shows
+    // the errors as get_mode_ladder does.
+    if (aspects && !rungs && !enabled && !rampReady) {
+        ladder::Ladder shown = modeLadder_;
+        shown.aspects = aspectList;
+        if (!dryRun && aspectList != modeLadder_.aspects) {
+            if (!saveModeLadderAspectsLocked(aspectList, error))
+                return false;
+            modeLadder_.aspects = aspectList;
+        }
+        std::vector<std::string> shownErrors, shownWarnings;
+        ladder::validate(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
+        *json = modeLadderJsonLocked(shown, shownErrors, shownWarnings);
+        return true;
+    }
     if (recording_ && !dryRun) {
         *error = "Stop recording before changing the mode ladder.";
         return false;
     }
-    ladder::Ladder draft = modeLadder_;
+    ladder::Ladder draft = modeLadder_;   // keeps the aspect filter unless aspects is given
     if (rungs) {
         std::string parseError;
         if (!ladder::parseRungs(*rungs, draft.rungs, parseError)) {
             *error = parseError;
             return false;
         }
-        migrateImx585LadderRungs(draft.rungs);
+        followDriverCropSizes(draft.rungs);
     }
     if (enabled)
         draft.enabled = *enabled;
     if (rampReady)
         draft.rampReady = *rampReady;
+    if (aspects)
+        draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
     ladder::validate(draft, ladderStatesLocked(draft, settings_), errors, warnings);
     if (dryRun) {
@@ -11093,10 +12071,18 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         *error = lastError_;
         return false;
     }
-    saveModeLadderLocked();
+    const bool saved = saveModeLadderLocked();
     emitSettingsEventLocked();
     std::vector<std::string> shownErrors, shownWarnings;
     ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
+    // The apply already ran. A failed write warns that the ladder is lost when Core restarts, unless the file
+    // reads back whole as this ladder: atomicWrite also fails after its rename, when the directory cannot be synced.
+    // The WebUI shows this warning as an error toast by its start (showLadderWriteWarning).
+    if (!saved) {
+        std::string written;
+        if (!readModeLadderFile(modeLadderPath(), written) || written != ladder::fileText(modeLadder_))
+            shownWarnings.push_back("Could not write mode_ladder.conf: this ladder is lost when Core restarts.");
+    }
     *json = modeLadderJsonLocked(modeLadder_, shownErrors, shownWarnings);
     return true;
 }
@@ -11606,7 +12592,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
     // A real bit depth change ends a Clear HDR override, except the 16-bit that turning Clear HDR on is followed by
-    // (the hardware clear_hdr action and the touch UI send it right after set_clear_hdr).
+    // (the hardware clear_hdr action sends it right after set_clear_hdr; the touch UI stays at 12-bit).
     if (!(settings_.clearHdr && requested.rawBitDepth == 16))
         ladderOverride_ = false;
     return applySettingsLocked(next, true);
@@ -11628,6 +12614,9 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    // Clear HDR is entered at 4K, as the UIs label it; set_resolution picks another Clear HDR row after.
+    if (enabled && !settings_.clearHdr && sensorFamily == SensorFamily::Imx585)
+        next.resolution = Resolution{ 3840, 2160 };
     applyClearHdrCompression(next, settings_.clearHdr);   // before the sanitiser: lossless limits only apply to lossless
     if (enabled && !settings_.clearHdr && !simulateCamera_ && session_) {
         // Auto ISO and WB stop in Clear HDR (the sanitiser turns them off); hold the values
@@ -11822,14 +12811,30 @@ std::string CameraController::clipNameSensorLocked() const
     return sensorFamilyName(session_->sensorFamily());
 }
 
+// No I/O here: it runs under mutex_ on every settings read and event, so it looks names up in the media
+// watcher's last listing of the root, not on the medium.
 void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
 {
+    // The example is the next take's name. During a take it keeps its last value: with a time token the numbering lists
+    // the medium's root, and on exFAT a listing takes the lock every frame create needs.
+    if (recording_ || prerollTake_)
+        return;
     try {
-        out.clipNameExample = nextClipFolderName(mediaRootPath(mediaRoot_), out, clipNameSensorLocked(),
-                                                 std::chrono::system_clock::now());
+        const std::vector<std::string> names(clipFolderNames_.begin(), clipFolderNames_.end());
+        out.clipNameExample = nextClipFolderName([this](const std::string &name) {
+            return clipFolderNames_.count(name) > 0;
+        }, names, out, clipNameSensorLocked(), std::chrono::system_clock::now());
     } catch (const std::exception &) {
         out.clipNameExample.clear();
     }
+}
+
+void CameraController::setClipFolderNames(std::set<std::string> names)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_)
+        return;   // listed before the take began: it lacks the take's folder (startRecording added it)
+    clipFolderNames_ = std::move(names);
 }
 
 bool CameraController::setClipNameTemplate(const std::string &value, std::string *stored)
@@ -11872,6 +12877,29 @@ bool CameraController::previewClipName(const std::string &value, std::string *ex
         return false;
     }
     return true;
+}
+
+apertar::clipname::TwoNames CameraController::twoCameraClipNames(const apertar::clipname::PartnerNaming &partner,
+                                                                 int64_t wallMicros, const std::string &templateText) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::filesystem::path root = mediaRootPath(mediaRoot_);
+    const std::chrono::system_clock::time_point at{std::chrono::duration_cast<std::chrono::system_clock::duration>(
+        std::chrono::microseconds(wallMicros))};
+    const apertar::clipname::Values own = clipNameValues(settings_, clipNameSensorLocked(), at);
+    return apertar::clipname::nameTwoCameras(
+        templateText.empty() ? settings_.clipNameTemplate : templateText, own, partner, wallMicros, settings_.fps,
+        [&](const std::string &name) {
+            std::error_code ec;
+            return std::filesystem::exists(root / name, ec);
+        },
+        [&] {
+            std::vector<std::string> names;
+            std::error_code ec;
+            for (const auto &entry : std::filesystem::directory_iterator(root, ec))
+                names.push_back(entry.path().filename().string());
+            return names;
+        });
 }
 
 bool CameraController::setFpsPhaseLock(bool enabled)
@@ -11981,7 +13009,8 @@ bool CameraController::setAutofocusWindow(double x, double y, double width, doub
 }
 
 bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
-                                      const GyroRecordingOptions &gyroOptions)
+                                      const GyroRecordingOptions &gyroOptions,
+                                      const TakeOptions &takeRequest)
 {
     if (timelapseActive()) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -12012,7 +13041,12 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
         setErrorLocked("Wait for the still capture to finish before recording.");
         return false;
     }
-    if (!simulateCamera_ && session_ && !session_->startRecording(mediaRoot_, settings_, audioOptions, gyroOptions, &lastError_)) {
+    TakeOptions take = takeRequest;
+    take.info = &takeInfo_;
+    if (simulateCamera_) {   // no session to name the folder: the take still tells get_state its name and slots
+        takeInfo_.begin(take.clipName);
+    }
+    if (!simulateCamera_ && session_ && !session_->startRecording(mediaRoot_, settings_, audioOptions, gyroOptions, &lastError_, take)) {
         // Recording startup failures are usually media/audio setup problems, not
         // fatal camera-session failures. Keep the controller ready so the user
         // can retry without restarting the whole app.
@@ -12022,6 +13056,13 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     }
 
     if (simulateCamera_) recordingDropWarning_.reset();
+    if (!simulateCamera_) {
+        // The take's folder exists now; the media watcher lists the root again only after the take.
+        CaptureSettings take = settings_;
+        fillClipNameExampleLocked(take);
+        if (!take.clipNameExample.empty())
+            clipFolderNames_.insert(take.clipNameExample);
+    }
     recording_ = true;
     rampTakeBaseFps_ = settings_.fps;
     rampTakeChanged_ = false;
@@ -12043,11 +13084,11 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
 // the queue's safety stop and the dropped-frames warning are off (prerollTake_). The fps is the sensor's maximum for
 // the running mode (prerollMaximumFps: it overrides the lossless-JPEG cap, the mode ladder and the speed-ramp limits).
 // It is applied directly (never through ladderRewriteLocked, so the ladder never switches resolution) and gets past the
-// session's own sanitiser by session_->setPrerollFps, which also pins {period, period} FrameDurationLimits on every
-// request. No reconfigure: the sensor mode is chosen by size and bit depth, not by fps. startStoragePreroll waits
-// (at most 1 s) until a completed frame reports the new period, so the whole take runs at full speed. settings_ is
-// changed without commit (not saved, no settings event) and restored from a copy in finishStoragePreroll. Both calls
-// are made by Core's storage pre-roll thread only.
+// session's own sanitiser by session_->setPrerollFps, which also pins {period, period}, or {period, period + 1} with
+// the phase lock on (fix A), FrameDurationLimits on every request. No reconfigure: the sensor mode is chosen by size
+// and bit depth, not by fps. startStoragePreroll waits (at most 1 s) until a completed frame reports the new period,
+// so the whole take runs at full speed. settings_ is changed without commit (not saved, no settings event) and
+// restored from a copy in finishStoragePreroll. Both calls are made by Core's storage pre-roll thread only.
 bool CameraController::startStoragePreroll(std::string *error, double *fpsOut)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -12429,8 +13470,33 @@ void CameraController::timelapseLoop()
     }
 }
 
-bool CameraController::stopRecording()
+CameraController::TakeSnapshot CameraController::takeSnapshot() const
 {
+    TakeSnapshot out;
+    if (const int64_t first = takeInfo_.firstSlot.load(std::memory_order_acquire); first != TakeInfo::kNone)
+        out.firstSlot = first;
+    if (const int64_t last = takeInfo_.lastSlot.load(std::memory_order_acquire); last != TakeInfo::kNone)
+        out.lastSlot = last;
+    std::lock_guard<std::mutex> lock(takeInfo_.nameMutex);
+    out.clipName = takeInfo_.clipName;
+    return out;
+}
+
+bool CameraController::stopRecording(int64_t stopUs)
+{
+    // A stop_us (design 6.2) waits for the gate to see the stop slot. It must not hold the controller lock: the
+    // drain below holds it for seconds, and a poll should still answer while the last frames arrive. The session
+    // is not replaced while a command runs (the App serialises commands), so the pointer stays good.
+    if (stopUs > 0) {
+        CameraSession *waiting = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (recording_ && !simulateCamera_ && !prerollTake_)
+                waiting = session_.get();
+        }
+        if (waiting)
+            waiting->waitForStopSlot(stopUs);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (!recording_)
         return true;
@@ -12588,6 +13654,7 @@ CaptureSettings CameraController::settings() const
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     result.isoMax = maximumIsoForSettings(result, family);
     result.fpsMax = maximumFpsForSettings(result, family);
+    fillCameraIdentity(result);
     fillLadderFieldsLocked(result);
     fillClipNameExampleLocked(result);
     return result;
@@ -12660,7 +13727,7 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         setErrorLocked("Wait for still captures to finish before loading a preset.");
         return false;
     }
-    const Resolution presetResolution = migratedImx585CropResolution(requested.resolution);   // a preset saved with 3840x2076 / 1920x1038
+    const Resolution presetResolution = requested.resolution;
     if (!validateResolution(presetResolution)) return false;
     rampNominalShutterUs_ = 0; // a preset brings its own shutter
     CaptureSettings next = supportedRecordingSettings(requested);
@@ -12725,6 +13792,10 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
     requiresReconfigure |= nextSettings.photoModeEnabled != settings_.photoModeEnabled;
     requiresReconfigure |= activeIspColorProfile(nextSettings) != activeIspColorProfile(settings_);
     requiresReconfigure |= nextSettings.clearHdr != settings_.clearHdr;
+#if APERTARCORE_HAS_LIBCAMERA
+    // Clear HDR 12-bit stores 12-bit codes in cDNG and linear 16-bit in MLV; the stream takes the depth at configure.
+    requiresReconfigure |= storageRawBitDepthForSettings(nextSettings) != storageRawBitDepthForSettings(settings_);
+#endif
     if (!nextSettings.photoModeEnabled) nextSettings.timelapseExposureLimitUs = 0;
     if (nextSettings.timelapseExposureLimitUs)
         nextSettings.shutterUs = std::min(nextSettings.shutterUs, nextSettings.timelapseExposureLimitUs);
@@ -12798,6 +13869,13 @@ void CameraController::persistSettingsLocked()
         stillSettings_ = settings_;
     else
         formatSettings_[settingsProfileFormat(settings_.recordingFormat)] = settings_;
+    {
+        // The primary fell back to another port's camera (recordOpenedCamera): cam0's saved settings stay as they are.
+        auto &camera = cameraSelection();
+        std::lock_guard<std::mutex> lock(camera.mutex);
+        if (camera.noPersist)
+            return;
+    }
     captureSettingsPersister().schedule(settings_, formatSettings_, stillSettings_);
 }
 
@@ -12862,6 +13940,7 @@ void CameraController::emitSettingsEventLocked()
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
+    fillCameraIdentity(settings_);
     fillLadderFieldsLocked(settings_);
     fillClipNameExampleLocked(settings_);
     settings_.cdngLogApplied = cdngLogApplicableLocked();

@@ -162,6 +162,8 @@ Hardware mappings are configured in:
 /home/pi/apertar-hardware.conf
 ```
 
+When no hardware file exists (and Core has no record of an earlier one), Core writes its template to `~/apertar-hardware.conf` (`$APERTAR_HARDWARE_CONFIG` if set) at start, also with `--simulate`. It never replaces a file that exists, here or under `/boot`.
+
 Depending on the connected hardware, you can configure GPIO/PCF8574 buttons, rotary controls, recording LEDs, motion sensors and other supported accessories.
 
 Buttons can step settings, jump to specific values, toggle monitoring tools, trigger standby or launch configured scripts. A button can run up to six actions, for example:
@@ -174,7 +176,9 @@ P2=capture
 
 These are mapping examples, not a complete hardware configuration. Use the correct section, pin numbering and wiring for your device. Grouped toggles flip independently; they do not force every option into the same state.
 
-The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust.
+A GPIO or PCF8574 button that is already pressed when Core starts does nothing until you release it. If your buttons are normally closed (they read pressed at rest), set `invert_on_start=true` in `[gpio_buttons]` or `[pcf8574]`: a button that reads pressed at start is then taken as wired the other way round, and the journal names it. Restart Core after a change.
+
+The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust. Anyone who can reach the WebUI can change the script paths in `[run_script]`, as in Apertar 1.6.0. With `APERTAR_SCRIPT_PATHS=ssh` in Core's environment (a systemd drop-in with `Environment=`) the WebUI refuses a save that sets a new path, so a path can only be set over ssh; Undo, History and restore may still put back a version the camera saved earlier, with the paths that version had.
 
 ## Boot Config (config.txt)
 
@@ -277,6 +281,21 @@ sudo systemctl stop apertar-core.service
 
 Run this from the Core repository folder. For a source-only setup without the service, skip the service command. Press `Ctrl+C` to stop the manual process; restart the service afterward if you normally use it.
 
+### Two sensors (a second Core for cam1)
+
+A camera with a second sensor on cam1 runs a second Core for it, `apertar-core-cam1.service`, beside `apertar-core.service`. Nothing changes for a camera that does not install it. Install it once, from the Core repository folder:
+
+```bash
+install -m 0755 scripts/start-apertar-core.sh /home/pi/start-apertar-core.sh
+[[ -f /home/pi/apertar-hardware-cam1.conf ]] || install -m 0644 config/apertar-hardware-cam1.conf /home/pi/apertar-hardware-cam1.conf
+mkdir -p /home/pi/.config-cam1
+sudo install -m 0644 config/apertar-core-cam1.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable apertar-core-cam1
+```
+
+The start script is the one `apertar-core.service` runs; without `APERTAR_CAMERA` it starts the main Core exactly as before. From the next boot on, the second Core starts with the main one, using the same binary. Before it starts, `apertar-core --camera cam1 --check-dual` looks for a sensor on cam0 and another on cam1; with one sensor or none, systemd skips the unit (`systemctl status apertar-core-cam1` says the condition failed) and no second Core runs. The second Core uses its own socket (`/tmp/apertar-core-cam1.sock`), WebUI port 8001, settings in `/home/pi/.config-cam1` and the hardware file `/home/pi/apertar-hardware-cam1.conf`, which turns every input off; without that file it does not start. The **Dual sensor** switch in the WebUI's Dual Sensor card decides whether the main Core uses it. To remove it: `sudo systemctl disable apertar-core-cam1`.
+
 Before recording, make sure the intended media is actually mounted at the selected path. An existing folder by itself does not prove that an external drive is mounted there.
 
 ### Launch Options
@@ -287,6 +306,8 @@ Before recording, make sure the intended media is actually mounted at the select
 | `--media PATH` | Recording destination. Default: `/media/RAW`. |
 | `--web-bind ADDR` | WebUI listening address. Default: `0.0.0.0`. |
 | `--web-port PORT` | WebUI port. Default: `8000`; `0` disables it. |
+| `--camera PORT` | Camera by port: `cam0` (default), `cam1`, or an I2C node such as `i2c@88000`. Any value but `cam0` runs a second Core for a second sensor. |
+| `--check-dual` | Exit 0 when a sensor is on `cam0` and another on the `--camera` port, else 1, and start nothing. Reads sysfs and config.txt only, waiting up to 20 s for a sensor config.txt names. The cam1 unit runs it before it starts. |
 | `--simulate` | Run without opening a physical camera, for interface development. |
 | `--help` | Show command-line help. |
 
@@ -314,11 +335,11 @@ sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
 
 ### Preview temporal denoise
 
-The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). **It is off by default**, because it is the most expensive step of the ISP back end. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on.
+The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). It is on by default, as in Apertar 1.6.0: the tuning file is loaded as it is. Switching it off removes the most expensive step of the ISP back end while the camera records raw. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on. H.264 and ProRes record the ISP output, so with those formats Core always loads the tuning file as it is and the switch has no effect; changing the record format restarts the pipeline on the right file. Photos are developed from the raw frame, so photo mode follows the switch.
 
-At 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
+With the switch off at 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
 
-Turn it on in the WebUI (Settings, System, Performance, "Preview temporal denoise") or with the command `set_preview_tdn enabled=true|false`; the choice is saved in `camera_settings.conf` (`preview_tdn=`) and the state reports `preview_tdn`. Changing it restarts the camera pipeline (no reboot) and is refused while recording.
+Switch it in the WebUI (Settings, System, Performance, "Preview temporal denoise") or with the command `set_preview_tdn enabled=true|false`; the choice is saved in `camera_settings.conf` (`preview_tdn=`) and the state reports `preview_tdn`. Changing it restarts the camera pipeline (no reboot) and is refused while recording.
 
 Core does not edit your tuning files. With the switch off it resolves the tuning file as before (the automatic default and its Clear HDR variant, or the file you picked) and hands libcamera a copy without the `tdn` members, kept in `~/.cache/apertar-core/tuning/<name>_notdn.json` and renewed when the source file changes. If the file has no `tdn` member, or the copy fails its checks, the original is used and the journal says so (`ApertarCore preview tdn: ...`). `tuning_file` in the state stays your selection; `tuning_file_active` is the file libcamera loaded, and the journal line `ApertarCore tuning file:` ends in `preview_tdn=off active=<path>`.
 
@@ -345,7 +366,7 @@ Environment variables of the Core service (a systemd drop-in with `Environment=`
 | `APERTAR_DNG_PAYLOAD_COPY=1` | off | Copies every frame's rows into the writer's scratch buffer before writing, even when the copy changes nothing (the behaviour before the direct write of 16-bit and 8-bit payloads). | - |
 | `APERTAR_DNG_WRITE_ROWS=N` | 64 | Rows per `write()` when the payload goes through the scratch buffer (packed 10/12-bit, PiSP-compressed and CineMate Log frames). | - |
 | `APERTAR_RAW_POOL_WARM=0` | on | Restores the old raw-copy pool: no copies allocated before a take starts, and at most workers + 2 kept while it runs. | - |
-| `APERTAR_DNG_DONTNEED=writer` or `off` | sync | When a written DNG's pages leave the page cache: `sync` on the once-a-second sync thread after the file's `fsync`, when the pages are clean (cDNG only; lossy DNG then behaves as `off`); `writer` right after the write (the old default: the pages are still dirty then, so the call frees nothing and costs a cross-CPU LRU drain per frame, and the page cache fills until the kernel reclaims during the take); `off` never. | `dontneed` |
+| `APERTAR_DNG_DONTNEED=writer` or `off` | sync | When a written DNG's pages leave the page cache: `sync` on the once-a-second sync thread after the file's `fsync`, when the pages are clean (cDNG; lossy DNG files have no sync thread and drop right after the write, as in `writer`); `writer` right after the write (the old default: the pages are still dirty then, so the call frees nothing and costs a cross-CPU LRU drain per frame, and the page cache fills until the kernel reclaims during the take); `off` never. | `dontneed` |
 | `APERTAR_DNG_WRITEBACK=0` | on | No `sync_file_range` per written DNG (the kernel's own writeback only). | `writeback` |
 | `APERTAR_MEDIA_SYNC_MS=0` | 1000 | No once-a-second `fsync` of the finished DNGs and the clip folder during a take; the stop-time `syncfs` stays. Also stops the default page-cache drop (`APERTAR_DNG_DONTNEED=sync` runs on this thread). | `sync_ms` |
 | `APERTAR_RAW_CAMERA_BUFFERS=N` | 4 (8 in Clear HDR) plus the filesystem's extra | Number of raw camera buffers (3 to 16), each with its own libcamera request. | `raw_buffers` (absolute count); `extra_raw_buffers` (0 to 8) adds to the built-in count instead |

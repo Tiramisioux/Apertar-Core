@@ -52,6 +52,16 @@ public:
         return events;
     }
 
+    // The press so far fires nothing more: no click, long press or Hold follows from it (a press that woke the camera).
+    void consume()
+    {
+        clicks_ = 0;
+        if (down_) {
+            longPress_ = true;
+            holdFired_ = true;
+        }
+    }
+
     // When update() next has something to do with no edge in between (a long press, Hold, clicks to read out),
     // or -1 when it can wait for the next edge.
     int64_t nextWakeMs() const

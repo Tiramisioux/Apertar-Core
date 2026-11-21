@@ -3,9 +3,18 @@
 #include "util/MediaIntent.hpp"
 #include "util/StoragePreroll.hpp"
 #include "util/ClipName.hpp"
+#include "util/DualSensorSettings.hpp"
 #include <apertar/core/PreviewExposureReference.hpp>
 #include <apertar/core/RecordingCapabilities.hpp>
+#include "camera/CameraPort.hpp"
 #include "camera/ExposureMetering.hpp"
+#include "ipc/Cam1State.hpp"
+#include "ipc/Cam1Texts.hpp"
+#include "ipc/CommandClasses.hpp"
+#include "ipc/JsonKeys.hpp"
+#include "ipc/Cam1Names.hpp"
+#include "ipc/TakePlan.hpp"
+#include "util/TakeSlots.hpp"
 #include "hardware/ActionCatalog.hpp"
 #include "hardware/ControlsModel.hpp"
 #include "hardware/GpioChipInfo.hpp"
@@ -372,6 +381,8 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -1885,9 +1896,20 @@ struct SharedUiSettingsSnapshot
     bool smpteEnabled = false;
     bool externalMonitorEnabled = false;
     std::string externalMonitorMode = "Clean Feed";
+    bool dualSensorEnabled = false;   // the Dual Sensor card's switch: off = CAM0 only, two cameras configured or not
+    std::string previewSource = "Both";
+    std::string hdmi1Source = apertar::dualsettings::kHdmi1SourceDefault;   // HDMI 1's view while dual sensor is on
+    int previewWipe = apertar::dualsettings::kPreviewWipeDefault;           // 0..100: the camera underneath shows over the first w %
+    bool previewStack = false;                                              // both cameras full frame, the top one at previewOpacity
+    int previewOpacity = apertar::dualsettings::kPreviewOpacityDefault;     // 0..100, while stacked
+    std::string previewWipeDirection = "Horizontal";                        // Horizontal (edge moves left to right) or Vertical
+    std::string recordCameras = "Both";
+    std::string cam1Settings = apertar::dualsettings::kCam1SettingsDefault;
+    std::string cam1Mode = "Closest to Cam 0";
     std::string externalMonitorInfoOverlay = "On";
     std::string externalMonitorOrientation = "Landscape";
     std::string timecodeMode = "Free Run";
+    bool fileTimecodeSeparate = false;   // true once the operator sets the file timecode apart from timecodeMode
     bool photoModeEnabled = false;
     bool photoLongExposureEnabled = false;
     bool photoBracketingEnabled = false;
@@ -1904,7 +1926,7 @@ struct SharedUiSettingsSnapshot
     bool recordingFrameEnabled = false;
     bool frameBufferBarEnabled = false;
     bool recordingRedTimecodeEnabled = true;
-    bool audioRecordedOutlineEnabled = true;
+    bool audioRecordedOutlineEnabled = false;
     bool recordAudioEnabled = false;
     bool soundRecorderEnabled = false;
     bool recordGyroEnabled = false;
@@ -2057,12 +2079,34 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.externalMonitorEnabled = parseUiSettingsBool(value, snapshot.externalMonitorEnabled);
         else if (key == "externalMonitorMode")
             snapshot.externalMonitorMode = normalizeExternalMonitorModeValue(value);
+        else if (key == "dualSensorEnabled")
+            snapshot.dualSensorEnabled = parseUiSettingsBool(value, snapshot.dualSensorEnabled);
+        else if (key == "previewSource")
+            snapshot.previewSource = apertar::dualsettings::normalizePreviewSource(value);
+        else if (key == "hdmi1Source")
+            snapshot.hdmi1Source = apertar::dualsettings::normalizeHdmi1Source(value);
+        else if (key == "previewWipe")
+            snapshot.previewWipe = apertar::dualsettings::normalizePercent(value, apertar::dualsettings::kPreviewWipeDefault);
+        else if (key == "previewStack")
+            snapshot.previewStack = parseUiSettingsBool(value, snapshot.previewStack);
+        else if (key == "previewOpacity")
+            snapshot.previewOpacity = apertar::dualsettings::normalizePercent(value, apertar::dualsettings::kPreviewOpacityDefault);
+        else if (key == "previewWipeDirection")
+            snapshot.previewWipeDirection = apertar::dualsettings::normalizeWipeDirection(value);
+        else if (key == "recordCameras")
+            snapshot.recordCameras = apertar::dualsettings::normalizeRecordCameras(value);
+        else if (key == "cam1Settings")
+            snapshot.cam1Settings = apertar::dualsettings::normalizeCam1Settings(value);
+        else if (key == "cam1Mode")
+            snapshot.cam1Mode = apertar::dualsettings::normalizeCam1Mode(value);
         else if (key == "externalMonitorInfoOverlay")
             snapshot.externalMonitorInfoOverlay = normalizeExternalMonitorInfoOverlayValue(value);
         else if (key == "externalMonitorOrientation")
             snapshot.externalMonitorOrientation = normalizeExternalMonitorOrientationValue(value);
         else if (key == "timecodeMode")
             snapshot.timecodeMode = value == "Rec Run" ? "Rec Run" : "Free Run";
+        else if (key == "fileTimecodeSeparate")
+            snapshot.fileTimecodeSeparate = parseUiSettingsBool(value, false);
         else if (key == "photoModeEnabled")
             snapshot.photoModeEnabled = parseUiSettingsBool(value, snapshot.photoModeEnabled);
         else if (key == "photoLongExposureEnabled")
@@ -2195,6 +2239,102 @@ SharedUiSettingsSnapshot readSharedUiSettings()
     return snapshot;
 }
 
+// The dual-sensor settings as the `ui` object of /api/state and of the socket's get_state carries them (no braces).
+std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
+{
+    return std::string("\"dual_sensor_enabled\":") + (ui.dualSensorEnabled ? "true" : "false")
+           + ",\"preview_source\":\"" + escapeJson(ui.previewSource) + "\""
+           + ",\"hdmi1_source\":\"" + escapeJson(ui.hdmi1Source) + "\""
+           + ",\"preview_wipe\":" + std::to_string(ui.previewWipe)
+           + ",\"preview_stack\":" + (ui.previewStack ? "true" : "false")
+           + ",\"preview_opacity\":" + std::to_string(ui.previewOpacity)
+           + ",\"preview_wipe_direction\":\"" + (ui.previewWipeDirection == "Vertical" ? "vertical" : "horizontal") + "\""
+           + ",\"record_cameras\":\"" + escapeJson(ui.recordCameras) + "\""
+           + ",\"cam1_settings\":\"" + escapeJson(ui.cam1Settings) + "\""
+           + ",\"cam1_mode\":\"" + escapeJson(ui.cam1Mode) + "\"";
+}
+
+// The `cam1` object and `record_cameras` for both state bodies (design 4.5), with a leading comma; "" when cam1 is not
+// configured, so a one-sensor rig, or the switch off, keeps today's state byte for byte. Reads the relay's snapshot
+// only: no commandMutex_, no controller accessor.
+std::string cam1WordOf(const ControlClient::Snapshot &cam1)
+{
+    cam1state::RankInputs rank;
+    rank.linked = cam1.linked;
+    rank.lost = cam1.lost;
+    rank.sensorMissing = cam1.sensorMissing;
+    rank.recording = cam1.recording;
+    rank.writing = cam1.writing;
+    rank.refused = cam1.refused;
+    rank.standby = cam1.standby;
+    rank.pending = cam1.pending;
+    return cam1state::word(rank);
+}
+
+// The record_cameras word (design 6.1): a running take with cam1 in it names its own cameras, otherwise the policy's
+// answer for the next press. "" when cam1 is not configured.
+std::string recordCamerasNow(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+{
+    if (!client.configured())
+        return {};
+    const ControlClient::Snapshot cam1 = client.snapshot();
+    if (cam1.inTake)
+        return cam1.takeCam1Only ? "cam1" : "both";
+    cam1state::RecordCamerasInputs cameras;
+    cameras.recordCameras = ui.recordCameras;
+    cameras.previewSource = ui.previewSource;
+    cameras.hdmi1Source = ui.hdmi1Source;
+    cameras.soundRecorder = ui.soundRecorderEnabled;
+    cameras.cam0Recording = cam0Recording;
+    cameras.cam1State = cam1WordOf(cam1);
+    cameras.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
+    return cam1state::recordCamerasWord(cameras);
+}
+
+std::string cam1StateMembers(const ControlClient &client, const SharedUiSettingsSnapshot &ui, bool cam0Recording)
+{
+    if (!client.configured())
+        return {};
+    const ControlClient::Snapshot cam1 = client.snapshot();
+    const std::string word = cam1WordOf(cam1);
+
+    cam1state::Cam1View view;
+    view.state = word;
+    view.message = cam1.message;
+    view.droppedFrames = cam1.droppedFrames;
+    view.settings = cam1.settings;
+    view.sensor = cam1.sensor;
+    view.sensorMono = cam1.sensorMono;
+    view.locked = cam1.locked;           // the live sync check (design 7.6): both Cores locked, equal fps, skew in the bound
+    view.skewKnown = cam1.skewKnown;
+    view.skewUs = cam1.skewUs;
+
+    return "," + cam1state::objectJson(view) + ",\"record_cameras\":\"" + recordCamerasNow(client, ui, cam0Recording) + "\"";
+}
+
+// The running (or last) take's folder name and, for a take with start_us, the slots of its first and last frame
+// (design 6.2, 8.1), with a leading comma, for both state bodies. Lock-free: the controller's TakeInfo.
+std::string takeSlotMembers(const CameraController::TakeSnapshot &take)
+{
+    return std::string(",\"recording_first_slot\":") + (take.firstSlot ? std::to_string(*take.firstSlot) : std::string("null"))
+           + ",\"recording_last_slot\":" + (take.lastSlot ? std::to_string(*take.lastSlot) : std::string("null"))
+           + ",\"recording_clip_name\":\"" + escapeJson(take.clipName) + "\"";
+}
+
+// A whole-number record_start / record_stop field (start_us, stop_us, tc_offset_us): absent is fine (*present false),
+// present and not a whole number within 2^53 is false.
+bool wholeNumberField(const ControlCommand &command, const char *key, int64_t *value, bool *present)
+{
+    *present = command.fields.count(key) != 0;
+    if (!*present)
+        return true;
+    const auto number = command.number(key);
+    if (!number || !std::isfinite(*number) || *number != std::floor(*number) || std::fabs(*number) > 9.0e15)
+        return false;
+    *value = static_cast<int64_t>(*number);
+    return true;
+}
+
 std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
 {
     std::map<std::string, std::string> values;
@@ -2230,9 +2370,17 @@ std::map<std::string, std::string> readSharedUiGeneralSettingsMap()
     return values;
 }
 
+// The secondary writes no UI.conf of any kind (design 3.3): set once in start(), before any command can run. A blocked
+// write reports success, as a write that changed nothing does.
+std::atomic<bool> &uiConfWritesBlocked()
+{
+    static std::atomic<bool> blocked{false};
+    return blocked;
+}
+
 bool updateSharedUiGeneralSettings(const std::vector<std::pair<std::string, std::string>> &updates)
 {
-    if (updates.empty())
+    if (updates.empty() || uiConfWritesBlocked().load(std::memory_order_relaxed))
         return true;
 
     const std::filesystem::path path = sharedUiSettingsPath();
@@ -3706,13 +3854,12 @@ std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts
            ",\"text\":" + bootconf::jsonString(text) + "}";
 }
 
+// A switch that decides whether a file is written: true or 1, false or 0, nothing else.
 std::optional<bool> boolFieldValue(const std::string &value)
 {
-    std::string v = value;
-    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (v == "true" || v == "1" || v == "on" || v == "yes")
+    if (value == "true" || value == "1")
         return true;
-    if (v == "false" || v == "0" || v == "off" || v == "no")
+    if (value == "false" || value == "0")
         return false;
     return std::nullopt;
 }
@@ -3778,8 +3925,13 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
         return {400, errorReplyBody(command.id, error, "\"code\":\"invalid\"")};
-    const bool dryRun = boolFieldValue(command.string("dry_run").value_or("false")).value_or(false);
-    const bool confirmDisplay = boolFieldValue(command.string("confirm_display").value_or("false")).value_or(false);
+    const auto dryRunValue = boolFieldValue(command.string("dry_run").value_or("false"));
+    const auto confirmDisplayValue = boolFieldValue(command.string("confirm_display").value_or("false"));
+    if (!dryRunValue || !confirmDisplayValue)
+        return {400, errorReplyBody(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.",
+                                    "\"code\":\"invalid\"")};
+    const bool dryRun = *dryRunValue;
+    const bool confirmDisplay = *confirmDisplayValue;
 
     const bootconf::Facts facts = bootConfigFacts();
     std::lock_guard<std::mutex> lock(bootConfigMutex());
@@ -4961,7 +5113,8 @@ std::string hardwareConfigDisplayPath(const std::filesystem::path &path)
     return value;
 }
 
-// What the validator needs to know about this Pi: the I2C buses that exist and the DPI overlays in config.txt.
+// What the validator needs to know about this Pi: the I2C buses and GPIO chips that exist and the DPI overlays in
+// config.txt.
 hwconf::Facts hardwareConfigFacts()
 {
     hwconf::Facts facts;
@@ -4974,6 +5127,9 @@ hwconf::Facts hardwareConfigFacts()
     std::sort(facts.buses.begin(), facts.buses.end());
     facts.known = !facts.buses.empty();
     facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(bootConfigPath())).dpiLines;
+    for (const hardware::GpioChipInfo &chip : hardware::listGpioChips())
+        facts.gpioChips.push_back({chip.path, chip.label, chip.lines});
+    facts.headerChip = hardware::headerGpioChipPath();
     return facts;
 }
 
@@ -4989,21 +5145,6 @@ std::string controlsIssuesJson(const std::vector<hwconf::Issue> &issues)
             << ",\"section\":\"" << escapeJson(issue.section) << "\""
             << ",\"key\":\"" << escapeJson(issue.key) << "\""
             << ",\"message\":\"" << escapeJson(issue.message) << "\"}";
-    }
-    out << ']';
-    return out.str();
-}
-
-std::string controlsConflictsJson(const std::vector<hwconf::Conflict> &conflicts)
-{
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < conflicts.size(); ++i) {
-        const hwconf::Conflict &conflict = conflicts[i];
-        out << (i > 0 ? "," : "") << "{\"section\":\"" << escapeJson(conflict.section) << "\""
-            << ",\"key\":\"" << escapeJson(conflict.key) << "\""
-            << ",\"base\":\"" << escapeJson(conflict.base) << "\""
-            << ",\"current\":\"" << escapeJson(conflict.current) << "\"}";
     }
     out << ']';
     return out.str();
@@ -5035,6 +5176,11 @@ std::string defaultHardwareConfigTemplate()
 # INA219 I2C bus example: /dev/i2c-4 -> bus=4
 # Address can be decimal or hex.
 
+[network]
+# Hotspot fallback wait in seconds (0-86400); 0 removes the delay.
+# An established Wi-Fi connection is left alone. Restart apertar-network.service after changes.
+hotspot_delay_seconds=60
+
 [ina219]
 enabled=true
 bus=4
@@ -5051,10 +5197,10 @@ pcie_controller=1000110000.pcie
 # Write buffer: frames = the original queue (12 frames; a frame is dropped when it is full), ram = a large RAM queue
 # sized from the free memory at the start of a take (CineMate style). ram refuses itself when it would be smaller
 # than the original queue. Takes effect at the next take.
-buffer=frames
-buffer_ram_fraction=0.6
-buffer_ram_floor_mb=512
-buffer_ram_max_fraction=0.5
+# buffer=frames
+# buffer_ram_fraction=0.6
+# buffer_ram_floor_mb=512
+# buffer_ram_max_fraction=0.5
 # Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
 # buffer_stop_percent=90
 # Frames per folder: 0 keeps every frame of a take in its clip folder; 100 to 100000 starts a new part_NNN folder inside
@@ -5066,8 +5212,8 @@ buffer_ram_max_fraction=0.5
 
 [media]
 # Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
-# preroll=on runs it when Core starts, when a card is inserted and after a format; the command storage_preroll always works. Read at each request.
-# preroll=on
+# preroll=on runs it when Core starts, when a card is inserted and after a format (default off); the command storage_preroll always works. Read at each request.
+# preroll=off
 # Length in seconds, 1 to 10.
 # preroll_seconds=2
 
@@ -5075,27 +5221,27 @@ buffer_ram_max_fraction=0.5
 # Highest ISO in Clear HDR, per sensor mode; 0 = no cap. SDR is never capped. Restart Core after a change.
 # 12-bit: the sensor merges HG/LG only up to gain code 57 (17.1 dB) = ISO 720.
 # 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
-clear_hdr_iso_max_12bit=720
-clear_hdr_iso_max_16bit=1585
+# clear_hdr_iso_max_12bit=720
+# clear_hdr_iso_max_16bit=1585
 
 [display]
-# Resolutions: 1920x1080(Default), 720x720, 640x480, 800x480, 1280x720, 1024x600
+# Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
 # Layouts:
 # square (For 720x720)
 # landscape_compact (For 640x480 and 800x480)
 # landscape_medium (For 1024x600)
 # landscape (For 1280x720)
 # landscape_large (For 1920x1080)
-ui_width=1920
-ui_height=1080
-ui_layout=landscape_large
+ui_width=720
+ui_height=720
+ui_layout=square
 controls_opacity=1.0
 # Zoom button magnification: 1.0-4.0; restart the UI after changing this.
 zoom_toggle_factor=4.0
 controls_mode=Light
 rotation=0
 windowed=false
-hdmi_external_only=true
+hdmi_external_only=false
 
 [run_script]
 # run_script (alias script) runs all configured scripts sequentially, up to five.
@@ -5110,10 +5256,107 @@ path4=
 path5=
 
 [imu]
-enabled=false
+# Current options: driver=mpu6050, bmi160, bmi270, icm42688p.
+# Free-running IMUs use sync_offset_ms to bake in a measured Gyroflow sync correction.
+enabled=true
 driver=mpu6050
 sync_mode=free_run
 sync_offset_ms=0
+
+[mpu6050]
+# Optional gyro/accelerometer sidecar recording for Gyroflow stabilization.
+# Enable "Record Gyro Data" in Record settings to write a .gcsv beside each clip.
+enabled=true
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+dlpf_hz=98
+use_fifo=true
+fifo_batch_samples=24
+# orientation uses Gyroflow axis notation. For chip facing back, X left, Y down, use xYz.
+orientation=XYZ
+# UI-only neutral level reference. Use Set Level in Gyro Calibration to update these.
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+# Prefer stored/manual bias. Set auto_calibrate_seconds only if the camera is guaranteed still after pressing record.
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+# Optional Gyroflow rolling-shutter metadata. Direction: 0=top-bottom, 1=bottom-top.
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi160]
+# Direct-polled Bosch BMI160 IMU. Use driver=bmi160 in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi270]
+# Direct-polled Bosch BMI270 IMU. Some boards need their Bosch config blob initialized by their driver.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[icm42688p]
+# Direct-polled TDK InvenSense ICM42688-P IMU. Use driver=icm42688p in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
 
 [pcf8574]
 # Pin actions include capture, record_toggle, iso_up/down, fps_up/down, wb_up/down,
@@ -5126,6 +5369,11 @@ sync_offset_ms=0
 enabled=false
 bus=1
 address=0x20
+active_low=true
+poll_ms=40
+debounce_ms=60
+# A pin that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
 
 [neorotary4]
 # Optional Adafruit NeoRotary 4 / seesaw quad rotary encoder. Each knob has clockwise, counter-clockwise and press actions.
@@ -5133,18 +5381,57 @@ address=0x20
 enabled=false
 bus=1
 address=0x49
+poll_ms=30
+debounce_ms=60
+invert_direction=false
+reset_on_start=false
+max_events_per_poll=8
+encoder0_cw=iso_up
+encoder0_ccw=iso_down
+encoder0_press=iso
+encoder1_cw=shutter_up
+encoder1_ccw=shutter_down
+encoder1_press=shutter
+encoder2_cw=wb_up
+encoder2_ccw=wb_down
+encoder2_press=wb
+encoder3_cw=fps_up
+encoder3_ccw=fps_down
+encoder3_press=resolution
 
-[gpio]
+[gpio_buttons]
 # GPIO button actions use the same names as [pcf8574].
+# Grove digital ports use the BCM number printed on the Grove Base HAT, for example D5 -> d5.
 # Example: d17=recindicatorled reserves GPIO17 as the recording LED output.
 enabled=false
+# chip=auto is the Pi's 40-pin header; another chip by path, for example /dev/gpiochip13.
+chip=auto
+active_low=true
+pull=up
+poll_ms=12
+debounce_ms=60
+# A button that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
+# Example buttons (GPIO 5 and 6 are also the pins of the [gpio_encoders] example):
+# d5=capture
+# d6=eject
 
 [gpio_encoders]
 # Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].
+# For Grove Encoder, connect SIGA/SIGB to the two configured digital pins.
+# chip, active_low, pull, poll_ms and debounce_ms are shared with [gpio_buttons]: set them there.
 enabled=false
+# Example encoder:
+# encoder0_a=5
+# encoder0_b=6
+# encoder0_cw=iso_up
+# encoder0_ccw=iso_down
+# encoder0_press_gpio=13
+# encoder0_press=iso
+# encoder0_steps_per_event=4
 
 [gpio_switches]
-# Optional two- and three-way switches on GPIO pins, read like [gpio] (chip, pull, active_low, debounce_ms).
+# Optional two- and three-way switches on GPIO pins; chip, pull, active_low and debounce_ms come from [gpio_buttons].
 # Two-way: switch0_pins=17, switch0_on=..., switch0_off=...
 # Three-way: switch1_pins=22,23, switch1_position0=... (22 closed), switch1_position1=... (middle), switch1_position2=... (23 closed)
 # The position a switch is in is applied when Core starts.
@@ -5152,9 +5439,19 @@ enabled=false
 
 [grove_analog]
 # Optional Grove Base HAT analog controls: potentiometers, sliders, rotary angle sensors.
+# ADC address is usually 0x04 on STM32 HATs and 0x08 on newer MM32 HATs.
 enabled=false
 bus=1
 address=0x04
+poll_ms=80
+deadband=32
+emit_on_start=false
+a0=wb
+a0_min=2500
+a0_max=8000
+a0_step=50
+a1=iso
+a1_mode=preset
 
 [trigger_output]
 # Optional capture trigger pulse for DIY hot shoe, flash sync, tally, or accessories.
@@ -5560,6 +5857,56 @@ std::optional<double> readCpuTemperatureC()
     return static_cast<double>(*milliDegrees) / 1000.0;
 }
 
+// The NVMe controller of a media partition: /dev/nvme0n1p2 -> nvme0; "" when the device is not NVMe.
+std::string nvmeControllerOfDevice(const std::string &devicePath)
+{
+    const std::string prefix = "/dev/nvme";
+    if (devicePath.rfind(prefix, 0) != 0)
+        return {};
+    size_t end = prefix.size();
+    while (end < devicePath.size() && std::isdigit(static_cast<unsigned char>(devicePath[end])))
+        ++end;
+    if (end == prefix.size() || end >= devicePath.size() || devicePath[end] != 'n')
+        return {};
+    return devicePath.substr(5, end - 5);
+}
+
+// Sectors (512 bytes) written to a block device since boot: field 7 of /sys/class/block/<name>/stat.
+std::optional<uint64_t> readBlockSectorsWritten(const std::string &devicePath)
+{
+    const std::string name = std::filesystem::path(devicePath).filename().string();
+    if (name.empty())
+        return std::nullopt;
+    std::ifstream input("/sys/class/block/" + name + "/stat");
+    uint64_t field = 0;
+    for (int index = 0; index < 7; ++index) {
+        if (!(input >> field))
+            return std::nullopt;
+    }
+    return field;
+}
+
+// The controller's hwmon directory (/sys/class/nvme/nvme0/hwmon1), "" when the kernel has none.
+std::filesystem::path nvmeHwmonDirectory(const std::string &controller)
+{
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/nvme/" + controller, ec)) {
+        if (ec)
+            break;
+        if (entry.path().filename().string().rfind("hwmon", 0) == 0)
+            return entry.path();
+    }
+    return {};
+}
+
+std::optional<double> readMilliDegreesC(const std::filesystem::path &path)
+{
+    const auto milliDegrees = readLongLongFile(path);
+    if (!milliDegrees)
+        return std::nullopt;
+    return static_cast<double>(*milliDegrees) / 1000.0;
+}
+
 std::optional<std::pair<uint64_t, uint64_t>> readCpuTicks()
 {
     std::ifstream input("/proc/stat");
@@ -5624,8 +5971,43 @@ uint64_t estimatedRawBytesPerSecond(const CaptureSettings &settings)
     return static_cast<uint64_t>(frameMiB * MiB * fps);
 }
 
+// cam1's data rate (design 6.4), by the same model as cam0's, from cam1.settings: its size, fps, format, depth,
+// compression and ProRes profile; what cam1.settings does not say stays cam0's. 0 while cam1 has reported nothing.
+uint64_t cam1EstimatedBytesPerSecond(const std::string &json, CaptureSettings s)
+{
+    const auto width = jsonkeys::numberOf(json, "width");     // the first width/height is `resolution`'s
+    const auto height = jsonkeys::numberOf(json, "height");
+    if (!width || !height || *width <= 0 || *height <= 0)
+        return 0;
+    const auto text = [&](const char *key) { return jsonkeys::stringOf(json, key).value_or(""); };
+    s.resolution.width = static_cast<unsigned>(*width);
+    s.resolution.height = static_cast<unsigned>(*height);
+    if (const auto fps = jsonkeys::numberOf(json, "fps"); fps && *fps > 0)
+        s.fps = *fps;
+    if (const std::string format = text("recording_format"); !format.empty())
+        s.recordingFormat = recordingFormatFromNormalizedValue(format);
+    if (const auto bits = jsonkeys::numberOf(json, "raw_bit_depth"); bits && *bits > 0)
+        s.rawBitDepth = static_cast<unsigned>(*bits);
+    s.cdngCompression = text("cdng_compression") == "lossless_jpeg" ? CdngCompression::LosslessJpeg : CdngCompression::Uncompressed;
+    if (const std::string ratio = text("lossy_dng_ratio"); !ratio.empty())
+        s.lossyDngRatio = lossyDngRatioFromString(ratio);
+    if (const std::string profile = text("prores_profile"); !profile.empty())
+        s.proresProfile = profile == "hq" ? ProresProfile::HQ : profile == "lt" ? ProresProfile::LT
+                        : profile == "proxy" ? ProresProfile::Proxy : ProresProfile::Standard;
+    if (const auto w = jsonkeys::numberOf(json, "h264_width"), h = jsonkeys::numberOf(json, "h264_height"); w && h) {
+        s.h264Resolution.width = static_cast<unsigned>(*w);
+        s.h264Resolution.height = static_cast<unsigned>(*h);
+    }
+    // Log stores fewer bits where cam1 says it is applied.
+    s.cdngLogApplied = false;
+    if (jsonkeys::boolOf(json, "cdng_log_applied").value_or(false))
+        if (const auto logBits = jsonkeys::numberOf(json, "cdng_log_bits"); logBits && *logBits > 0)
+            s.rawBitDepth = static_cast<unsigned>(*logBits);
+    return estimatedRawBytesPerSecond(s);
+}
+
 // What the time-left figure assumes, for the WebUI's sub-label.
-std::string timeLeftEstimateLabel(const CaptureSettings &settings)
+std::string timeLeftEstimateLabel(const CaptureSettings &settings, std::optional<double> cardMinutes)
 {
     std::string format;
     const std::string bits = std::to_string(settings.rawBitDepth ? settings.rawBitDepth : 12) + "-bit";
@@ -5647,7 +6029,14 @@ std::string timeLeftEstimateLabel(const CaptureSettings &settings)
         format = "cDNG " + bits + (settings.cdngCompression == CdngCompression::LosslessJpeg ? " lossless" : "");
         break;
     }
-    return format + " estimate (bar: 2 h)";
+    // The bar is time left out of the whole card's recording time in this mode; the label names that total.
+    if (!cardMinutes.has_value() || cardMinutes.value() <= 0.0)
+        return format + " estimate";
+    const long total = static_cast<long>(std::floor(cardMinutes.value()));
+    const std::string card = total >= 60
+        ? std::to_string(total / 60) + " h" + (total % 60 ? " " + std::to_string(total % 60) + " min" : "")
+        : std::to_string(total) + " min";
+    return format + " estimate (card: " + card + ")";
 }
 
 double estimatedStillFrameSizeMiB(const CaptureSettings &settings, const std::string &sensorName)
@@ -6176,55 +6565,6 @@ std::string formatFileTimestampHuman(const std::filesystem::file_time_type &time
     if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &localTm) == 0)
         return "Unknown";
     return buffer;
-}
-
-std::string buildHardwareConfigFileJson()
-{
-    const std::filesystem::path path = editableHardwareConfigPath();
-    const hardware::StoreInfo info = hardware::configStore().info();
-    std::error_code ec;
-    const bool exists = info.exists;
-
-    // A missing file starts from a /boot copy when there is one (the readers take its sections), else the template.
-    std::string text = info.text;
-    std::string bootCopy;
-    if (!exists) {
-        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
-            if (std::filesystem::is_regular_file(candidate, ec)) {
-                bootCopy = candidate;
-                text = readTextFileRaw(candidate);
-                break;
-            }
-            ec.clear();
-        }
-        if (bootCopy.empty())
-            text = defaultHardwareConfigTemplate();
-    }
-    uint64_t sizeBytes = static_cast<uint64_t>(text.size());
-    if (exists) {
-        const auto fileSize = std::filesystem::file_size(path, ec);
-        if (!ec)
-            sizeBytes = static_cast<uint64_t>(fileSize);
-    }
-    ec.clear();
-
-    std::string modifiedText = exists ? formatFileTimestampHuman(std::filesystem::last_write_time(path, ec)) : "Not saved yet";
-    if (ec)
-        modifiedText = "Unknown";
-
-    std::ostringstream out;
-    out << "{\"ok\":true"
-        << ",\"path\":\"" << escapeJson(path.string()) << "\""
-        << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(path)) << "\""
-        << ",\"exists\":" << (exists ? "true" : "false")
-        << ",\"revision\":\"" << escapeJson(info.revision) << "\""
-        << ",\"boot_copy\":\"" << escapeJson(bootCopy) << "\""
-        << ",\"size_bytes\":" << sizeBytes
-        << ",\"size_text\":\"" << escapeJson(formatBytesHuman(sizeBytes)) << "\""
-        << ",\"modified_text\":\"" << escapeJson(modifiedText) << "\""
-        << ",\"text\":\"" << escapeJson(text) << "\""
-        << "}";
-    return out.str();
 }
 
 // What the Config page may send before the store sees it. Empty, too large and binary texts never get that far.
@@ -7384,7 +7724,7 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
     std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
     out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
         << ",\"sound_text\":\"" << escapeJson(soundText) << "\""
-        << ",\"audio_url\":\"" << (hasAudio ? "/api/media/file?kind=folder&id=" + escapeJson(id) + "&name=" + escapeJson(f.name) + ".wav" : std::string()) << "\""
+        << ",\"audio_url\":\"" << (hasAudio ? escapeJson("/api/media/file?kind=folder&id=" + urlEncodeComponent(id) + "&name=" + urlEncodeComponent(f.name + ".wav")) : std::string()) << "\""
         << ",\"fps_badge\":\"" << fpsBuf << " FPS\""
         << ",\"info_line\":\"cDNG sequence \u2022 " << f.frames.count() << " frames\""
         << ",\"meta\":{\"captured\":\"" << escapeJson(f.shotDateText) << "\",\"type\":\"cDNG sequence\""
@@ -7790,6 +8130,8 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
     addBoolFromMap("externalMonitorEnabled", false);
     if (const auto it = uiValues.find("externalMonitorMode"); it != uiValues.end())
         addString("externalMonitorMode", it->second);
+    if (const auto it = uiValues.find("recordCameras"); it != uiValues.end())
+        addString("recordCameras", apertar::dualsettings::normalizeRecordCameras(it->second));
     if (const auto it = uiValues.find("externalMonitorInfoOverlay"); it != uiValues.end())
         addString("externalMonitorInfoOverlay", it->second);
     if (const auto it = uiValues.find("externalMonitorOrientation"); it != uiValues.end())
@@ -7802,6 +8144,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
               uiValues.count("timecodeMode")
                   ? normalizeTimecodeModeValue(uiValues.at("timecodeMode"))
                   : uiSnapshot.timecodeMode);
+    addBoolFromMap("fileTimecodeSeparate", uiSnapshot.fileTimecodeSeparate);
     addBoolFromMap("photoModeEnabled", false);
     addBoolFromMap("photoLongExposureEnabled", uiSnapshot.photoLongExposureEnabled);
     addBoolFromMap("photoBracketingEnabled", uiSnapshot.photoBracketingEnabled);
@@ -7976,13 +8319,13 @@ ApertarCoreApp::ApertarCoreApp(Options options)
     , camera_(
           [this](const std::string &eventJson) { publishEvent(eventJson); },
           [this](PreviewFrameDescriptor frame) { enqueuePreviewFrame(std::move(frame)); })
-    , gpioInput_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , gpioInput_([this](const std::string &action) { return handleHardwareInputAction(action); },
                  [this](const std::string &action) { handleHardwareInputAction(action, false); })
     , standbyPowerButton_([this](bool doublePress) { return handlePowerButtonPress(doublePress); })
     , groveAnalogInput_([this](const GroveAnalogInput::AnalogEvent &event) { handleHardwareAnalogInput(event); })
-    , neoRotary4Input_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , neoRotary4Input_([this](const std::string &action) { return handleHardwareInputAction(action); },
                        [this](const std::string &action) { handleHardwareInputAction(action, false); })
-    , pcf8574Input_([this](const std::string &action) { handleHardwareInputAction(action); })
+    , pcf8574Input_([this](const std::string &action) { return handleHardwareInputAction(action); })
 {
     // The write queue's safety stop (see runBufferSafetyStop): lock-free, runs under the queue's mutex. Set before any take.
     bufferbudget::safetyStopHook() = [this](const bufferbudget::SafetyStopHit &hit) {
@@ -7999,13 +8342,219 @@ ApertarCoreApp::~ApertarCoreApp()
     stop();
 }
 
+namespace {
+// The Dual sensor switch (UI.conf dualSensorEnabled) as the relay thread reads it once a second: the file is parsed
+// again only when its size or modification time changed, so an idle rig costs one stat() a second.
+bool dualSensorSwitchOn()
+{
+    static std::mutex mutex;
+    static std::filesystem::file_time_type seenTime{};
+    static std::uintmax_t seenSize = static_cast<std::uintmax_t>(-1);
+    static bool value = false;
+    std::error_code error;
+    const std::filesystem::path path = sharedUiSettingsPath();
+    const auto time = std::filesystem::last_write_time(path, error);
+    const std::uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+    std::lock_guard<std::mutex> lock(mutex);
+    if (error) {
+        seenSize = static_cast<std::uintmax_t>(-1);
+        return value = false;
+    }
+    if (time != seenTime || size != seenSize) {
+        seenTime = time;
+        seenSize = size;
+        value = readSharedUiSettings().dualSensorEnabled;
+    }
+    return value;
+}
+// UI.conf cam1Settings as the relay thread reads it once a second (amendment A2), re-parsed only when the file changed.
+commandclasses::Ties cam1TiesCached()
+{
+    static std::mutex mutex;
+    static std::filesystem::file_time_type seenTime{};
+    static std::uintmax_t seenSize = static_cast<std::uintmax_t>(-1);
+    static commandclasses::Ties value;
+    std::error_code error;
+    const std::filesystem::path path = sharedUiSettingsPath();
+    const auto time = std::filesystem::last_write_time(path, error);
+    const std::uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+    std::lock_guard<std::mutex> lock(mutex);
+    if (error) {
+        seenSize = static_cast<std::uintmax_t>(-1);
+        return value = commandclasses::Ties{};
+    }
+    if (time != seenTime || size != seenSize) {
+        seenTime = time;
+        seenSize = size;
+        value = commandclasses::parseTies(readSharedUiSettings().cam1Settings);
+    }
+    return value;
+}
+} // namespace
+
+bool ApertarCoreApp::secondaryRole() const
+{
+    return cameraport::isSecondary(options_.camera);
+}
+
+// The relay (design 4.1). Primary role only; the secondary never links to anything. It runs before the media trim and
+// watcher threads, so a restarted primary knows about a cam1 take before it touches the card (3.4).
+void ApertarCoreApp::startCam1Client()
+{
+    if (secondaryRole())
+        return;
+    ControlClient::Options options;
+    options.socketPath = kCam1SocketPath;
+    options.ownSocketPath = options_.socketPath;
+    options.switchOn = [] { return dualSensorSwitchOn(); };
+    options.configNames = [](const std::string &port) { return cameraport::configNamesPort({}, port); };
+    options.sensorPresent = [] {
+        const cameraport::Node node = cameraport::resolve({}, "cam1");
+        return node.valid && cameraport::sensorSubdevUnder({}, node.path);
+    };
+    // One sensor (either port) or none: no cam1, as the cam1 unit's ExecCondition skips it.
+    options.dualSensors = [] { return cameraport::dualSensorsPresent({}, "cam1", 0, 0, nullptr); };
+    options.primaryInStandby = [this] { return primaryStandby_.load(std::memory_order_acquire); };
+    options.ties = [] { return cam1TiesCached(); };
+    options.primaryView = [this] { return relayView(); };
+    options.primaryIdle = [this] { return primaryIdleForRelay(); };
+    options.primaryTakeActive = [this] { return primaryTakeActiveForRelay(); };
+    options.primaryTakeStarting = [this] { return primaryTakeStarting_.load(std::memory_order_acquire); };
+    options.primaryFrames = [this] { return primaryFramesForRelay(); };
+    options.frameRate = [this] {
+        const auto fps = jsonkeys::numberOf(relayView().settings, "fps");
+        const auto rate = recordingFrameRate(fps.value_or(25.0));
+        return std::pair<int64_t, int64_t>{rate.first, rate.second};
+    };
+    options.primaryLocked = [this] { return relayPrimaryLocked_.load(std::memory_order_acquire); };
+    options.onTakeChange = [this] { onCam1TakeChange(); };
+    cam1Client_.start(std::move(options));
+}
+
+// True while cam1's take or its writes may still be using the card, or cam1 is not known yet: the trim and the clip
+// merge wait (design 3.4, 4.3 Writes pending). False at once, with no lock, when there is no cam1.
+bool ApertarCoreApp::cam1HoldsMedium() const
+{
+    if (cam1Client_.unknown())
+        return true;
+    if (!cam1Client_.configured())
+        return false;
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    return cam1.recording || cam1.writing;
+}
+
+// ---- the relay's view of the primary (design 4.1 Locks, 4.4) ---------------------------------------------------------------
+// Runs on the command thread under commandMutex_ (or in start()). The relay thread reads the copies and the flags; it takes
+// neither commandMutex_ nor the controller's mutex_.
+
+bool ApertarCoreApp::primaryIdleForRelay() const
+{
+    return !camera_.rawTakeActive() && !storagepreroll::prerollActive() && !relayRecording_.load(std::memory_order_acquire) &&
+           !relayTimelapse_.load(std::memory_order_acquire) && !relayStillExposure_.load(std::memory_order_acquire) &&
+           !relayMediaWrites_.load(std::memory_order_acquire) && !relayPhotoMode_.load(std::memory_order_acquire) &&
+           !primaryTakeStarting_.load(std::memory_order_acquire);
+}
+
+bool ApertarCoreApp::primaryTakeActiveForRelay() const
+{
+    return camera_.rawTakeActive() || storagepreroll::prerollActive() || relayRecording_.load(std::memory_order_acquire);
+}
+
+void ApertarCoreApp::noteRelayFrame(int64_t timestampUs)
+{
+    const int64_t atMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const uint32_t slot = relayFrameHead_.load(std::memory_order_relaxed) % kRelayFrameRing;
+    relayFrameUs_[slot].store(timestampUs, std::memory_order_relaxed);
+    relayFrameAtMs_[slot].store(atMs, std::memory_order_relaxed);
+    relayFrameHead_.fetch_add(1, std::memory_order_release);   // one writer: the preview publisher
+}
+
+std::vector<skew::Stamp> ApertarCoreApp::primaryFramesForRelay() const
+{
+    std::vector<skew::Stamp> frames;
+    const uint32_t head = relayFrameHead_.load(std::memory_order_acquire);
+    const uint32_t count = std::min<uint32_t>(head, static_cast<uint32_t>(kRelayFrameRing));
+    frames.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t slot = (head - 1 - i) % kRelayFrameRing;
+        frames.push_back({relayFrameUs_[slot].load(std::memory_order_relaxed), relayFrameAtMs_[slot].load(std::memory_order_relaxed)});
+    }
+    return frames;
+}
+
+resync::PrimaryView ApertarCoreApp::relayView() const
+{
+    std::lock_guard<std::mutex> lock(relayViewMutex_);
+    return relayView_;
+}
+
+// The controller's events keep the flags that change without a command (a write finishing, a take ending on its own).
+void ApertarCoreApp::noteRelayEvent(const std::string &eventJson)
+{
+    const bool on = eventJson.find("\"active\":true") != std::string::npos;
+    if (eventJson.find("\"event\":\"recording\"") != std::string::npos)
+        relayRecording_.store(on, std::memory_order_release);
+    else if (eventJson.find("\"event\":\"media_write_state\"") != std::string::npos)
+        relayMediaWrites_.store(eventJson.find("\"media_writes_pending\":true") != std::string::npos, std::memory_order_release);
+    else if (eventJson.find("\"event\":\"still_exposure\"") != std::string::npos)
+        relayStillExposure_.store(eventJson.find("\"still_exposure_active\":true") != std::string::npos, std::memory_order_release);
+}
+
+// After each command: the primary's settingsBody (what the compare reads), the take flags, and, after the commands that can
+// change what a resync sends (a "both" command, record_stop, the tie and switch settings), the preset of the same
+// settings and the ladder definition.
+void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
+{
+    if (secondaryRole())
+        return;
+    const CaptureSettings settings = camera_.settings();
+    relayRecording_.store(camera_.isRecording(), std::memory_order_release);
+    relayTimelapse_.store(camera_.timelapseActive(), std::memory_order_release);
+    relayPhotoMode_.store(settings.photoModeEnabled, std::memory_order_release);
+    relayMediaWrites_.store(camera_.mediaWritesPending(), std::memory_order_release);
+    relayPrimaryLocked_.store(camera_.phaseLockStatus().locked, std::memory_order_release);
+    std::string body = "{" + settingsBody(settings) + "}";
+
+    bool rebuild;
+    {
+        std::lock_guard<std::mutex> lock(relayViewMutex_);
+        rebuild = !relayView_.valid || commandclasses::classOf(afterCommand) == commandclasses::Class::Both ||
+                  afterCommand == "record_stop" || afterCommand == "set_cam1_settings" || afterCommand == "set_dual_sensor_enabled";
+    }
+    resync::Fields preset;
+    std::string ladderJson;
+    if (rebuild) {
+        preset = resync::flattenPreset(buildCurrentPresetPayload("relay", settings));
+        ladderJson = camera_.modeLadderJson();
+    }
+    std::lock_guard<std::mutex> lock(relayViewMutex_);
+    relayView_.valid = true;
+    relayView_.settings = std::move(body);
+    relayView_.sensor = camera_.sensorName();
+    if (rebuild) {
+        relayView_.preset = std::move(preset);
+        const auto text = jsonkeys::stringOf(ladderJson, "resolutions_text");
+        relayView_.ladderKnown = text.has_value();
+        relayView_.ladderResolutions = text.value_or("");
+        relayView_.ladderEnabled = jsonkeys::boolOf(ladderJson, "enabled").value_or(false);
+        relayView_.ladderRampReady = jsonkeys::boolOf(ladderJson, "ramp_ready").value_or(false);
+    }
+}
+
 bool ApertarCoreApp::start()
 {
     if (running_.exchange(true))
         return true;
 
     shutdownRequested_ = false;
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+    // The secondary's role gate (design 3.3): the machine-wide standby steps, the inputs, the controls worker, UI.conf
+    // writes and the audio and gyro of a take are the primary's alone.
+    if (secondaryRole()) {
+        uiConfWritesBlocked().store(true, std::memory_order_relaxed);
+        std::cerr << "ApertarCore role secondary: standby restores off, inputs off, audio off, idle standby off, "
+                     "photo mode off, UI.conf writes off\n";
+    }
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
         const auto result = standbyLowPower("restore");
         if (result.exitCode != 0) {
             std::cerr << "Apertar low-power startup recovery failed: " << result.output << '\n';
@@ -8013,10 +8562,34 @@ bool ApertarCoreApp::start()
             return false;
         }
     }
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
         const auto result = standbyUsbPower("on");
         if (result.exitCode != 0)
             std::cerr << "Apertar standby USB recovery: " << result.output << '\n';
+    }
+
+    // No hardware file at any path the readers try, and no record that one existed: write the template, as the 1.6.0
+    // touch UI did at its first start. A file moved away leaves a record, so it is offered for restore, not replaced.
+    bool wroteDefault = false;
+    {
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::filesystem::path notes = hardware::HardwareConfigStore::defaultNotesDirectory();
+        std::error_code error;
+        bool known = std::filesystem::exists(notes / "hardware-last-written.conf", error);
+        for (const auto &path : hardwareConfigCandidatePaths())
+            known = known || std::filesystem::is_regular_file(path, error);
+        for (const auto &entry : std::filesystem::directory_iterator(notes / "hardware-history", error))
+            known = known || entry.path().filename().string().rfind("adopted-", 0) == 0;
+        if (!known) {
+            const hardware::StoreResult result =
+                store.replace(std::string(hwconf::kAbsentRevision), defaultHardwareConfigTemplate(), "core");
+            wroteDefault = result.written;
+            if (wroteDefault)
+                std::cerr << "ApertarCore controls: wrote the default " << hardwareConfigDisplayPath(store.path()) << "\n";
+            else
+                std::cerr << "ApertarCore controls: could not write the default " << hardwareConfigDisplayPath(store.path())
+                          << ": " << result.error << "\n";
+        }
     }
 
     {
@@ -8024,6 +8597,7 @@ bool ApertarCoreApp::start()
         previewPublisherRunning_ = true;
     }
     previewThread_ = std::thread(&ApertarCoreApp::runPreviewPublisher, this);
+    startCam1Client();   // before the trim and watcher threads (design 3.4)
     if (!mediaTrimWorkerRunning_.load() && !mediaTrimThread_.joinable()) {
         mediaTrimWorkerRunning_.store(true);
         mediaTrimThread_ = std::thread(&ApertarCoreApp::runMediaTrim, this);
@@ -8062,6 +8636,7 @@ bool ApertarCoreApp::start()
     }
 #endif
 
+    CameraController::selectCamera(options_.camera);
     if (!camera_.start(options_.mediaRoot, options_.simulateCamera)) {
         stopMjpegEncoder();
         stopPreviewPublisher();
@@ -8071,7 +8646,12 @@ bool ApertarCoreApp::start()
     }
 
     mediaTrimSetting_.store(camera_.settings().mediaTrimEnabled);
-    const auto stillSettings = readSharedUiSettings();
+    publishRelayView("start");   // the relay's first resync reads this (design 4.4)
+    // The secondary does not read UI.conf here: it forces photo mode, long exposure and bracketing off, so a stale
+    // camera_settings.conf in .config-cam1 cannot leave cam1 in photo mode (design 3.3).
+    SharedUiSettingsSnapshot stillSettings = secondaryRole() ? SharedUiSettingsSnapshot() : readSharedUiSettings();
+    if (secondaryRole())
+        stillSettings.photoBracketingEv = camera_.settings().bracketingEv;   // the EV step is not part of "off"
     if (camera_.settings().photoModeEnabled != stillSettings.photoModeEnabled ||
         camera_.settings().longExposureEnabled != stillSettings.photoLongExposureEnabled ||
         (stillSettings.photoModeEnabled && photoTimelapseSecondsFromValue(stillSettings.photoTimelapse) > 0))
@@ -8083,6 +8663,14 @@ bool ApertarCoreApp::start()
         next.bracketingEnabled = stillSettings.photoBracketingEnabled;
         next.bracketingEv = stillSettings.photoBracketingEv;
         camera_.applyCapturePreset(next);
+    }
+
+    // A camera that already has two different timecodes (the UI.conf mode and camera_settings.conf) keeps them
+    // apart: fileTimecodeSeparate is written once, so the touch UI does not copy one over the other.
+    if (!secondaryRole() && !stillSettings.fileTimecodeSeparate &&
+        stillSettings.timecodeMode != (camera_.settings().timecodeMode == TimecodeMode::RecRun ? "Rec Run" : "Free Run")) {
+        (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
+        std::cerr << "ApertarCore timecode: UI and file timecode differ, kept apart (fileTimecodeSeparate=true)\n";
     }
 
     if (!controlServer_.start(options_.socketPath, [this](const std::string &line) {
@@ -8109,7 +8697,7 @@ bool ApertarCoreApp::start()
         return false;
     }
 
-    if (!triggerOutput_.start() && !triggerOutput_.lastError().empty()) {
+    if (!secondaryRole() && !triggerOutput_.start() && !triggerOutput_.lastError().empty()) {
         std::cerr << "ApertarCore trigger output disabled: "
                   << triggerOutput_.lastError() << "\n";
     }
@@ -8118,18 +8706,20 @@ bool ApertarCoreApp::start()
     gpioInput_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });          // T42 Listen
     neoRotary4Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
     pcf8574Input_.setSeenCallback([this](const std::string &key) { noteInputSeen(key); });
-    pcf8574Input_.start();
-    neoRotary4Input_.start();
-    gpioInput_.start();
-    if (!options_.simulateCamera)
-        standbyPowerButton_.start();
-    groveAnalogInput_.start();
+    if (!secondaryRole()) {   // the secondary has no inputs, no power button and no tally (design 3.3)
+        pcf8574Input_.start();
+        neoRotary4Input_.start();
+        gpioInput_.start();
+        if (!options_.simulateCamera)
+            standbyPowerButton_.start();
+        groveAnalogInput_.start();
+    }
 
-    if (!recordingIndicatorOutput_.start() && !recordingIndicatorOutput_.lastError().empty()) {
+    if (!secondaryRole() && !recordingIndicatorOutput_.start() && !recordingIndicatorOutput_.lastError().empty()) {
         std::cerr << "ApertarCore recording indicator LED disabled: "
                   << recordingIndicatorOutput_.lastError() << "\n";
     }
-    recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive());
+    recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive());
     recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
     syncRecordingTracking(camera_.isRecording());
 
@@ -8141,7 +8731,7 @@ bool ApertarCoreApp::start()
         const size_t errors = controlsErrorCount(issues);
         controlsErrors_ = errors;
         controlsWarnings_ = issues.size() - errors;
-        const bool adopted = store.adopt();
+        const bool adopted = !wroteDefault && store.adopt();   // Core's own template is not "as Core first found it"
         refreshBufferRequest();
         std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
                   << errors << " errors, " << issues.size() - errors << " warnings"
@@ -8153,8 +8743,10 @@ bool ApertarCoreApp::start()
             std::cerr << "ApertarCore controls: " << (issues[i].error ? "error: " : "warning: ") << issues[i].message << "\n";
     }
 
-    controlsWorkerRunning_ = true;
-    controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+    if (!secondaryRole()) {   // the controls worker restarts the drivers a controls change touches: none on the secondary
+        controlsWorkerRunning_ = true;
+        controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+    }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"ready\"}");
     return true;
@@ -8169,6 +8761,7 @@ void ApertarCoreApp::stop()
     }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"stopping\"}");
+    cam1Client_.stop();   // ends a busy wait on the command thread, too
     controlsWorkerRunning_ = false;            // T39: before the drivers, so it cannot start one again
     wakeControlsWorker();
     if (controlsThread_.joinable())
@@ -8192,12 +8785,12 @@ void ApertarCoreApp::stop()
     syncRecordingTracking(false);
     joinMediaSpeedTest();
     waitCv_.notify_all();
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
         const auto result = standbyLowPower("restore");
         if (result.exitCode != 0)
             std::cerr << "Apertar low-power shutdown recovery: " << result.output << '\n';
     }
-    if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
+    if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-usb/ports")) {
         const auto result = standbyUsbPower("on");
         if (result.exitCode != 0)
             std::cerr << "Apertar standby USB shutdown recovery: " << result.output << '\n';
@@ -8294,13 +8887,17 @@ void ApertarCoreApp::wait()
         lock.unlock();
         {
             std::lock_guard commandLock(commandMutex_);
-            if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
+            if (camera_.checkRecordingFailure()) endFailedTake();
+        }
+        if (secondaryRole()) {   // no idle-standby timer on the secondary (design 3.3); the loop and the check above stay
+            lock.lock();
+            continue;
         }
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const int timeout = readSharedUiSettings().standbyTimeoutSeconds;
         if (timeout != previousTimeout || camera_.isRecording() ||
-            camera_.timelapseActive() || soundRecordingActive()) {
+            camera_.timelapseActive() || soundRecordingActive() || cam1RecordingActive()) {
             lastUserActivityMs_.store(now);
             previousTimeout = timeout;
         }
@@ -8356,6 +8953,28 @@ std::string ApertarCoreApp::handleWebCommand(const std::string &payload)
 
 WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &request)
 {
+    // Every POST on the secondary's port is refused before any route logic (design 3.3, P12): GETs stay.
+    if (secondaryRole() && request.method == "POST") {
+        WebServer::Response response;
+        response.status = 403;
+        response.contentType = "text/plain; charset=utf-8";
+        response.body = commandclasses::kSecondaryRefusal;
+        return response;
+    }
+    // Playback and downloads are held (409) while a take, a write, the speed test, standby or missing media needs the card.
+    const auto holdResponse = [](const std::string &hold) {
+        WebServer::Response response;
+        response.status = 409;
+        response.contentType = "application/json; charset=utf-8";
+        const char *sentence = hold == "writing" ? "Wait for the current capture to finish writing to media."
+            : hold == "media_test" ? "Wait for the media speed test to finish first."
+            : hold == "standby" ? "Wake the camera first."
+            : hold == "media" ? "Mount media first."
+            : "Stop recording or the timelapse before playing or downloading media.";
+        response.body = errorReply(-1, sentence);
+        return response;
+    };
+
     if (request.method == "OPTIONS") {
         WebServer::Response response;
         response.status = 204;
@@ -8421,7 +9040,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.contentType = "application/json; charset=utf-8";
         const auto buffer = camera_.frameBufferStatus();
         response.body = "{" + bufferMembers(buffer.used, buffer.capacity, buffer.mode) +
-            ",\"recording\":" + (buffer.recording && !bufferbudget::safetyStopState().active.load(std::memory_order_acquire) ? "true" : "false") + "}";
+            ",\"recording\":" + (buffer.recording && !bufferbudget::safetyStopState().active.load(std::memory_order_acquire) ? "true" : "false") +
+            ",\"audio_input_level\":" + std::to_string(webAudioInputLevel()) + "}";
         return response;
     }
 
@@ -8455,13 +9075,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         const std::string hold = playbackHoldReason();
         playback::ClipFacts facts;
         if (!hold.empty()) {
-            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok) {
-                response.status = 409;
-                response.body = errorReply(-1, "Playback held: " + hold + ".");
-                return response;
-            }
+            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok)
+                return holdResponse(hold);
         } else {
-            facts = clipFactsCache().get(*itemPath);
+            facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
             if (!facts.ok) {
                 response.status = 404;
                 response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
@@ -8494,19 +9111,16 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A frame needs kind=folder, id, n and a width of 320, 480, 640, 960, 1280 or 1920.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const std::filesystem::path mediaRoot(options_.mediaRoot);
         const auto itemPath = resolveMediaLibraryPath(mediaRoot, *requestedId);
         if (!itemPath || !std::filesystem::is_directory(*itemPath)) {
-            response.status = 404;
-            response.body = "{\"ok\":false,\"error\":\"This clip was removed.\",\"gone\":true}";
+            response.status = 410;
+            response.body = errorReply(-1, "This clip was removed.");
             return response;
         }
-        const playback::ClipFacts facts = clipFactsCache().get(*itemPath);
+        const playback::ClipFacts facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
         if (!facts.ok) {
             response.status = 404;
             response.body = errorReply(-1, facts.error.empty() ? "Clip not found." : facts.error);
@@ -8521,15 +9135,12 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             *requestedId, *itemPath, facts.frames, number, static_cast<uint32_t>(width), facts.token,
             [] { return playbackYield().active(playbackNowMs()); });
         if (frame.status != 200) {
+            // The read stopped because a take, a media test or an eject began: name the hold.
+            if (frame.status == 409)
+                return holdResponse(playbackHoldReason());
             response.status = frame.status;
-            if (frame.status == 409) {
-                // The read stopped because a take, a media test or an eject began: name the hold.
-                std::string why = playbackHoldReason();
-                if (why.empty()) why = "recording";
-                response.body = "{\"ok\":false,\"error\":\"Playback held: " + why + ".\",\"hold\":\"" + why + "\"}";
-            }
-            else if (frame.busy)
-                response.body = "{\"ok\":false,\"busy\":true}";
+            if (frame.busy)
+                response.body = errorReply(-1, "Playback is busy. Try again in a moment.");
             else
                 response.body = errorReply(-1, frame.error);
             return response;
@@ -8564,11 +9175,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A sound request needs kind=folder, id and the name of a .wav file in the clip.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const auto itemPath = resolveMediaLibraryPath(std::filesystem::path(options_.mediaRoot), *requestedId);
         std::error_code ec;
         const std::filesystem::path file = itemPath ? *itemPath / *requestedName : std::filesystem::path();
@@ -8617,6 +9225,32 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
+    if (request.method == "GET" && request.path == "/api/config/history") {
+        // The saved versions of the hardware file, newest first; ?name= returns one version's text.
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        if (const auto name = queryParameterValue(request.query, "name"); name && !name->empty()) {
+            const auto text = store.historyText(*name);
+            if (!text) {
+                response.status = 404;
+                response.body = errorReply(-1, "No saved version called " + *name + ".");
+                return response;
+            }
+            response.body = okReply(-1, "\"name\":\"" + escapeJson(*name) + "\",\"text\":\"" + escapeJson(*text) + "\"");
+            return response;
+        }
+        std::ostringstream body;
+        body << "\"revision\":\"" << escapeJson(store.currentRevision()) << "\",\"history\":[";
+        const auto entries = store.history();
+        for (size_t i = 0; i < entries.size(); ++i)
+            body << (i ? "," : "") << "{\"name\":\"" << escapeJson(entries[i].name) << "\",\"saved_at\":\"" << escapeJson(entries[i].savedAt)
+                 << "\",\"by\":\"" << escapeJson(entries[i].by) << "\",\"revision\":\"" << escapeJson(entries[i].revision) << "\"}";
+        body << "]";
+        response.body = okReply(-1, body.str());
+        return response;
+    }
+
     if (request.method == "POST" && request.path == "/api/config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
@@ -8627,16 +9261,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        // The page names the revision it loaded. A browser without one is a tab from before the update; a script
-        // (no Origin) keeps last-writer-wins.
+        // The page names the revision it loaded, to be refused when the file is newer. Without it the text is
+        // saved over the current file, as in 1.6.0.
         hardware::HardwareConfigStore &store = hardware::configStore();
         const auto revisionHeader = request.headers.find("x-apertar-revision");
-        if (revisionHeader == request.headers.end() && request.headers.count("origin")) {
-            response.status = 409;
-            response.body = errorReplyBody(-1, "Apertar was updated: reload this page. Your text stays in the box.",
-                                           "\"code\":\"old_page\"");
-            return response;
-        }
         const std::string base = revisionHeader != request.headers.end() ? revisionHeader->second : store.currentRevision();
 
         hardware::StoreFlags flags;
@@ -8646,15 +9274,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             const bool changed = result.needsReview || result.code == "stale" || result.code == "conflict" ||
                 result.code == "being_written" || result.code == "locked";
             response.status = changed ? 409 : 400;
-            const std::string code = result.needsReview ? "merge_review" : result.code;
             const std::string message = result.needsReview
                 ? "The file changed since you loaded it. Reload; your text stays in the box."
                 : result.error;
-            response.body = errorReplyBody(-1, message,
-                "\"code\":\"" + escapeJson(code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
+            response.body = errorReply(-1, message);
             return response;
         }
         if (result.written) {
@@ -8680,13 +9303,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         const auto requestedKind = queryParameterValue(request.query, "kind");
         const auto requestedId = queryParameterValue(request.query, "id");
@@ -8809,13 +9427,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download-selected") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         std::string errorMessage;
         const std::vector<MediaSelection> selections = mediaSelectionsFromQuery(request.query, &errorMessage);
@@ -9012,7 +9625,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             WebServer::Response response;
             response.status = 400;
             response.contentType = "application/json; charset=utf-8";
@@ -9095,7 +9708,7 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             WebServer::Response response;
             response.status = 400;
             response.contentType = "application/json; charset=utf-8";
@@ -9295,6 +9908,12 @@ std::string ApertarCoreApp::buildMediaLibraryJson() const
     return out.str();
 }
 
+int ApertarCoreApp::webAudioInputLevel() const
+{
+    return soundRecordingActive_.load(std::memory_order_relaxed) ? soundInputLevel_.load(std::memory_order_relaxed)
+                                                                 : camera_.audioInputLevel();
+}
+
 std::string ApertarCoreApp::buildWebStateJson() const
 {
     const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
@@ -9303,7 +9922,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
     const CameraState cameraState = camera_.state();
     const CaptureSettings settings = camera_.settings();
     const bool soundRecording = soundRecordingActive();
-    const bool recording = camera_.isRecording() || soundRecording;
+    const bool recording = camera_.isRecording() || soundRecording || cam1OnlyTakeActive();
     const bool timelapseActive = camera_.timelapseActive();
     const double timelapseIntervalSeconds = camera_.timelapseIntervalSeconds();
     const std::string sensorName = camera_.sensorName();
@@ -9333,7 +9952,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         resolveAudioDeviceSelection(uiSettings.audioOutputDevice, audioDevices.outputOptions, true);
     const NetworkSnapshot network = readNetworkSnapshot(options_.webPort);
     const DeviceSnapshot device = readDeviceSnapshot();
-    const PowerSupplySnapshot power = readPowerSupplySnapshot();
+    const PowerSupplySnapshot power = secondaryRole() ? PowerSupplySnapshot() : readPowerSupplySnapshot();   // no INA219 read on the secondary
     const std::optional<double> cpuTempC = readCpuTemperatureC();
     const std::string currentTimeZone = currentTimeZoneId();
     const std::vector<std::string> &timeZones = availableTimeZones();
@@ -9389,6 +10008,67 @@ std::string ApertarCoreApp::buildWebStateJson() const
         cpuSampleValid_ = true;
     }
 
+    // The card's write rate and temperature, when the media is NVMe (a CFexpress card in the hat, or an M.2 SSD). The
+    // rate comes from the block layer's counter (a sysfs read). The temperature read is an NVMe admin command (the
+    // drive's SMART log), so it runs at most every 10 s.
+    std::optional<double> mediaWriteMBps;
+    std::optional<double> mediaTempC;
+    std::optional<double> mediaTempMaxC;
+    std::optional<double> mediaTempCritC;
+    std::string mediaCardLabel;
+    if (const std::string controller = mediaMounted ? nvmeControllerOfDevice(mediaSnap.device) : std::string();
+        !controller.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto sectors = readBlockSectorsWritten(mediaSnap.device);
+        std::lock_guard<std::mutex> lock(telemetryMutex_);
+        if (mediaStatDevice_ != mediaSnap.device) {
+            mediaStatDevice_ = mediaSnap.device;
+            mediaStatValid_ = false;
+            mediaWriteMBps_.reset();
+            mediaTempAt_ = {};
+        }
+        if (sectors) {
+            const double seconds = std::chrono::duration<double>(now - lastMediaStatAt_).count();
+            if (!mediaStatValid_ || *sectors < lastMediaSectorsWritten_) {
+                lastMediaSectorsWritten_ = *sectors;
+                lastMediaStatAt_ = now;
+                mediaStatValid_ = true;
+            } else if (seconds >= 0.5) {
+                mediaWriteMBps_ = static_cast<double>(*sectors - lastMediaSectorsWritten_) * 512.0 / 1e6 / seconds;
+                lastMediaSectorsWritten_ = *sectors;
+                lastMediaStatAt_ = now;
+            }
+        }
+        if (mediaTempAt_ == std::chrono::steady_clock::time_point{} || now - mediaTempAt_ >= std::chrono::seconds(10)) {
+            mediaTempAt_ = now;
+            const std::filesystem::path hwmon = nvmeHwmonDirectory(controller);
+            mediaTempC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_input");
+            mediaTempMaxC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_max");
+            mediaTempCritC_ = hwmon.empty() ? std::nullopt : readMilliDegreesC(hwmon / "temp1_crit");
+            mediaCardLabel_ = loadCfeHatConfig().enabled ? "CFE" : "NVMe";
+        }
+        mediaWriteMBps = mediaWriteMBps_;
+        mediaTempC = mediaTempC_;
+        mediaTempMaxC = mediaTempMaxC_;
+        mediaTempCritC = mediaTempCritC_;
+        mediaCardLabel = mediaCardLabel_;
+    }
+    // The write bar is the rate against the last speed test on this media, when there is one.
+    std::optional<double> mediaWritePercent;
+    if (mediaWriteMBps && mediaSpeedLastWriteSpeedMBps > 0.0)
+        mediaWritePercent = std::clamp(*mediaWriteMBps / mediaSpeedLastWriteSpeedMBps * 100.0, 0.0, 100.0);
+    std::ostringstream mediaWriteLabel;
+    if (mediaSpeedLastWriteSpeedMBps > 0.0)
+        mediaWriteLabel << "Speed test " << std::llround(mediaSpeedLastWriteSpeedMBps) << " MB/s";
+    else
+        mediaWriteLabel << "To " << options_.mediaRoot;
+    std::optional<double> mediaTempPercent;
+    if (mediaTempC && mediaTempCritC && *mediaTempCritC > 0.0)
+        mediaTempPercent = std::clamp(*mediaTempC / *mediaTempCritC * 100.0, 0.0, 100.0);
+    const char *mediaTempLabel = !mediaTempC ? "Unavailable"
+        : (!mediaTempMaxC || *mediaTempC < *mediaTempMaxC) ? "Normal"
+        : (!mediaTempCritC || *mediaTempC < *mediaTempCritC) ? "Warm" : "Hot";
+
     std::error_code spaceEc;
     const std::filesystem::path existingMediaPath = mediaMounted
         ? nearestExistingPath(options_.mediaRoot)
@@ -9407,7 +10087,17 @@ std::string ApertarCoreApp::buildWebStateJson() const
             100.0);
     }
 
-    const uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    // Time left is one value for the rig (design 6.4): both Cores fill one card, so free space over the rates of the
+    // cameras in record_cameras. With no cam1 configured this is today's one-camera figure.
+    if (!secondaryRole() && cam1Client_.configured()) {
+        const std::string cameras = recordCamerasNow(cam1Client_, uiSettings, camera_.isRecording());
+        const uint64_t cam1Rate = cam1EstimatedBytesPerSecond(cam1Client_.snapshot().settings, settings);
+        if (cameras == "both")
+            estimatedBytesPerSecond += cam1Rate;
+        else if (cameras == "cam1" && cam1Rate > 0)
+            estimatedBytesPerSecond = cam1Rate;
+    }
     std::optional<double> recordTimeLeftMinutes;
     if (estimatedBytesPerSecond > 0 && mediaFreeBytes > 0) {
         // Truncated to the tenth, so the JSON's one decimal never rounds up: the
@@ -9425,9 +10115,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
             recordStillsLeft = std::floor(static_cast<double>(mediaFreeBytes) / estimatedStillFrameBytes);
     }
 
+    // The whole card's recording time in the current mode; the bar is time left out of it.
+    std::optional<double> cardRecordMinutes;
+    if (estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
+        cardRecordMinutes = static_cast<double>(mediaTotalBytes) / static_cast<double>(estimatedBytesPerSecond) / 60.0;
     std::optional<double> timeLeftPercent;
-    if (recordTimeLeftMinutes.has_value())
-        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / 120.0) * 100.0, 0.0, 100.0);
+    if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
+        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / cardRecordMinutes.value()) * 100.0, 0.0, 100.0);
 
     std::optional<double> batteryPercent;
     if (power.capacityPercent.has_value()) {
@@ -9455,6 +10149,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
         << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
         << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
+        << takeSlotMembers(camera_.takeSnapshot())
         << ",\"controls_errors\":" << controlsErrors_.load()
         << ",\"controls_warnings\":" << controlsWarnings_.load()
         << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
@@ -9462,7 +10157,9 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_phase_lock_dur_us\":" << phaseLockStatus.durationUs
         << ",\"fps_phase_lock_pushes\":" << phaseLockStatus.pushes
         << ",\"fps_phase_lock_saturated\":" << (phaseLockStatus.saturated ? "true" : "false")
+        << ",\"fps_phase_lock_locked\":" << (phaseLockStatus.locked ? "true" : "false")
         << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
+        << ",\"audio_input_level\":" << webAudioInputLevel()
         << ",\"timelapse_active\":" << (timelapseActive ? "true" : "false")
         << ",\"timelapse_interval_seconds\":" << timelapseIntervalSeconds
         << ",\"timelapse_shot_count\":" << camera_.timelapseShotCount()
@@ -9534,6 +10231,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_speed_ramp_after\":\"" << (settings.fpsSpeedRampReturn ? "return" : "stay") << "\""
         << ",\"clip_name_template\":\"" << escapeJson(settings.clipNameTemplate) << "\""
         << ",\"clip_name_example\":\"" << escapeJson(settings.clipNameExample) << "\""
+        << ",\"camera_id\":\"" << escapeJson(settings.cameraId) << "\""
+        << ",\"camera_port\":\"" << escapeJson(settings.cameraPort) << "\""
         << ",\"hdr_threshold_high\":" << settings.hdrThresholdHigh
         << ",\"hdr_threshold_low\":" << settings.hdrThresholdLow
         << ",\"hdr_blend\":" << settings.hdrBlend
@@ -9580,6 +10279,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"power_sensor_available\":"
         << ((power.voltageV.has_value() || power.powerW.has_value() || power.capacityPercent.has_value() || power.currentA.has_value()) ? "true" : "false")
         << ",\"media_free_bytes\":" << mediaFreeBytes
+        << ",\"media_card_label\":\"" << escapeJson(mediaCardLabel) << "\""
+        << ",\"media_write_mb_s\":" << jsonNumberOrNull(mediaWriteMBps, 1)
+        << ",\"media_write_percent\":" << jsonNumberOrNull(mediaWritePercent, 1)
+        << ",\"media_write_label\":\"" << escapeJson(mediaWriteLabel.str()) << "\""
+        << ",\"media_temp_c\":" << jsonNumberOrNull(mediaTempC, 1)
+        << ",\"media_temp_percent\":" << jsonNumberOrNull(mediaTempPercent, 1)
+        << ",\"media_temp_label\":\"" << mediaTempLabel << "\""
         << mediaTrimStateJson()
         << ",\"media_trim_enabled\":" << (mediaTrimSetting_.load() ? "true" : "false")
         << ",\"media_trim_env_off\":" << (mediaTrimEnvOff() ? "true" : "false")
@@ -9592,7 +10298,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"record_time_left_minutes\":" << jsonNumberOrNull(recordTimeLeftMinutes, 1)
         << ",\"record_stills_left\":" << jsonNumberOrNull(recordStillsLeft, 0)
         << ",\"time_left_percent\":" << jsonNumberOrNull(timeLeftPercent, 1)
-        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings)) << "\""
+        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings, cardRecordMinutes)) << "\""
         << ",\"time_zone\":\"" << escapeJson(currentTimeZone) << "\""
         << ",\"time_zone_options\":" << jsonStringArray(timeZones)
         << ",\"local_time_input\":\"" << escapeJson(localDateTimeValue) << "\""
@@ -9633,6 +10339,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << "}"
         << ",\"ui\":{"
         << "\"timecode_mode\":\"" << escapeJson(uiSettings.timecodeMode) << "\""
+        << ",\"file_timecode_separate\":" << (uiSettings.fileTimecodeSeparate ? "true" : "false")
         << ",\"focus_peaking_enabled\":" << (uiSettings.focusPeakingEnabled ? "true" : "false")
         << ",\"focus_peaking_threshold\":" << jsonNumber(uiSettings.focusPeakingThreshold, 2)
         << ",\"focus_peaking_color\":\"" << escapeJson(uiSettings.focusPeakingColor) << "\""
@@ -9654,6 +10361,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"smpte_enabled\":" << (uiSettings.smpteEnabled ? "true" : "false")
         << ",\"external_monitor_enabled\":" << (uiSettings.externalMonitorEnabled ? "true" : "false")
         << ",\"external_monitor_mode\":\"" << escapeJson(uiSettings.externalMonitorMode) << "\""
+        << "," << dualSensorUiStateJson(uiSettings)
         << ",\"external_monitor_info_overlay\":\"" << escapeJson(uiSettings.externalMonitorInfoOverlay) << "\""
         << ",\"external_monitor_orientation\":\"" << escapeJson(uiSettings.externalMonitorOrientation) << "\""
         << ",\"ui_orientation\":\"" << escapeJson(uiSettings.uiOrientation) << "\""
@@ -9693,13 +10401,14 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"favorites_order\":" << jsonStringArray(uiSettings.favoritesOrder)
         << "," << valueStepsJson(uiSettings, camera_.sensorName())
         << "}"
+        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui, as in get_state (design 4.5)
         << ",\"audio\":{"
         << "\"input_devices\":" << jsonAudioDeviceOptions(audioDevices.inputOptions)
         << ",\"output_devices\":" << jsonAudioDeviceOptions(audioDevices.outputOptions)
         << ",\"has_input_devices\":" << (!audioDevices.inputOptions.empty() ? "true" : "false")
         << ",\"has_output_devices\":" << (!audioDevices.outputOptions.empty() ? "true" : "false")
         << "}"
-        << "," << imuStatusBody(true)
+        << "," << imuStatusBody(!secondaryRole())   // no live IMU sample on the secondary
         << ",\"device\":{"
         << "\"pi_model\":\"" << escapeJson(device.piModel) << "\""
         << ",\"serial_number\":\"" << escapeJson(device.serialNumber) << "\""
@@ -10058,6 +10767,7 @@ bool ApertarCoreApp::startSoundRecording(AudioRecordingOptions audioOptions, std
             audioOptions,
             [this](int level) {
                 const int clamped = std::clamp(level, 0, 100);
+                soundInputLevel_.store(clamped, std::memory_order_relaxed);
                 publishEvent("{\"event\":\"audio_level\",\"input_level\":" + std::to_string(clamped) + "}");
             },
             &audioError)) {
@@ -10264,6 +10974,16 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
         return;
     }
 
+    if (target == "preview_wipe" || target == "preview_opacity") {
+        // Wipe and stack opacity of the single-camera views (design v2.5 A5), 0..100.
+        const int percent = static_cast<int>(std::llround(analogMappedValue(event, 0.0, 100.0, 1.0)));
+        const bool wipe = target == "preview_wipe";
+        if ((wipe ? uiSettings.previewWipe : uiSettings.previewOpacity) == percent)
+            return;
+        dispatch("set_preview_source", { { wipe ? "wipe" : "opacity", std::to_string(percent) } });
+        return;
+    }
+
     if (target == "camera_controls_opacity") {
         const double opacity = analogMappedValue(event, 0.15, 1.0, 0.01);
         if (std::abs(uiSettings.cameraControlsOpacity - opacity) < 0.005)
@@ -10297,25 +11017,26 @@ bool ApertarCoreApp::handlePowerButtonPress(bool doublePress)
     return true;
 }
 
-void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
+// True when the press only woke the camera from Standby: the input then counts nothing more from it.
+bool ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
 {
     if (!running_.load(std::memory_order_relaxed) || action.empty())
-        return;
+        return false;
 
     const auto actions = hardware::parseButtonActions(action, [](const std::string &token) { return token; });
     if (!actions.error.empty()) {
         std::cerr << "Hardware input mapping ignored: " << actions.error << '\n';
-        return;
+        return false;
     }
     // Keep one button's sequence together across GPIO, I2C and analog inputs.
     std::lock_guard<std::mutex> sequenceLock(hardwareInputSequenceMutex_);
     if (camera_.state() == CameraState::Standby) {
         if (!buttonPress)
-            return;
+            return false;
         ControlCommand wake;
         wake.name = "wake";
         dispatchHardwareInputCommand(std::move(wake));
-        return;
+        return true;
     }
     lastUserActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -10325,6 +11046,7 @@ void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool b
         handleSingleHardwareInputAction(singleAction);
         if (camera_.state() == CameraState::Standby) break;
     }
+    return false;
 }
 
 void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
@@ -10353,6 +11075,41 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
 
     const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
     const CaptureSettings cameraSettings = camera_.settings();
+
+    // Dual view (design v2.5 A5): everything goes through set_preview_source, so the HDMI and the WebUI follow.
+    if (action == "preview_wipe_up" || action == "preview_wipe_down") {
+        const int wipe = std::clamp(uiSettings.previewWipe + (action == "preview_wipe_up" ? 5 : -5), 0, 100);
+        if (wipe != uiSettings.previewWipe)
+            dispatch("set_preview_source", { { "wipe", std::to_string(wipe) } });
+        return;
+    }
+    if (action == "preview_opacity_up" || action == "preview_opacity_down") {
+        const int opacity = std::clamp(uiSettings.previewOpacity + (action == "preview_opacity_up" ? 5 : -5), 0, 100);
+        if (opacity != uiSettings.previewOpacity)
+            dispatch("set_preview_source", { { "opacity", std::to_string(opacity) } });
+        return;
+    }
+    if (action == "preview_stack") {
+        dispatch("set_preview_source", { { "stack", uiSettings.previewStack ? "false" : "true" } });
+        return;
+    }
+    if (action == "preview_wipe_direction") {
+        dispatch("set_preview_source", { { "wipe_direction", uiSettings.previewWipeDirection == "Vertical" ? "horizontal" : "vertical" } });
+        return;
+    }
+    if (action == "preview_view") {
+        const auto &labels = apertar::dualsettings::kPreviewSources;
+        size_t next = 0;
+        for (size_t i = 0; i < labels.size(); ++i)
+            if (uiSettings.previewSource == labels[i])
+                next = (i + 1) % labels.size();
+        dispatch("set_preview_source", { { "value", labels[next] } });
+        return;
+    }
+    if (action == "preview_swap") {
+        dispatch("set_preview_source", { { "swap", "true" } });
+        return;
+    }
 
     if (action == "ev_up" || action == "ev_down") {
         const double ev = std::clamp(cameraSettings.exposureCompensation +
@@ -10450,7 +11207,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "clear_hdr") {
-        // IMX585, raw formats: Clear HDR on or off. On asks for 16-bit, as the touch UI's resolution button does.
+        // IMX585, raw formats: Clear HDR on or off. On asks for 16-bit; the touch UI's resolution button stays at 12-bit.
         if (lowerAscii(camera_.sensorName()).find("imx585") == std::string::npos || cameraSettings.photoModeEnabled ||
             (cameraSettings.recordingFormat != RecordingFormat::Cdng && cameraSettings.recordingFormat != RecordingFormat::Mlv)) {
             std::cerr << "Hardware input action ignored: clear_hdr needs the IMX585 recording CinemaDNG or MLV.\n";
@@ -10582,7 +11339,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
                     { "count", std::to_string(photoBurstCountFromValue(uiSettings.photoBurst)) },
                 });
             }
-        } else if (camera_.isRecording() || soundRecordingActive()) {
+        } else if (camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive()) {
             dispatch("record_stop");
         } else {
             dispatch("record_start");
@@ -10591,7 +11348,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "record_toggle") {
-        if (camera_.isRecording() || soundRecordingActive())
+        if (camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive())
             dispatch("record_stop");
         else
             dispatch("record_start");
@@ -10619,7 +11376,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "eject") {
-        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive()) {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || cam1RecordingActive()) {
             std::cerr << "Hardware input eject ignored while recording or timelapse is active.\n";
             return;
         }
@@ -10824,8 +11581,8 @@ namespace {
 std::string mediaEventJson(const MediaSnapshot &snapshot)
 {
     std::ostringstream out;
-    out << "{\"event\":\"media\",\"state\":\"" << snapshot.stateName() << "\""
-        << ",\"mounted\":" << (snapshot.mounted() ? "true" : "false")
+    out << "{\"event\":\"media\",\"media_state\":\"" << snapshot.stateName() << "\""
+        << ",\"media_alive\":" << (snapshot.mounted() ? "true" : "false")
         << ",\"device\":\"" << escapeJson(snapshot.device) << "\""
         << ",\"fstype\":\"" << escapeJson(snapshot.fstype) << "\""
         << ",\"free_bytes\":" << snapshot.freeBytes
@@ -10892,6 +11649,17 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        // The clip-name example (clip_name_example) is computed from this listing, here on the watcher's own
+        // thread, so a hung medium never blocks the camera lock. Not during a take; nothing on a dead mount.
+        if (!camera_.isRecording()) {
+            std::set<std::string> names;
+            if (current.state == MediaSnapshot::State::Mounted || current.state == MediaSnapshot::State::None) {
+                std::error_code ec;
+                for (std::filesystem::directory_iterator it(options_.mediaRoot, ec), end; !ec && it != end; it.increment(ec))
+                    names.insert(it->path().filename().string());
+            }
+            camera_.setClipFolderNames(std::move(names));
+        }
         // A delete made outside Core (the touch UI removes clips itself) frees space without a trim: when the
         // mounted medium gains 1 GiB or more between two polls while nothing records, ask for one. Core's own
         // deletes already request theirs; repeated requests coalesce (kb working/dng-chain, R4).
@@ -10920,7 +11688,7 @@ void ApertarCoreApp::runMediaWatcher()
                 if (camera_.isRecording() && camera_.flagMediaFault(why, true)) {
                     std::lock_guard<std::mutex> commandLock(commandMutex_);
                     if (camera_.checkRecordingFailure())
-                        syncRecordingTracking(false);
+                        endFailedTake();
                 }
             }
             // Only now the profile and the root helper: a sudo round-trip must not
@@ -11005,7 +11773,21 @@ void ApertarCoreApp::runBufferEvents()
     std::string sentPrerollLast = storagepreroll::prerollLast();
     double sentPrerollFps = storagepreroll::prerollFps();
     uint64_t sentDropped = camera_.recordingDroppedFrames();
+    std::string sentMerge = clipMergeStateJson();
+    auto sentMergeAt = std::chrono::steady_clock::now();
     while (bufferEventsRunning_.load(std::memory_order_acquire)) {
+        // {"event":"clip_merge",...}: the merge progress for the touch UI, at most once a second, and only when it
+        // changed (silent during a take: the merge is paused and nothing moves).
+        {
+            std::string merge = clipMergeStateJson();
+            const auto now = std::chrono::steady_clock::now();
+            if (merge != sentMerge && now - sentMergeAt >= std::chrono::milliseconds(900)) {
+                publishEvent("{\"event\":\"clip_merge\"" + merge
+                             + ",\"clip_merge_enabled\":" + (bufferbudget::clipMergeRequest().load(std::memory_order_acquire) ? "true" : "false") + "}");
+                sentMerge = std::move(merge);
+                sentMergeAt = now;
+            }
+        }
         const auto buffer = camera_.frameBufferStatus();
         // The request, the plan note, the safety stop flag or its threshold changed (a button, a save, a take's plan,
         // the safety stop, the drain): one event, also when idle.
@@ -11113,13 +11895,15 @@ void ApertarCoreApp::runBufferSafetyStop()
 // ---- Storage pre-roll ---------------------------------------------------------------------------------------------
 // CineMate's storage warm-up: a short raw take at the mode's maximum fps through the real write path, deleted at
 // once (see CameraController::startStoragePreroll for what it keeps out of). Triggers: the storage_preroll command
-// (always), and with [media] preroll=on (default; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
+// (always), and with [media] preroll=on (default off; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
 // inserted and a format. The automatic ones wait 3 s, and for the mount's trim, so the order is trim, then pre-roll.
 // One thread, a cv, coalesced requests; never on the HTTP or watcher thread.
 
 // The guard of storagepreroll::decideGuard, filled from the live state. Takes no lock the command path holds.
 storagepreroll::GuardDecision ApertarCoreApp::storagePrerollGuard(storagepreroll::Trigger trigger) const
 {
+    if (cam1Client_.unknown())   // design 3.4: skip until cam1 answers, or 2 s of failed connects
+        return storagepreroll::GuardDecision{false, "CAM1 not known yet"};
     storagepreroll::GuardInputs in;
     const CaptureSettings settings = camera_.settings();
     const CameraState state = camera_.state();
@@ -11255,7 +12039,7 @@ void ApertarCoreApp::runStoragePrerollOnce(storagepreroll::Trigger trigger, unsi
         if (!storagePrerollRunning_.load())
             return;
         if (camera_.checkRecordingFailure())
-            syncRecordingTracking(false);
+            endFailedTake();
         const storagepreroll::GuardDecision decision = storagePrerollGuard(trigger);
         if (!decision.run) {
             skip(decision.reason);
@@ -11473,6 +12257,8 @@ bool ApertarCoreApp::mediaTrimMayRun() const
     if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.mediaWritesPending() ||
         mediaDeleteActive_.load() || storagepreroll::prerollActive() || camera_.state() == CameraState::Standby)
         return false;
+    if (cam1HoldsMedium())   // cam1 unknown, recording or writing: both Cores write one card
+        return false;
     if (trimNowMs() < mediaTrimBlockUntilMs_.load())
         return false;
     std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
@@ -11678,6 +12464,46 @@ clipmerge::Listing listClip(const std::filesystem::path &clip, std::error_code &
     }
     return listing;
 }
+
+// A split clip's frames: in its root (merged) and in its part folders (left). Reads the root and the first and last
+// part: parts merge in order, so the ones between are full (frames_per_folder from .parts; all of them are read when
+// the marker gives no number).
+struct SplitClipCount { uint64_t inRoot = 0; uint64_t inParts = 0; };
+SplitClipCount countSplitClip(const std::filesystem::path &clip)
+{
+    SplitClipCount out;
+    uint64_t perFolder = 0;
+    {
+        std::ifstream marker(clip / framepath::kMarkerName);
+        std::string line;
+        while (std::getline(marker, line))
+            if (line.rfind("frames_per_folder=", 0) == 0)
+                perFolder = std::strtoull(line.c_str() + 18, nullptr, 10);
+    }
+    std::vector<std::string> parts;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(clip, ec)) {
+        const std::string name = entry.path().filename().string();
+        std::error_code typeEc;
+        if (entry.is_directory(typeEc) && framepath::isPartDirName(name))
+            parts.push_back(name);
+        else if (entry.is_regular_file(typeEc) && clipmerge::detail::isDng(name))
+            ++out.inRoot;
+    }
+    std::sort(parts.begin(), parts.end(), clipmerge::detail::partLess);
+    const auto dngsIn = [&clip](const std::string &part) {
+        uint64_t n = 0;
+        std::error_code partEc;
+        for (const auto &file : std::filesystem::directory_iterator(clip / part, partEc))
+            if (clipmerge::detail::isDng(file.path().filename().string())) ++n;
+        return n;
+    };
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const bool edge = i == 0 || i + 1 == parts.size();
+        out.inParts += (edge || perFolder == 0) ? dngsIn(parts[i]) : perFolder;
+    }
+    return out;
+}
 }  // namespace
 
 // Only requests a scan; the worker does it. Repeated requests coalesce.
@@ -11707,6 +12533,7 @@ bool ApertarCoreApp::clipMergeMayRun(std::string *why) const
     if (soundRecordingActive()) return no("sound recording");
     if (camera_.timelapseActive()) return no("timelapse");
     if (camera_.mediaWritesPending()) return no("writes pending");
+    if (cam1HoldsMedium()) return no("CAM1");
     if (mediaDeleteActive_.load()) return no("media delete");
     if (camera_.state() == CameraState::Standby) return no("standby");
     if (clipMergeNowMs() < clipMergeBlockUntilMs_.load()) return no("recording");   // a take or media action is starting
@@ -11763,6 +12590,16 @@ void ApertarCoreApp::runClipMerge()
         }
         std::sort(clips.begin(), clips.end());
         clipMergePending_.store(static_cast<unsigned>(clips.size()));
+        std::vector<ClipMergeCount> queue;
+        for (const auto &clip : clips) {
+            const SplitClipCount count = countSplitClip(clip.second);
+            queue.push_back({clip.second.filename().string(), count.inRoot, count.inRoot + count.inParts});
+        }
+        {
+            std::lock_guard<std::mutex> lock(clipMergeMutex_);
+            clipMergeQueue_ = std::move(queue);
+            clipMergeQueueIndex_ = 0;
+        }
         if (clips.empty())
             continue;
         std::cerr << "ApertarCore clip merge: scan (" << reason << ") pending=" << clips.size() << "\n";
@@ -11778,6 +12615,15 @@ void ApertarCoreApp::runClipMerge()
             if (!bufferbudget::clipMergeRequest().load())
                 break;
         }
+        {
+            // The scan is through: nothing is being merged now (a stopped clip still counts in clip_merge_pending).
+            std::lock_guard<std::mutex> lock(clipMergeMutex_);
+            clipMergeQueue_.clear();
+            clipMergeQueueIndex_ = 0;
+            clipMergePaused_.clear();
+        }
+        clipMergeClipDone_.store(0);
+        clipMergeClipTotal_.store(0);
         if (shutdown)
             break;
     }
@@ -11791,6 +12637,7 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
         std::cerr << "ApertarCore clip merge: stopped (" << why << ") " << name << "\n";
         std::lock_guard<std::mutex> lock(clipMergeMutex_);
         clipMergeActive_.clear();
+        clipMergePaused_.clear();
         clipMergeLast_ = name + ": stopped (" + why + ")";
         return ClipMergeOutcome::Stopped;
     };
@@ -11806,6 +12653,17 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
     {
         std::lock_guard<std::mutex> lock(clipMergeMutex_);
         clipMergeActive_ = name;
+        clipMergePaused_.clear();
+        for (size_t q = 0; q < clipMergeQueue_.size(); ++q)
+            if (clipMergeQueue_[q].name == name) clipMergeQueueIndex_ = q;
+    }
+    {
+        const uint64_t inRoot = static_cast<uint64_t>(std::count_if(listing.rootFiles.begin(), listing.rootFiles.end(),
+                                                                    [](const std::string &f) { return clipmerge::detail::isDng(f); }));
+        clipMergeClipDone_.store(inRoot);
+        clipMergeClipTotal_.store(inRoot + plan.steps.size());
+        clipMergeRunRenames_.store(0);
+        clipMergeRunRenameNs_.store(0);
     }
     std::cerr << "ApertarCore clip merge: start " << name << " files=" << plan.steps.size() << " parts=" << listing.parts.size()
               << (plan.conflict ? " (stops before " + plan.conflictName + ": already in the clip root)" : std::string()) << "\n";
@@ -11831,6 +12689,7 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
                 std::cerr << "ApertarCore clip merge: paused (" << why << ") " << name << " at " << done << "/" << plan.steps.size() << "\n";
             }
             std::unique_lock<std::mutex> lock(clipMergeMutex_);
+            clipMergePaused_ = why;
             // The clip list was read before this pause, and the worker's 2-s take check does not run until the scan ends: a take
             // recorded now would stay split until the next trigger. Ask for one more scan once this one is through.
             clipMergeRequested_ = true;
@@ -11839,6 +12698,10 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
         }
         if (paused) {
             paused = false;
+            {
+                std::lock_guard<std::mutex> lock(clipMergeMutex_);
+                clipMergePaused_.clear();
+            }
             std::cerr << "ApertarCore clip merge: resumed " << name << " at " << done << "/" << plan.steps.size() << "\n";
         }
         std::error_code existsEc;
@@ -11857,15 +12720,24 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
                            (err == EEXIST ? "" : std::string(" ") + std::strerror(err)));
         }
         ++done;
+        clipMergeClipDone_.fetch_add(1, std::memory_order_relaxed);
+        clipMergeRunRenames_.fetch_add(1, std::memory_order_relaxed);
+        clipMergeRunRenameNs_.store(renameNs, std::memory_order_relaxed);
         // A part whose last frame just moved goes at once; the root is fsynced every 1000 renames.
         const bool lastOfPart = i + 1 == plan.steps.size() || plan.steps[i + 1].partDir != step.partDir;
         if (lastOfPart && std::find(plan.removeAfterSteps.begin(), plan.removeAfterSteps.end(), step.partDir) != plan.removeAfterSteps.end())
             std::filesystem::remove(clip / step.partDir, existsEc);
         if (done % 1000 == 0)
             fsyncFolder(clip);
-        if (done % 5000 == 0)
+        if (done % 5000 == 0) {
+            // std::cerr is shared: leave its float format as found, or every later double on it prints fixed.
+            const std::ios_base::fmtflags flags = std::cerr.flags();
+            const std::streamsize precision = std::cerr.precision();
             std::cerr << "ApertarCore clip merge: " << name << " " << done << "/" << plan.steps.size() << " per_file_ms="
                       << std::fixed << std::setprecision(2) << (renameNs / 1e6) / done << std::defaultfloat << "\n";
+            std::cerr.flags(flags);
+            std::cerr.precision(precision);
+        }
     }
     for (const std::string &part : plan.emptyPartsToRemove)
         std::filesystem::remove(clip / part, ec);
@@ -11881,11 +12753,18 @@ ApertarCoreApp::ClipMergeOutcome ApertarCoreApp::mergeSplitClip(const std::files
     std::ostringstream line;
     line << std::fixed << std::setprecision(1) << name << ": " << done << " files in " << seconds << " s, " << std::setprecision(2)
          << perFileMs << " ms per file";
+    const std::ios_base::fmtflags flags = std::cerr.flags();
+    const std::streamsize precision = std::cerr.precision();
     std::cerr << "ApertarCore clip merge: done " << name << " files=" << done << " seconds=" << std::fixed << std::setprecision(1)
               << seconds << " per_file_ms=" << std::setprecision(2) << perFileMs << std::defaultfloat
               << (plan.problem.empty() ? std::string() : " (" + plan.problem + ")") << "\n";
+    std::cerr.flags(flags);
+    std::cerr.precision(precision);
     std::lock_guard<std::mutex> lock(clipMergeMutex_);
     clipMergeActive_.clear();
+    clipMergePaused_.clear();
+    for (ClipMergeCount &c : clipMergeQueue_)
+        if (c.name == name && plan.problem.empty()) c.inRoot = c.total;   // through: the bars stay where they are
     clipMergeLast_ = line.str() + (plan.problem.empty() ? "" : " (" + plan.problem + ")");
     return plan.problem.empty() ? ClipMergeOutcome::Done : ClipMergeOutcome::Stopped;
 }
@@ -11916,12 +12795,59 @@ void ApertarCoreApp::waitForClipMerge(const std::string &commandName, int blockM
 }
 
 // The merge fields of the state JSON, with a leading comma.
+bool ApertarCoreApp::clipMergeIsActive(const std::string &clipName) const
+{
+    std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    return !clipMergeActive_.empty() && clipMergeActive_ == clipName;
+}
+
 std::string ApertarCoreApp::clipMergeStateJson() const
 {
     std::lock_guard<std::mutex> lock(clipMergeMutex_);
+    // Progress: the clips before the one being merged are through, the ones after it have their root's frames done.
+    // Time left from the model of probe-exfat-dir.md / clip-split-verify.md: a rename costs a + b x (files already in
+    // the root), a = 0.1 ms, b = 0.32 us; a is corrected by this clip's own renames once there are 200 of them.
+    const uint64_t clipDone = clipMergeClipDone_.load(std::memory_order_relaxed);
+    const uint64_t clipTotal = std::max(clipDone, clipMergeClipTotal_.load(std::memory_order_relaxed));
+    const bool merging = !clipMergeActive_.empty() && clipMergeQueueIndex_ < clipMergeQueue_.size();
+    const double b = 0.32e-6;
+    double a = 1.0e-4;
+    const uint64_t runRenames = clipMergeRunRenames_.load(std::memory_order_relaxed);
+    if (merging && runRenames >= 200 && clipDone >= runRenames) {
+        const double meanInRoot = double(clipDone) - double(runRenames) / 2.0;
+        a = std::max(2.0e-5, double(clipMergeRunRenameNs_.load(std::memory_order_relaxed)) / 1e9 / double(runRenames) - b * meanInRoot);
+    }
+    const auto cost = [&](uint64_t inRoot, uint64_t total) {
+        const double r = double(inRoot), t = double(std::max(inRoot, total));
+        return (t - r) * a + b * (t * t - r * r) / 2.0;
+    };
+    uint64_t allDone = 0, allTotal = 0, clipsLeft = 0;
+    double etaS = 0.0;
+    for (size_t q = 0; q < clipMergeQueue_.size(); ++q) {
+        const ClipMergeCount &c = clipMergeQueue_[q];
+        allTotal += c.total;
+        if (merging && q < clipMergeQueueIndex_) {
+            allDone += c.total;
+        } else if (merging && q == clipMergeQueueIndex_) {
+            allDone += std::min(clipDone, c.total);
+            etaS += cost(clipDone, clipTotal);
+            ++clipsLeft;
+        } else {
+            allDone += c.inRoot;
+            etaS += cost(c.inRoot, c.total);
+            ++clipsLeft;
+        }
+    }
     return ",\"clip_merge_pending\":" + std::to_string(clipMergePending_.load()) +
         ",\"clip_merge_active\":\"" + escapeJson(clipMergeActive_) + "\"" +
-        ",\"clip_merge_last\":\"" + escapeJson(clipMergeLast_) + "\"";
+        ",\"clip_merge_last\":\"" + escapeJson(clipMergeLast_) + "\"" +
+        ",\"clip_merge_paused\":\"" + escapeJson(clipMergePaused_) + "\"" +
+        ",\"clip_merge_clip_done\":" + std::to_string(merging ? clipDone : 0) +
+        ",\"clip_merge_clip_total\":" + std::to_string(merging ? clipTotal : 0) +
+        ",\"clip_merge_all_done\":" + std::to_string(std::min(allDone, allTotal)) +
+        ",\"clip_merge_all_total\":" + std::to_string(allTotal) +
+        ",\"clip_merge_all_clips\":" + std::to_string(clipsLeft) +
+        ",\"clip_merge_eta_s\":" + std::to_string(static_cast<uint64_t>(etaS + 0.5));
 }
 
 void ApertarCoreApp::stopClipMerge()
@@ -11984,9 +12910,11 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
         detail = error;
     }
 
-    const std::string chipSetting = hwconf::effectiveValue(doc, "gpio_buttons", "chip").value_or("auto");
+    // The header's GPIOs are lines 0 to 27; another chip's lines are all its own.
+    const std::string chipSetting = hwconf::gpioInputChip(doc);
     const std::string chipPath = chipSetting == "auto" ? hardware::headerGpioChipPath() : chipSetting;
-    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{} : hardware::readGpioChipInfo(chipPath, 28);
+    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{}
+        : hardware::readGpioChipInfo(chipPath, chipSetting == "auto" ? 28 : 64);
     if (state == "running")
         detail = "Core reads the buttons on " + (chip.ok ? chip.path + " (" + chip.label + ")" : chipSetting) + ".";
 
@@ -12236,7 +13164,8 @@ void ApertarCoreApp::wakeControlsWorker()
 
 bool ApertarCoreApp::recordingGateActive()
 {
-    return camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.stillExposureStatus().active;
+    return camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive() || camera_.stillExposureStatus().active ||
+           cam1OnlyTakeActive();
 }
 
 // T39: one thread applies the hardware file. It wakes on a save, and every 2 s looks for an edit made outside
@@ -12322,7 +13251,7 @@ void ApertarCoreApp::applyHardwareText(const std::string &text)
     if (gpio) {
         recordingIndicatorOutput_.start();
         std::lock_guard<std::mutex> commandLock(commandMutex_);   // a record_start publishes under this lock
-        recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive());
+        recordingIndicatorOutput_.setRecordingActive(camera_.isRecording() || soundRecordingActive() || cam1OnlyTakeActive());
         recordingIndicatorOutput_.setStillExposureActive(camera_.stillExposureStatus().active);
     }
     if (groups.count("CFexpress hat"))
@@ -12344,7 +13273,7 @@ void ApertarCoreApp::applyHardwareText(const std::string &text)
     }
     std::cerr << "ApertarCore controls: " << (names.empty() ? std::string("applied; no Core driver reads what changed") : "applied: restarted " + names + " in " + std::to_string(ms) + " ms") << "\n";
     publishEvent("{\"event\":\"controls\",\"applied\":\"" + escapeJson(hardware::configStore().currentRevision()) + "\",\"groups\":\"" +
-                 escapeJson(names) + "\",\"errors\":" + std::to_string(controlsErrors_.load()) + ",\"warnings\":" +
+                 escapeJson(names) + "\",\"controls_errors\":" + std::to_string(controlsErrors_.load()) + ",\"controls_warnings\":" +
                  std::to_string(controlsWarnings_.load()) + "}");
 }
 
@@ -12405,6 +13334,10 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
                 return errorReply(command.id, row.title + " is switched off: switch it on and save first.");
             if (line.actions.empty() || (line.actions.size() == 1 && line.actions[0] == "none"))
                 return errorReply(command.id, "Nothing is assigned to " + row.title + " " + line.label + ".");
+            // A script starts from a physical press only, as in 1.6.0.
+            for (const std::string &action : line.actions)
+                if (hardware::scriptActionSlot(action) >= 0)
+                    return errorReply(command.id, "Scripts run from a button, not from the WebUI.");
             const bool turn = key.size() > 3 && (key.compare(key.size() - 3, 3, "_cw") == 0 ||
                                                  (key.size() > 4 && key.compare(key.size() - 4, 4, "_ccw") == 0));
             handleHardwareInputAction(line.raw, !turn);   // a turn does not wake from standby, as on the knob
@@ -12414,153 +13347,93 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
     return errorReply(command.id, "test_input: no control " + section + " " + key + " in the saved file.");
 }
 
-// The hardware commands that only read: they run without the command lock.
-std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
+std::string ApertarCoreApp::buildHardwareConfigFileJson()
 {
-    if (command.name == "get_controls") {
-        hardware::HardwareConfigStore &store = hardware::configStore();
-        const hardware::StoreInfo info = store.info();
-        const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, hardwareConfigFacts());
-        const size_t errors = controlsErrorCount(issues);
-        controlsErrors_ = errors;
-        controlsWarnings_ = issues.size() - errors;
-        std::ostringstream body;
-        body << "\"controls\":{\"revision\":\"" << escapeJson(info.revision) << "\""
-             << ",\"path\":\"" << escapeJson(store.path().string()) << "\""
-             << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(store.path())) << "\""
-             << ",\"exists\":" << (info.exists ? "true" : "false")
-             << ",\"written_by\":\"" << escapeJson(info.writtenBy) << "\""
-             << ",\"written_at\":\"" << escapeJson(info.writtenAt) << "\""
-             << ",\"errors\":" << errors
-             << ",\"warnings\":" << issues.size() - errors
-             << ",\"issues\":" << controlsIssuesJson(issues)
-             << ",\"text\":\"" << escapeJson(info.text) << "\""
-             << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault())
-             << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text))
-             << ",\"peripherals\":[" << gpioPeripheralJson(hwconf::parse(info.text))
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
-             << "," << cfeHatPeripheralJson(hwconf::parse(info.text), options_.mediaRoot)
-             << "," << outputPeripheralJson(hwconf::parse(info.text), "recording_indicator", "Tally LED",
-                                            recordingIndicatorOutput_.enabled(), recordingIndicatorOutput_.lastError())
-             << "," << outputPeripheralJson(hwconf::parse(info.text), "trigger_output", "Trigger output",
-                                            triggerOutput_.enabled(), triggerOutput_.lastError())
-             << "],\"i2c_buses\":" << i2cBusesJson()
-             << ",\"apply\":" << controlsApplyJson()
-             << ",\"dpi_lines\":[";
-        const hwconf::Facts facts = hardwareConfigFacts();
-        for (size_t i = 0; i < facts.dpiLines.size(); ++i)
-            body << (i ? "," : "") << facts.dpiLines[i];
-        body << "]}";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "controls_history") {
-        // T42/T43: the saved versions, newest first; name= returns one version's text (Undo, the Config history).
-        hardware::HardwareConfigStore &store = hardware::configStore();
-        if (const auto name = command.string("name"); name && !name->empty()) {
-            const auto text = store.historyText(*name);
-            if (!text)
-                return errorReply(command.id, "No saved version called " + *name + ".");
-            return okReply(command.id, "\"name\":\"" + escapeJson(*name) + "\",\"text\":\"" + escapeJson(*text) + "\"");
-        }
-        std::ostringstream body;
-        body << "\"revision\":\"" << escapeJson(store.currentRevision()) << "\",\"history\":[";
-        const auto entries = store.history();
-        for (size_t i = 0; i < entries.size(); ++i)
-            body << (i ? "," : "") << "{\"name\":\"" << escapeJson(entries[i].name) << "\",\"saved_at\":\"" << escapeJson(entries[i].savedAt)
-                 << "\",\"by\":\"" << escapeJson(entries[i].by) << "\",\"revision\":\"" << escapeJson(entries[i].revision) << "\"}";
-        body << "]";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "controls_last_input") {
-        // T42 Listen: the last control that fired, as section and key, and how long ago.
-        std::lock_guard<std::mutex> lock(lastInputMutex_);
-        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - lastInputAt_).count());
-        const auto bar = lastInput_.find('|');
-        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
-            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
-            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
-    }
-    if (command.name == "scan_i2c") {
-        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
-        // driver is reading (it is listed as Core's), never during a take.
-        if (recordingGateActive())
-            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
-        const auto busValue = command.number("bus");
-        if (!busValue || *busValue < 0 || *busValue > 255)
-            return errorReply(command.id, "scan_i2c needs bus= (a bus from Settings > Config > Hardware).");
-        const int bus = static_cast<int>(*busValue);
-        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
-        std::set<int> held;
-        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
-            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
-            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
-            if (running && b && *b == bus)
-                held.insert(a ? static_cast<int>(*a) : fallback);
-        };
-        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
-        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
-        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
-        static const std::map<int, const char *> known = {
-            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
-            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
-            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
-            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
-        std::ostringstream body;
-        body << "\"bus\":" << bus << ",\"found\":[";
-        bool first = true;
-        for (int address = 0x03; address <= 0x77; ++address) {
-            const auto guess = known.find(address);
-            std::string by;
-            if (held.count(address)) {
-                by = "core";
-            } else {
-                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
-                if (!probe.busExists)
-                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
-                if (!probe.found)
-                    continue;
-                by = probe.kernelDriver ? "kernel" : "";
-            }
-            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
-                 << (guess == known.end() ? "" : guess->second) << "\"}";
-            first = false;
-        }
-        body << "]";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "list_actions") {
-        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
-        const CaptureSettings cameraSettings = camera_.settings();
-        std::vector<std::string> resolutions;
-        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName(), cameraSettings))
-            resolutions.push_back(resolution.toString());
-        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
-        body = body.substr(1, body.size() - 2);
-        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
-            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
-                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
-            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
-                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
-            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
-            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
-            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
-        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
-            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
-        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
-        return okReply(command.id, body);
-    }
+    const std::filesystem::path path = editableHardwareConfigPath();
+    const hardware::StoreInfo info = hardware::configStore().info();
+    std::error_code ec;
+    const bool exists = info.exists;
+    // The model, the peripherals and the issues are of the file Core runs; text is what the editor starts from.
+    const hwconf::Document doc = hwconf::parse(info.text);
+    const hwconf::Facts facts = hardwareConfigFacts();
+    const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, facts);
+    const size_t errors = controlsErrorCount(issues);
 
-    return std::nullopt;
+    // A missing file starts from a /boot copy when there is one (the readers take its sections), else the template.
+    std::string text = info.text;
+    std::string bootCopy;
+    if (!exists) {
+        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                bootCopy = candidate;
+                text = readTextFileRaw(candidate);
+                break;
+            }
+            ec.clear();
+        }
+        if (bootCopy.empty())
+            text = defaultHardwareConfigTemplate();
+    }
+    uint64_t sizeBytes = static_cast<uint64_t>(text.size());
+    if (exists) {
+        const auto fileSize = std::filesystem::file_size(path, ec);
+        if (!ec)
+            sizeBytes = static_cast<uint64_t>(fileSize);
+    }
+    ec.clear();
+
+    std::string modifiedText = exists ? formatFileTimestampHuman(std::filesystem::last_write_time(path, ec)) : "Not saved yet";
+    if (ec)
+        modifiedText = "Unknown";
+
+    std::ostringstream out;
+    out << "{\"ok\":true"
+        << ",\"path\":\"" << escapeJson(path.string()) << "\""
+        << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(path)) << "\""
+        << ",\"exists\":" << (exists ? "true" : "false")
+        << ",\"revision\":\"" << escapeJson(info.revision) << "\""
+        << ",\"boot_copy\":\"" << escapeJson(bootCopy) << "\""
+        << ",\"size_bytes\":" << sizeBytes
+        << ",\"size_text\":\"" << escapeJson(formatBytesHuman(sizeBytes)) << "\""
+        << ",\"modified_text\":\"" << escapeJson(modifiedText) << "\""
+        << ",\"text\":\"" << escapeJson(text) << "\""
+        << ",\"written_by\":\"" << escapeJson(info.writtenBy) << "\""
+        << ",\"written_at\":\"" << escapeJson(info.writtenAt) << "\""
+        << ",\"errors\":" << errors
+        << ",\"warnings\":" << issues.size() - errors
+        << ",\"issues\":" << controlsIssuesJson(issues)
+        << ",\"replaced\":" << controlsReplacedJson(hardware::configStore().replacedByDefault())
+        << ",\"model\":" << hwconf::modelJson(doc)
+        << ",\"peripherals\":[" << gpioPeripheralJson(doc)
+        << "," << i2cPeripheralJson(doc, "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
+        << "," << i2cPeripheralJson(doc, "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
+        << "," << i2cPeripheralJson(doc, "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
+        << "," << cfeHatPeripheralJson(doc, options_.mediaRoot)
+        << "," << outputPeripheralJson(doc, "recording_indicator", "Tally LED",
+                                       recordingIndicatorOutput_.enabled(), recordingIndicatorOutput_.lastError())
+        << "," << outputPeripheralJson(doc, "trigger_output", "Trigger output",
+                                       triggerOutput_.enabled(), triggerOutput_.lastError())
+        << "],\"i2c_buses\":" << i2cBusesJson()
+        << ",\"apply\":" << controlsApplyJson()
+        << ",\"dpi_lines\":[";
+    for (size_t i = 0; i < facts.dpiLines.size(); ++i)
+        out << (i ? "," : "") << facts.dpiLines[i];
+    // The GPIO chips a chip= setting can name; "header" marks the one chip=auto means.
+    out << "],\"gpio_chips\":[";
+    for (size_t i = 0; i < facts.gpioChips.size(); ++i) {
+        const hwconf::GpioChipFact &chip = facts.gpioChips[i];
+        out << (i ? "," : "") << "{\"path\":\"" << escapeJson(chip.path) << "\",\"label\":\"" << escapeJson(chip.label)
+            << "\",\"lines\":" << chip.lines << ",\"header\":" << (chip.path == facts.headerChip ? "true" : "false") << "}";
+    }
+    out << "]}";
+    return out.str();
 }
 
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 {
-    // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
-    if (const auto reply = handleReadOnlyHardwareCommand(command))
-        return *reply;
+    // The secondary takes the allowlist's commands only (design 4.2); the rest is the primary's.
+    if (secondaryRole() && !commandclasses::allowedOnSecondary(command.name))
+        return errorReply(command.id, commandclasses::kSecondaryRefusal);
     // The WebUI's Try and Remote controls: the actions are commands that take the command lock themselves.
     if (command.name == "test_input")
         return testInputReply(command);
@@ -12569,6 +13442,306 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // drain ends as soon as the writers have finished the frames they already hold, and the lock below frees up.
     abortSafetyStopFlushForRecord(command.name);
     std::lock_guard<std::mutex> commandLock(commandMutex_);
+    // The relay's hook (design 4.1). With no cam1 (not configured, or the Dual sensor switch off) the only work added to
+    // today's path is one map lookup for a `camera` field. With cam1 configured: the camera field and the busy window
+    // are checked first, then handleCommandLocal runs, and a "both" command that got an ok reply is queued for cam1
+    // before the lock goes, so a REC press that waited on the lock sees cam1 busy.
+    if (secondaryRole())
+        return handleCommandLocal(command);   // the secondary never relays and ignores the camera field (design 4.2)
+    const bool cam1Configured = cam1Client_.configured();
+    // The ties (amendment A2) matter only to a command with a `camera` field or one that is forwarded.
+    commandclasses::Ties ties;
+    if (cam1Configured && (command.fields.count("camera") || commandclasses::classOf(command.name) == commandclasses::Class::Both))
+        ties = commandclasses::effectiveTies(commandclasses::parseTies(readSharedUiSettings().cam1Settings), camera_.sensorName(),
+                                             cam1Client_.snapshot().sensor);
+    const auto cameraField = command.fields.find("camera");
+    if (cameraField != command.fields.end()) {
+        if (const auto refusal = commandclasses::cameraFieldRefusal(command.name, cameraField->second, cam1Configured, ties, command.fields))
+            return errorReply(command.id, *refusal);
+    }
+    if (cam1Configured) {
+        if (const auto refusal = cam1RefusalBefore(command))
+            return errorReply(command.id, *refusal);
+        // `camera=cam1` goes to cam1 alone and never runs locally (design 4.1 The hook).
+        if (cameraField != command.fields.end() && cameraField->second == "cam1" && commandclasses::takesCameraField(command.name))
+            return handleCam1Only(command, ties);
+    }
+    const std::string reply = handleCommandLocal(command);
+    // Standby is the primary's own flag for the relay thread, which must not ask the controller (its mutex_).
+    if (command.name == "enter_standby" && reply.find("\"standby\":true") != std::string::npos)
+        primaryStandby_.store(true, std::memory_order_release);
+    else if (command.name == "wake" && reply.rfind("{\"ok\":true", 0) == 0)
+        primaryStandby_.store(false, std::memory_order_release);
+    if (cam1Configured) {
+        cam1ForwardAfter(command, reply, ties);
+        if (command.name != "ping" && command.name != "get_state")   // the polls change nothing the relay reads
+            publishRelayView(command.name);
+    }
+    return reply;
+}
+
+// What the relay refuses before the local command runs: a Dual sensor switch while cam1 records (amendment A1), the
+// commands cam1's own take excludes (design 4.3), and the busy window's wait for a record_start (1 s, then "One
+// moment."). Part 1 has no take with cam1, so a record_start only ever waits here; the 10 s drop has nothing to drop yet.
+std::optional<std::string> ApertarCoreApp::cam1RefusalBefore(const ControlCommand &command)
+{
+    ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    if (command.name == "set_dual_sensor_enabled" && cam1.recording)
+        return std::string("Stop recording first.");
+    const bool filterOnly = command.name == "set_mode_ladder" && commandclasses::isAspectsOnlyLadder(command.fields);   // accepted in a take
+    if (cam1.recording && !camera_.isRecording() && !filterOnly && commandclasses::refusedWhileCam1Records(command.name))
+        return std::string(cam1state::kCam1RecordingRefusal);
+    if (command.name == "record_start") {
+        cam1state::BusyVerdict verdict = cam1state::busyVerdict(cam1.pending, cam1.busyForMs, false);
+        if (verdict == cam1state::BusyVerdict::Wait) {
+            cam1Client_.waitForIdle(cam1state::kBusyWaitMs);
+            cam1 = cam1Client_.snapshot();
+            verdict = cam1state::busyVerdict(cam1.pending, cam1.busyForMs, true);
+        }
+        if (verdict == cam1state::BusyVerdict::Refuse)
+            return std::string(cam1state::kBusyRefusal);
+    }
+    return std::nullopt;
+}
+
+// After the local ok: the one place a command goes to cam1. The seam for part 2's tie filter is
+// commandclasses::planForward. A forward that cannot be sent (no link) is dropped; the resync on relink catches up.
+void ApertarCoreApp::cam1ForwardAfter(const ControlCommand &command, const std::string &reply, const commandclasses::Ties &ties)
+{
+    const commandclasses::ForwardPlan plan = commandclasses::planForward(command.name, command.fields, reply, ties);
+    if (plan.send)
+        cam1Client_.enqueue(command.name, plan.fields);
+}
+
+// A `camera=cam1` setter on an untied control (design 4.1 The hook): cam0 does not run it. It is queued for cam1 alone,
+// in the same FIFO and busy count as the forwards, and the caller gets ok with no settings body; the result shows in
+// cam1.settings at the next poll, and a refusal or a clamp from cam1 in cam1.message. Runs under commandMutex_.
+std::string ApertarCoreApp::handleCam1Only(const ControlCommand &command, const commandclasses::Ties &ties)
+{
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    if (const auto down = cam1state::linkDownRefusal(cam1WordOf(cam1), cam1.linked))
+        return errorReply(command.id, *down);
+    if (command.name == "get_mode_ladder" || command.name == "set_mode_ladder") {
+        // The relayed ladder pair (design 4.4): cam1's table can only be read from its own reply, so the caller waits for it,
+        // up to 1 s. The read is outside the FIFO and the count; the setter goes through both and keeps its order.
+        std::map<std::string, std::string> ladderFields = command.fields;
+        for (const char *drop : {"id", "cmd", "camera"})
+            ladderFields.erase(drop);
+        const std::shared_ptr<ControlClient::Reply> reply = command.name == "get_mode_ladder"
+            ? cam1Client_.readNow(command.name, ladderFields)
+            : cam1Client_.enqueueWithReply(command.name, ladderFields);
+        if (!reply)
+            return errorReply(command.id, "CAM1 is offline.");
+        std::string line;
+        if (!reply->wait(cam1state::kBusyWaitMs, &line)) {
+            cam1Client_.forget(reply);
+            return errorReply(command.id, cam1state::kCam1DidNotAnswer);
+        }
+        if (!jsonkeys::boolOf(line, "ok").value_or(false))
+            return errorReply(command.id, jsonkeys::stringOf(line, "error").value_or("CAM1 refused."));
+        return okReply(command.id, resync::replyMembers(line));
+    }
+    // cam0 records alone: a reconfigure-type setter on cam1 waits for the stop (design 4.3).
+    if (commandclasses::reconfiguresCamera(command.name) && (camera_.isRecording() || camera_.rawTakeActive()))
+        return errorReply(command.id, cam1state::kCam0RecordingRefusal);
+    std::map<std::string, std::string> fields;
+    if (command.name == "apply_preset") {
+        fields = commandclasses::presetKeysFor(command.fields, ties, commandclasses::PresetReach::Untied);
+        if (fields.empty())
+            return okReply(command.id);   // nothing in the preset is cam1's to apply
+    } else {
+        fields = command.fields;
+        for (const char *drop : {"id", "cmd", "camera"})
+            fields.erase(drop);
+    }
+    if (!cam1Client_.enqueue(command.name, fields))
+        return errorReply(command.id, "CAM1 is offline.");
+    return okReply(command.id);
+}
+
+namespace {
+// The slot clock of the takes (CLOCK_BOOTTIME, the SensorTimestamp domain the controller's gate uses; on the Pi, which
+// never suspends, it reads as CLOCK_MONOTONIC) and the wall clock, in microseconds.
+int64_t takeClockUs(clockid_t clock)
+{
+    timespec now{};
+    ::clock_gettime(clock, &now);
+    return static_cast<int64_t>(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
+
+takeslots::Rate takeRateOf(double fps)
+{
+    const auto rate = recordingFrameRate(fps > 0 ? fps : 25.0);
+    return takeslots::Rate{rate.first, rate.second};
+}
+
+int64_t takePeriodUs(const takeslots::Rate &rate)
+{
+    return rate.valid() ? 1000000 * rate.den / rate.num : 40000;
+}
+
+// cam1's boundary on its own grid (design 6.2, "Two fps in Independent"): (ceil(t / T1) - 1/2) T1. Equal rates keep t.
+int64_t onCam1Grid(int64_t boundaryUs, const takeslots::Rate &rate0, const takeslots::Rate &rate1)
+{
+    if (rate0.num * rate1.den == rate1.num * rate0.den)
+        return boundaryUs;
+    return takeslots::boundaryUs(takeslots::ceilSlotUs(boundaryUs, rate1), rate1);
+}
+} // namespace
+
+ApertarCoreApp::Cam1TakeStart ApertarCoreApp::prepareCam1Take(const ControlCommand &command, const TakeViews &views,
+                                                              CameraController::TakeOptions &take)
+{
+    Cam1TakeStart out;
+    const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+    takeplan::PressInputs press;
+    if (command.fields.count("cameras")) {
+        press.explicitCameras = command.string("cameras").value_or("");
+        if (!takeplan::maskOfCameras(press.explicitCameras)) {
+            out.refused = true;
+            out.refusal = takeplan::kCamerasInvalid;
+            return out;
+        }
+    }
+    press.recordCameras = views.recordCameras;
+    press.previewSource = views.previewSource;
+    press.hdmi1Source = views.hdmi1Source;
+    press.cam1Word = cam1WordOf(cam1);
+    press.busyDropped = cam1.pending > 0 && cam1.busyForMs >= cam1state::kBusyDropMs;
+    const takeplan::Decision decision = takeplan::decide(press);
+    if (decision.refused) {
+        out.refused = true;
+        out.refusal = decision.refusal;
+        return out;
+    }
+    out.cameras = decision.cameras;
+    if (decision.droppedCam1)
+        std::cerr << "ApertarCore take rolls without CAM1 (cam1 " << press.cam1Word << ")\n";
+
+    // One clip number for both names, each built from its own camera's values (design 6.2 step 2). A clip_name given on
+    // the command (a hand-made take) stays cam0's.
+    const int64_t wallUs = takeClockUs(CLOCK_REALTIME);
+    const int64_t bootUs = takeClockUs(CLOCK_BOOTTIME);
+    const clipname::TwoNames names = camera_.twoCameraClipNames(cam1names::partnerFrom(cam1.settings, cam1.sensor), wallUs);
+    if (!names.ok) {
+        out.refused = true;
+        out.refusal = names.error;
+        return out;
+    }
+    if (take.clipName.empty() && (out.cameras & takeplan::kCam0))
+        take.clipName = names.cam0;
+    if (!(out.cameras & takeplan::kCam1))
+        return out;   // a cam0-only take starts as today: now, no lead (design 6.2)
+
+    // The slot (design 6.2 step 1) on cam0's grid, the lead from the larger period; cam1's boundary on its own grid.
+    const CaptureSettings settings = camera_.settings();
+    const takeslots::Rate rate0 = takeRateOf(settings.fps);
+    const double fps1 = jsonkeys::numberOf(cam1.settings, "fps").value_or(settings.fps);
+    const takeslots::Rate rate1 = takeRateOf(fps1);
+    const int64_t lead = takeplan::leadUs(settings.fpsPhaseLock, std::max(takePeriodUs(rate0), takePeriodUs(rate1)));
+    if (take.startUs <= 0)
+        take.startUs = takeslots::startUsFor(bootUs, lead, rate0);
+    if (!take.hasTcOffset) {   // timecode from the slot on both Cores (design 6.3): slot time + the wall clock's offset
+        take.hasTcOffset = true;
+        take.tcOffsetUs = wallUs - bootUs;
+    }
+    if (out.cameras == takeplan::kBoth && takeslots::fpsDiffer(fps1, settings.fps))
+        take.unsyncedReason = "two frame rates";
+    out.cam1StartUs = onCam1Grid(take.startUs, rate0, rate1);
+
+    // Published before the relay can send cam1's record_start (design 4.1 Locks, 6.2 step 3), so a poll answered in between
+    // finds cam1's take under rule 1.
+    const int64_t pickedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    cam1Client_.publishTake(names.cam1, out.cameras == takeplan::kCam1, out.cam1StartUs, pickedMs);
+    out.reply = cam1Client_.sendStart({
+        { "cameras", "cam1" },
+        { "start_us", std::to_string(out.cam1StartUs) },
+        { "clip_name", names.cam1 },
+        { "tc_offset_us", std::to_string(take.tcOffsetUs) },
+        { "audio_enabled", "false" },
+        { "gyro_enabled", "false" },
+        { "sound_only", "false" },
+    });
+    if (!out.reply) {   // the link went between the snapshot and now
+        cam1Client_.withdrawTake();
+        if (out.cameras == takeplan::kCam1) {
+            out.refused = true;
+            out.refusal = takeplan::downRefusal("offline");
+            return out;
+        }
+        out.cameras = takeplan::kCam0;
+        std::cerr << "ApertarCore take rolls without CAM1 (link down at the start)\n";
+    }
+    return out;
+}
+
+// A cam1-only take (design 6.2): the press waits up to 1 s for cam1's reply. The primary starts no camera and sets no
+// takePending_. Runs under commandMutex_; the wait is bounded by kBusyWaitMs.
+std::string ApertarCoreApp::startCam1OnlyTake(const ControlCommand &command, const Cam1TakeStart &plan)
+{
+    std::string line;
+    if (!plan.reply->wait(cam1state::kBusyWaitMs, &line)) {
+        cam1Client_.abandonTake(plan.cam1StartUs);   // a late start stops at once; the relink rules remember it (rule 2)
+        return errorReply(command.id, cam1state::kCam1DidNotAnswer);
+    }
+    if (!jsonkeys::boolOf(line, "ok").value_or(false)) {
+        cam1Client_.withdrawTake();
+        return errorReply(command.id, jsonkeys::stringOf(line, "error").value_or("CAM1 refused the take."));
+    }
+    cam1OnlyTake_.store(true, std::memory_order_release);
+    syncRecordingTracking(true);
+    publishEvent("{\"event\":\"recording\",\"active\":true}");
+    if (cam1Client_.takeClip().empty())   // cam1 left between its reply and here: the relay's end found no take to end
+        endCam1OnlyTake();
+    return okReply(command.id, "\"recording\":true,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+}
+
+void ApertarCoreApp::endCam1OnlyTake()
+{
+    if (!cam1OnlyTake_.exchange(false, std::memory_order_acq_rel))
+        return;
+    syncRecordingTracking(false);
+    publishEvent("{\"event\":\"recording\",\"active\":false}");
+    cam1Client_.takeFinished();
+}
+
+// Replaces `if (camera_.checkRecordingFailure()) syncRecordingTracking(false);` at the four sites (design 6.2 Failure
+// stops). cam0's active:false has gone out already; a two-camera take also stops cam1 on the next slot, with no wait.
+void ApertarCoreApp::endFailedTake()
+{
+    syncRecordingTracking(false);
+    if (secondaryRole() || !cam1Client_.configured() || cam1OnlyTakeActive() || cam1Client_.takeClip().empty())
+        return;
+    const CaptureSettings settings = camera_.settings();
+    const takeslots::Rate rate0 = takeRateOf(settings.fps);
+    const takeslots::Rate rate1 = takeRateOf(jsonkeys::numberOf(cam1Client_.snapshot().settings, "fps").value_or(settings.fps));
+    const int64_t stopUs = onCam1Grid(takeslots::stopUsFor(takeClockUs(CLOCK_BOOTTIME), 0, rate0), rate0, rate1);
+    std::cerr << "ApertarCore cam0's take failed: CAM1 stops on the next slot\n";
+    cam1Client_.stopTake(stopUs, 0);
+    cam1Client_.takeFinished();
+}
+
+// The relay's take events (design 4.6): an adopted cam1-only take (tally, `recording` with adopted:true, no pulse), or a
+// cam1-only take that ended without a press. On the relay thread with no lock held: publishEvent takes only the event and
+// the clients' write locks; nothing here takes commandMutex_ or the controller's mutex_.
+void ApertarCoreApp::onCam1TakeChange()
+{
+    const ControlClient::TakeEvents events = cam1Client_.takeEvents();
+    if (events.adopted) {
+        cam1OnlyTake_.store(true, std::memory_order_release);
+        syncRecordingTracking(true);
+        publishEvent("{\"event\":\"recording\",\"active\":true,\"adopted\":true}");
+    }
+    if (events.ended) {
+        if (!events.endReason.empty())
+            std::cerr << "ApertarCore cam1-only take ended: " << events.endReason << "\n";
+        endCam1OnlyTake();
+    }
+}
+
+std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
+{
     // T47: a command that starts a take, a capture, a media test, standby or an eject opens the yield window
     // first, so a playback decode in flight stops before the take's first frame is written (design §2.7).
     {
@@ -12581,7 +13754,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (reason != playback::Hold::None)
             playbackYield().yieldFor(reason, playbackNowMs());
     }
-    if (camera_.checkRecordingFailure()) syncRecordingTracking(false);
+    if (camera_.checkRecordingFailure()) endFailedTake();
     if (mediaDeleteActive_.load() && (command.name == "capture_photo" || command.name == "record_start" ||
                                       (command.name == "timelapse_start" && !camera_.timelapseActive())))
         return errorReply(command.id, "Deleting media. One moment.");
@@ -12605,7 +13778,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         std::lock_guard lock(mediaSpeedMutex_);
         speedTestActive = mediaSpeedTestRunning_;
     }
-    if (mediaAction && (camera_.isRecording() || soundRecordingActive() ||
+    if (mediaAction && (camera_.isRecording() || soundRecordingActive() || cam1RecordingActive() ||
                        camera_.timelapseActive() || camera_.mediaWritesPending() || speedTestActive))
         return errorReply(command.id, "Stop recording, still captures and media tests before changing media.");
     if (speedTestActive && (command.name == "record_start" || command.name == "capture_photo" ||
@@ -12658,7 +13831,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         stopPreviewPublisher();
         stopMjpegEncoder();
         std::string warning;
-        if (!options_.simulateCamera && std::filesystem::exists("/usr/local/libexec/apertar-standby-low-power")) {
+        if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/usr/local/libexec/apertar-standby-low-power")) {
             const auto result = standbyLowPower("all");
             if (result.exitCode != 0) {
                 warning = "Extra power saving skipped: " + result.output;
@@ -12666,7 +13839,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 standbyLowPower("restore");
             }
         }
-        if (!options_.simulateCamera && readSharedUiSettings().standbyUsbPowerOff) {
+        if (!options_.simulateCamera && !secondaryRole() && readSharedUiSettings().standbyUsbPowerOff) {
             const auto result = standbyUsbPower("off");
             standbyUsbPoweredOff_.store(result.exitCode == 0);
             if (result.exitCode != 0) {
@@ -12682,12 +13855,12 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
     if (command.name == "wake") {
         if (camera_.state() == CameraState::Standby) {
-            if (!options_.simulateCamera && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
+            if (!options_.simulateCamera && !secondaryRole() && std::filesystem::exists("/run/apertar-standby-low-power/settings")) {
                 const auto result = standbyLowPower("restore");
                 if (result.exitCode != 0)
                     return errorReply(command.id, "Could not restore normal performance: " + result.output);
             }
-            if (!options_.simulateCamera &&
+            if (!options_.simulateCamera && !secondaryRole() &&
                 std::filesystem::exists("/run/apertar-standby-usb/ports")) {
                 const auto result = standbyUsbPower("on");
                 if (result.exitCode != 0)
@@ -12742,6 +13915,70 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
+    if (command.name == "controls_last_input") {
+        // T42 Listen: the last control that fired, as section and key, and how long ago.
+        std::lock_guard<std::mutex> lock(lastInputMutex_);
+        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastInputAt_).count());
+        const auto bar = lastInput_.find('|');
+        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
+            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
+            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
+    }
+    if (command.name == "scan_i2c") {
+        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
+        // driver is reading (it is listed as Core's), never during a take.
+        if (recordingGateActive())
+            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
+        const auto busValue = command.number("bus");
+        if (!busValue || *busValue < 0 || *busValue > 255)
+            return errorReply(command.id, "scan_i2c requires bus.");
+        const int bus = static_cast<int>(*busValue);
+        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
+        std::set<int> held;
+        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
+            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
+            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
+            if (running && b && *b == bus)
+                held.insert(a ? static_cast<int>(*a) : fallback);
+        };
+        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
+        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
+        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
+        static const std::map<int, const char *> known = {
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
+            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
+            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
+        std::ostringstream body;
+        body << "\"bus\":" << bus << ",\"found\":[";
+        bool first = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        for (int address = 0x03; address <= 0x77; ++address) {
+            const auto guess = known.find(address);
+            std::string by;
+            if (held.count(address)) {
+                by = "core";
+            } else {
+                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
+                if (!probe.busExists)
+                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return errorReply(command.id, "I2C bus " + std::to_string(bus) + " does not answer: check the wiring.");
+                if (!probe.found)
+                    continue;
+                by = probe.kernelDriver ? "kernel" : "";
+            }
+            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
+                 << (guess == known.end() ? "" : guess->second) << "\"}";
+            first = false;
+        }
+        body << "]";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "list_actions")
+        return okReply(command.id, hardware::actions::catalogJson());
+
     if (command.name == "test_output") {
         // T42: one blink of the tally or one trigger pulse, to see which one is wired where.
         const std::string which = command.string("which").value_or("");
@@ -12767,10 +14004,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, "set_controls needs base= (the revision you loaded).");
         // restore=true puts back the version Core last knew, when the file was replaced by a default.
         if (const auto restore = command.string("restore"); restore) {
-            bool wanted = false;
-            if (!parseBooleanToken(*restore, &wanted))
+            const auto wanted = boolFieldValue(*restore);
+            if (!wanted)
                 return errorReply(command.id, "restore must be true or false.");
-            if (wanted) {
+            if (*wanted) {
                 const hardware::ReplacedInfo replaced = hardware::configStore().replacedByDefault();
                 if (!replaced.replaced)
                     return errorReply(command.id, "Nothing to restore: the file has not been replaced.");
@@ -12785,25 +14022,27 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, "Send the whole file (text=) or single keys (set.<section>.<key>=), not both.");
         if (!text && edits.empty())
             return errorReply(command.id, "set_controls needs text= (the whole file), restore=true, or set.<section>.<key>=value.");
+        // A whole file, restored text included, gets the same checks as POST /api/config.
+        if (std::string message; text && !checkHardwareConfigText(*text, &message))
+            return errorReply(command.id, message);
         hardware::StoreFlags flags;
         flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
         const std::pair<const char *, bool *> flagFields[] = {
             { "dry_run", &flags.dryRun }, { "force", &flags.force }, { "confirm_merge", &flags.confirmMerge } };
         for (const auto &[name, flag] : flagFields) {
-            if (const auto value = command.string(name); value && !parseBooleanToken(*value, flag))
-                return errorReply(command.id, std::string(name) + " must be true or false.");
+            if (const auto value = command.string(name); value) {
+                const auto parsed = boolFieldValue(*value);
+                if (!parsed)
+                    return errorReply(command.id, std::string(name) + " must be true or false.");
+                *flag = *parsed;
+            }
         }
         const std::string by = command.string("by").value_or("api");
         const hardware::StoreResult result = edits.empty()
             ? hardware::configStore().replace(*base, *text, by, flags, hardwareConfigFacts())
             : hardware::configStore().edit(*base, edits, by, flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -12837,11 +14076,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "storage", "buffer", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -12877,11 +14113,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "storage", key, value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -12911,11 +14144,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         flags.trusted = true;   // [media] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "media", "preroll", text } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -12927,25 +14157,34 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_dual_sensor_enabled\",\"set_preview_source\",\"set_hdmi1_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
         // The watcher's latest probe; never touches the device.
         const MediaSnapshot mediaState = mediaSnapshot();
+        const SharedUiSettingsSnapshot uiState = readSharedUiSettings();
         const bool soundRecording = soundRecordingActive();
-        const bool recording = camera_.isRecording() || soundRecording;
+        const bool recording = camera_.isRecording() || soundRecording || cam1OnlyTakeActive();
+        // The lock's state as /api/state carries it (design §8.1): err_us is the last frame's grid error.
+        const PhaseLockStatus phaseLockStatus = camera_.phaseLockStatus();
         std::ostringstream body;
         body << "\"state\":\"" << toString(camera_.state()) << "\""
              << ",\"standby\":" << (camera_.state() == CameraState::Standby ? "true" : "false")
              << ",\"recording\":" << (recording ? "true" : "false")
              << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
              << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
-             << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
              << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
+             << takeSlotMembers(camera_.takeSnapshot())
              << ",\"controls_errors\":" << controlsErrors_.load()
              << ",\"controls_warnings\":" << controlsWarnings_.load()
+             << ",\"fps_phase_lock_active\":" << (phaseLockStatus.active ? "true" : "false")
+             << ",\"fps_phase_lock_err_us\":" << jsonNumber(phaseLockStatus.errorUs, 1)
+             << ",\"fps_phase_lock_dur_us\":" << phaseLockStatus.durationUs
+             << ",\"fps_phase_lock_pushes\":" << phaseLockStatus.pushes
+             << ",\"fps_phase_lock_saturated\":" << (phaseLockStatus.saturated ? "true" : "false")
+             << ",\"fps_phase_lock_locked\":" << (phaseLockStatus.locked ? "true" : "false")
              << ",\"sound_recording\":" << (soundRecording ? "true" : "false")
              << ",\"timelapse_active\":" << (camera_.timelapseActive() ? "true" : "false")
              << ",\"timelapse_interval_seconds\":" << camera_.timelapseIntervalSeconds()
@@ -12961,7 +14200,9 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
              << ",\"media_state\":\"" << mediaState.stateName() << "\""
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
-             << "," << settingsBody(camera_.settings());
+             << "," << settingsBody(camera_.settings())
+             << ",\"ui\":{" << dualSensorUiStateJson(uiState) << "}"
+             << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
         return okReply(command.id, body.str());
     }
 
@@ -13246,6 +14487,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         const auto parsed = apertar::clipname::parse(*value);
         if (!parsed.ok)
             return errorReply(command.id, parsed.error);
+        if (!secondaryRole() && cam1Client_.configured()) {   // one length rule with cam1 configured (design 6.2)
+            const auto two = apertar::clipname::parseForTwoCameras(*value);
+            if (!two.ok && two.error == std::string(apertar::clipname::kTwoCameraNameTooLong))
+                return errorReply(command.id, two.error);
+        }
         std::string stored;
         if (!camera_.setClipNameTemplate(*value, &stored))
             return errorReply(command.id, camera_.lastError());
@@ -13260,7 +14506,19 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         const std::string value = command.string("value").value_or("");
         std::string example;
         std::string error;
-        if (!camera_.previewClipName(value, &example, &error))
+        if (!secondaryRole() && cam1Client_.configured()) {
+            // Cam1 configured (design 6.2 The preview calls): the name the take will get, with {cam} and one number for
+            // both names; camera=cam1 gives the name the primary will send cam1, built from cam1.settings.
+            const auto plain = apertar::clipname::parse(value.empty() ? camera_.settings().clipNameTemplate : value);
+            if (!plain.ok)
+                return errorReply(command.id, plain.error);
+            const ControlClient::Snapshot cam1 = cam1Client_.snapshot();
+            const clipname::TwoNames names = camera_.twoCameraClipNames(cam1names::partnerFrom(cam1.settings, cam1.sensor),
+                                                                        takeClockUs(CLOCK_REALTIME), plain.normalized);
+            if (!names.ok)
+                return errorReply(command.id, names.error);
+            example = command.string("camera").value_or("") == "cam1" ? names.cam1 : names.cam0;
+        } else if (!camera_.previewClipName(value, &example, &error))
             return errorReply(command.id, error);
         const auto parsed = apertar::clipname::parse(value.empty() ? camera_.settings().clipNameTemplate : value);
         return okReply(command.id, "\"example\":\"" + escapeJson(example) + "\",\"template\":\"" +
@@ -13291,10 +14549,19 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (target != "ui" && !camera_.setTimecodeMode(mode))
             return errorReply(command.id, camera_.lastError());
 
+        // UI.conf fileTimecodeSeparate: true once the operator sets the file timecode apart (ui or files),
+        // false again by a change of both; a camera that never sets it apart gets no key.
         if (target != "files") {
-            (void)updateSharedUiGeneralSettings({
+            std::vector<std::pair<std::string, std::string>> updates = {
                 { "timecodeMode", mode == TimecodeMode::RecRun ? "Rec Run" : "Free Run" }
-            });
+            };
+            if (target == "ui")
+                updates.emplace_back("fileTimecodeSeparate", "true");
+            else if (readSharedUiSettings().fileTimecodeSeparate)
+                updates.emplace_back("fileTimecodeSeparate", "false");
+            (void)updateSharedUiGeneralSettings(updates);
+        } else {
+            (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
         }
         return okReply(command.id, settingsBody(camera_.settings()));
     }
@@ -13509,6 +14776,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     if (const auto reply = handleUiToggle("set_recording_red_timecode_enabled", "recordingRedTimecodeEnabled"))
         return *reply;
     if (const auto reply = handleUiToggle("set_audio_recorded_outline_enabled", "audioRecordedOutlineEnabled"))
+        return *reply;
+    if (const auto reply = handleUiToggle("set_dual_sensor_enabled", "dualSensorEnabled"))
         return *reply;
     if (const auto reply = handleUiToggle("set_record_audio_enabled", "recordAudioEnabled"))
         return *reply;
@@ -13730,6 +14999,124 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (!updateSharedUiGeneralSettings({ { "externalMonitorMode", normalized } }))
             return errorReply(command.id, "Could not update shared UI settings.");
         return okReply(command.id, "\"external_monitor_mode\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_preview_source") {
+        // swap=true (no value) swaps HDMI 0's view only; HDMI 1's half is T71's.
+        if (const auto swap = command.string("swap"); swap && (*swap == "true" || *swap == "1")) {
+            const std::string swapped = apertar::dualsettings::swapPreviewSource(readSharedUiSettings().previewSource);
+            if (!updateSharedUiGeneralSettings({ { "previewSource", swapped } }))
+                return errorReply(command.id, "Could not update shared UI settings.");
+            return okReply(command.id, "\"preview_source\":\"" + escapeJson(swapped) + "\"");
+        }
+        // value, wipe, wipe_direction, stack and opacity: any subset; all are checked before any is written.
+        const auto value = command.string("value");
+        const auto wipeText = command.string("wipe");
+        const auto directionText = command.string("wipe_direction");
+        const auto stackText = command.string("stack");
+        const auto opacityText = command.string("opacity");
+        if (!value && !wipeText && !directionText && !stackText && !opacityText)
+            return errorReply(command.id, "set_preview_source requires value.");
+
+        std::vector<std::pair<std::string, std::string>> updates;
+        if (value) {
+            const std::string normalized = apertar::dualsettings::normalizePreviewSource(*value);
+            if (trimAscii(*value) != normalized)
+                return errorReply(command.id, "Unsupported preview source.");
+            updates.push_back({ "previewSource", normalized });
+        }
+        if (wipeText) {
+            const auto wipe = apertar::dualsettings::parsePercent(*wipeText);
+            if (!wipe)
+                return errorReply(command.id, "Wipe must be 0 to 100.");
+            updates.push_back({ "previewWipe", std::to_string(*wipe) });
+        }
+        if (directionText) {
+            const auto direction = apertar::dualsettings::parseWipeDirection(*directionText);
+            if (!direction)
+                return errorReply(command.id, "Wipe direction must be horizontal or vertical.");
+            updates.push_back({ "previewWipeDirection", *direction });
+        }
+        if (stackText) {
+            const auto stack = apertar::dualsettings::parseStackFlag(*stackText);
+            if (!stack)
+                return errorReply(command.id, "Stack must be true or false.");
+            updates.push_back({ "previewStack", *stack ? "true" : "false" });
+        }
+        if (opacityText) {
+            const auto opacity = apertar::dualsettings::parsePercent(*opacityText);
+            if (!opacity)
+                return errorReply(command.id, "Opacity must be 0 to 100.");
+            updates.push_back({ "previewOpacity", std::to_string(*opacity) });
+        }
+        if (!updateSharedUiGeneralSettings(updates))
+            return errorReply(command.id, "Could not update shared UI settings.");
+
+        const SharedUiSettingsSnapshot ui = readSharedUiSettings();
+        return okReply(command.id, "\"preview_source\":\"" + escapeJson(ui.previewSource) + "\""
+                                       + ",\"preview_wipe\":" + std::to_string(ui.previewWipe)
+                                       + ",\"preview_wipe_direction\":\"" + (ui.previewWipeDirection == "Vertical" ? "vertical" : "horizontal") + "\""
+                                       + ",\"preview_stack\":" + (ui.previewStack ? "true" : "false")
+                                       + ",\"preview_opacity\":" + std::to_string(ui.previewOpacity));
+    }
+
+    if (command.name == "set_hdmi1_source") {
+        // HDMI 1's view while dual sensor is on (design §5.4); the six labels of set_preview_source, strict.
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_hdmi1_source requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizePreviewSource(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported HDMI 1 view.");
+        if (!updateSharedUiGeneralSettings({ { "hdmi1Source", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"hdmi1_source\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_record_cameras") {
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_record_cameras requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizeRecordCameras(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported shooting mode.");
+        if (!updateSharedUiGeneralSettings({ { "recordCameras", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"record_cameras\":\"" + escapeJson(normalized) + "\"");
+    }
+
+    if (command.name == "set_cam1_settings") {
+        // The shared controls as a comma list; stored in the fixed order (tokens trimmed, "" = none shared).
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_cam1_settings requires value.");
+
+        const auto canonical = apertar::dualsettings::canonicalCam1Settings(*value);
+        if (!canonical)
+            return errorReply(command.id, "Unsupported CAM1 settings mode.");
+        std::vector<std::pair<std::string, std::string>> updates = { { "cam1Settings", *canonical } };
+        // Resolution going from not shared to shared puts cam1's mode back on "Closest to Cam 0".
+        if (apertar::dualsettings::cam1SettingsHasResolution(*canonical)
+            && !apertar::dualsettings::cam1SettingsHasResolution(readSharedUiSettings().cam1Settings))
+            updates.emplace_back("cam1Mode", apertar::dualsettings::kCam1Modes[0]);
+        if (!updateSharedUiGeneralSettings(updates))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"cam1_settings\":\"" + escapeJson(*canonical) + "\"");
+    }
+
+    if (command.name == "set_cam1_mode") {
+        const auto value = command.string("value");
+        if (!value)
+            return errorReply(command.id, "set_cam1_mode requires value.");
+
+        const std::string normalized = apertar::dualsettings::normalizeCam1Mode(*value);
+        if (trimAscii(*value) != normalized)
+            return errorReply(command.id, "Unsupported CAM1 mode.");
+        if (!updateSharedUiGeneralSettings({ { "cam1Mode", normalized } }))
+            return errorReply(command.id, "Could not update shared UI settings.");
+        return okReply(command.id, "\"cam1_mode\":\"" + escapeJson(normalized) + "\"");
     }
 
     if (command.name == "set_external_monitor_info_overlay") {
@@ -14092,7 +15479,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 
     if (command.name == "set_mode_ladder") {
         // T34: any of resolutions (WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], comma-separated), enabled, ramp_ready
-        // (true|false); dry_run=true only validates and returns the errors and warnings.
+        // (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
+        // saved in a take too); dry_run=true only validates and returns the errors and warnings.
         const auto boolField = [&command](const char *name) -> std::optional<bool> {
             const auto value = command.string(name);
             if (!value)
@@ -14101,8 +15489,8 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         };
         const bool dryRun = boolField("dry_run").value_or(false);
         std::string json, error;
-        if (!camera_.setModeLadder(command.string("resolutions"), boolField("enabled"), boolField("ramp_ready"), dryRun,
-                                   &json, &error))
+        if (!camera_.setModeLadder(command.string("resolutions"), boolField("enabled"), boolField("ramp_ready"),
+                                   command.string("aspects"), dryRun, &json, &error))
             return errorReply(command.id, error);
         return okReply(command.id, "\"mode_ladder\":" + json + (dryRun ? "" : "," + settingsBody(camera_.settings())));
     }
@@ -14159,7 +15547,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return errorReply(command.id, "set_value_steps needs values, free, increment, flicker_free or mains_hz.");
         if (!updateSharedUiGeneralSettings(updates))
             return errorReply(command.id, "Could not save the value list.");
-        return okReply(command.id, "\"ui\":{" + valueStepsJson(readSharedUiSettings(), camera_.sensorName()) + "}");
+        return okReply(command.id, valueStepsJson(readSharedUiSettings(), camera_.sensorName()));
     }
 
     if (command.name == "set_favorites_order") {
@@ -14224,16 +15612,19 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 return errorReply(command.id, "Invalid preset exposure compensation.");
             presetSettings.exposureCompensation = std::round(*ev * 3.0) / 3.0;
         }
-        if (const auto value = command.string("photoModeEnabled"))
+        // The secondary ignores the preset's photo keys completely (design 3.3): no presetSettings change, no UI update.
+        const bool photoKeys = !secondaryRole();
+        if (const auto value = command.string("photoModeEnabled"); value && photoKeys)
             presetSettings.photoModeEnabled = parseUiSettingsBool(*value, false);
-        if (const auto value = command.string("photoLongExposureEnabled"))
+        if (const auto value = command.string("photoLongExposureEnabled"); value && photoKeys)
             presetSettings.longExposureEnabled = parseUiSettingsBool(*value, false);
-        addBoolUpdate("photoLongExposureEnabled");
-        if (const auto value = command.string("photoBracketingEnabled"))
+        if (photoKeys)
+            addBoolUpdate("photoLongExposureEnabled");
+        if (const auto value = command.string("photoBracketingEnabled"); value && photoKeys)
             presetSettings.bracketingEnabled = parseUiSettingsBool(*value, false);
-        if (!addBoolUpdate("photoBracketingEnabled"))
+        if (photoKeys && !addBoolUpdate("photoBracketingEnabled"))
             return errorReply(command.id, "Invalid preset bracketing toggle.");
-        if (const auto value = command.string("photoBracketingEv")) {
+        if (const auto value = command.string("photoBracketingEv"); value && photoKeys) {
             const auto ev = parseDoubleValue(*value);
             if (!ev || !std::isfinite(*ev) || *ev < 1.0 / 3.0 - 0.0001 || *ev > 3.0)
                 return errorReply(command.id, "Invalid preset bracket EV offset.");
@@ -14341,6 +15732,11 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             const auto parsed = apertar::clipname::parse(*value);
             if (!parsed.ok)
                 return errorReply(command.id, "Invalid preset clip name template: " + parsed.error);
+            if (!secondaryRole() && cam1Client_.configured()) {
+                const auto two = apertar::clipname::parseForTwoCameras(*value);
+                if (!two.ok && two.error == std::string(apertar::clipname::kTwoCameraNameTooLong))
+                    return errorReply(command.id, two.error);
+            }
             presetSettings.clipNameTemplate = parsed.normalized;
         }
         if (const auto value = command.string("cameraFpsPhaseLock"))
@@ -14454,6 +15850,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             !addBoolUpdate("frameBufferBarEnabled") ||
             !addBoolUpdate("recordingRedTimecodeEnabled") ||
             !addBoolUpdate("audioRecordedOutlineEnabled") ||
+            !addBoolUpdate("fileTimecodeSeparate") ||
             !addBoolUpdate("soundRecorderEnabled") ||
             !addBoolUpdate("recordAudioEnabled") ||
             !addBoolUpdate("recordGyroEnabled") ||
@@ -14480,6 +15877,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (const auto cameraControlsMode = command.string("cameraControlsMode"))
             uiUpdates.emplace_back("cameraControlsMode", normalizeCameraControlsModeValue(*cameraControlsMode));
         addStringUpdate("externalMonitorMode");
+        addStringUpdate("recordCameras");
         addStringUpdate("externalMonitorInfoOverlay");
         if (const auto externalMonitorOrientation = command.string("externalMonitorOrientation")) {
             uiUpdates.emplace_back("externalMonitorOrientation",
@@ -14677,7 +16075,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
                 return fallback;
             return *value == "true" || *value == "1";
         };
-        const bool soundOnly = boolField(command.string("sound_only"), uiSettings.soundRecorderEnabled);
+        const bool soundOnly = !secondaryRole() && boolField(command.string("sound_only"), uiSettings.soundRecorderEnabled);
         GyroRecordingOptions gyroOptions;
         gyroOptions.enabled = soundOnly ? false : uiSettings.recordGyroEnabled;
         if (const auto gyroEnabled = command.string("gyro_enabled")) {
@@ -14685,6 +16083,10 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         }
         if (const auto audioEnabled = command.string("audio_enabled")) {
             audioOptions.enabled = (*audioEnabled == "true" || *audioEnabled == "1");
+        }
+        if (secondaryRole()) {   // no audio, gyro or sound-only on the secondary (design 3.3)
+            audioOptions.enabled = false;
+            gyroOptions.enabled = false;
         }
         if (const auto monitoringEnabled = command.string("audio_monitoring_enabled")) {
             audioOptions.liveMonitoringEnabled = (*monitoringEnabled == "true" || *monitoringEnabled == "1");
@@ -14749,13 +16151,56 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
         if (soundRecordingActive())
             return errorReply(command.id, "Stop Sound Recorder before starting camera recording.");
 
+        // The optional fields of a take on a slot (design 6.2): start_us, stop_us, clip_name, tc_offset_us. None given =
+        // a take exactly as before. Refused before anything starts (and before the audio sleep).
+        CameraController::TakeOptions takeOptions;
+        {
+            bool present = false;
+            if (!wholeNumberField(command, "start_us", &takeOptions.startUs, &present) || (present && takeOptions.startUs <= 0))
+                return errorReply(command.id, "start_us must be a number.");
+            if (!wholeNumberField(command, "stop_us", &takeOptions.stopUs, &present) || (present && takeOptions.stopUs <= 0))
+                return errorReply(command.id, "stop_us must be a number.");
+            if (!wholeNumberField(command, "tc_offset_us", &takeOptions.tcOffsetUs, &takeOptions.hasTcOffset))
+                return errorReply(command.id, "tc_offset_us must be a number.");
+            if (const auto clipName = command.string("clip_name")) {
+                if (!clipname::validVerbatimName(*clipName))
+                    return errorReply(command.id, clipname::kInvalidClipName);
+                takeOptions.clipName = *clipName;
+            } else if (command.fields.count("clip_name")) {
+                return errorReply(command.id, clipname::kInvalidClipName);
+            }
+        }
+        // Cam1 configured (design 6.1, 6.2): which cameras roll, one clip number for both names, and with cam1 in the take
+        // the slot, the published take and cam1's record_start, sent before the audio sleep and cam0's start. The {cam}
+        // rule applies to every name (ClipName.hpp ensureCamToken). With no cam1 none of this runs.
+        Cam1TakeStart cam1Take;
+        struct StartingGuard {
+            std::atomic<bool> &flag;
+            ~StartingGuard() { flag.store(false, std::memory_order_release); }
+        } startingGuard{primaryTakeStarting_};
+        if (!secondaryRole() && cam1Client_.configured()) {
+            primaryTakeStarting_.store(true, std::memory_order_release);
+            takeOptions.twoCameras = true;
+            cam1Take = prepareCam1Take(command, TakeViews{uiSettings.recordCameras, uiSettings.previewSource, uiSettings.hdmi1Source},
+                                       takeOptions);
+            if (cam1Take.refused)
+                return errorReply(command.id, cam1Take.refusal);
+            if (cam1Take.cameras == takeplan::kCam1)
+                return startCam1OnlyTake(command, cam1Take);
+        }
+
         if (audioOptions.enabled) {
             controlServer_.broadcast("{\"event\":\"prepare_recording\"}");
             std::this_thread::sleep_for(std::chrono::milliseconds(220));
         }
 
-        if (!camera_.startRecording(audioOptions, gyroOptions))
+        if (!camera_.startRecording(audioOptions, gyroOptions, takeOptions)) {
+            if (cam1Take.reply)   // cam1 was told: it stops what it started, at once (design 4.6)
+                cam1Client_.abandonTake(cam1Take.cam1StartUs);
             return errorReply(command.id, camera_.lastError());
+        }
+        if (!secondaryRole() && cam1Client_.configured() && !cam1Take.reply)
+            cam1Client_.noteTake();   // a take without cam1: this process has had a take (design 4.6 rule 3)
         syncRecordingTracking(true);
         return okReply(command.id, std::string("\"recording\":true,\"recording_has_dropped_frames\":")
                        + (camera_.recordingHasDroppedFrames() ? "true" : "false")
@@ -14839,8 +16284,52 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
             return okReply(command.id, "\"recording\":false,\"sound_recording\":false");
         }
 
-        if (!camera_.stopRecording())
+        // stop_us (design 6.2): the take ends on that slot. The buffer safety stop arrives here as a plain record_stop,
+        // so safetyStopState().active tells it apart: it stops at once, with no wait, whatever a stop_us says. (Cam1's
+        // next-slot stop_us for it is the relay's, T64: takeslots::stopUsFor(now, 0, rate).)
+        int64_t stopUs = 0;
+        bool stopPresent = false;
+        if (!wholeNumberField(command, "stop_us", &stopUs, &stopPresent) || (stopPresent && stopUs <= 0))
+            return errorReply(command.id, "stop_us must be a number.");
+        const bool safetyStop = bufferbudget::safetyStopState().active.load(std::memory_order_acquire);
+        if (safetyStop)
+            stopUs = 0;
+        // cam1 in the take (design 6.2 Stop): its record_stop goes first, ahead of the relay's FIFO, and the press waits
+        // until the line is written, bounded at the stop lead minus 2T; cam0 then stops on the same slot. A safety stop
+        // stops cam0 at once and gives cam1 the next slot, with no wait. With the link down cam1's stop is kept.
+        const bool cam1Configured = !secondaryRole() && cam1Client_.configured();
+        if (cam1Configured && (cam1OnlyTakeActive() || !cam1Client_.takeClip().empty())) {
+            const CaptureSettings settings = camera_.settings();
+            const takeslots::Rate rate0 = takeRateOf(settings.fps);
+            const takeslots::Rate rate1 =
+                takeRateOf(jsonkeys::numberOf(cam1Client_.snapshot().settings, "fps").value_or(settings.fps));
+            const int64_t nowUs = takeClockUs(CLOCK_BOOTTIME);
+            const int64_t periodUs = takePeriodUs(rate0);
+            const int64_t slotStopUs =
+                stopPresent ? stopUs : takeslots::stopUsFor(nowUs, safetyStop ? 0 : takeplan::stopLeadUs(periodUs), rate0);
+            const ControlClient::StopOutcome outcome =
+                cam1Client_.stopTake(onCam1Grid(slotStopUs, rate0, rate1), safetyStop ? 0 : takeplan::stopWaitMs(periodUs));
+            if (outcome.pending)
+                std::cerr << "ApertarCore cam1's stop kept for the relink\n";
+            if (cam1OnlyTakeActive()) {
+                // The take state ends at cam1's reply or its `recording` event (onCam1TakeChange), or now when no reply
+                // will come: the stop is pending, or cam1 was no longer in the take.
+                if (!outcome.inTake || outcome.pending)
+                    endCam1OnlyTake();
+                return okReply(command.id, "\"recording\":false,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+            }
+            if (!safetyStop)
+                stopUs = slotStopUs;
+        }
+        if (cam1Configured && !camera_.isRecording() && !camera_.rawTakeActive()) {
+            cam1Client_.takeFinished();   // cam0's side already ended (a failure stop); cam1's stop went above
+            syncRecordingTracking(false);
+            return okReply(command.id, "\"recording\":false,\"recording_has_dropped_frames\":false,\"recording_dropped_frames\":0");
+        }
+        if (!camera_.stopRecording(stopUs))
             return errorReply(command.id, camera_.lastError());
+        if (cam1Configured)
+            cam1Client_.takeFinished();   // the `refused` hold and a settled `lost` end with the take
         syncRecordingTracking(false);
         return okReply(command.id, std::string("\"recording\":false,\"recording_has_dropped_frames\":")
                        + (camera_.recordingHasDroppedFrames() ? "true" : "false")
@@ -14877,6 +16366,7 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
 void ApertarCoreApp::publishEvent(const std::string &eventJson)
 {
     handleTriggerEvent(eventJson);
+    noteRelayEvent(eventJson);
 
     // Settings must also reach the separate HDMI process immediately, not just
     // the command's requester. These events cannot be collected into its reply.
@@ -14920,7 +16410,8 @@ void ApertarCoreApp::handleTriggerEvent(const std::string &eventJson)
     if (eventJson.find("\"event\":\"recording\"") != std::string::npos) {
         if (eventJson.find("\"active\":true") != std::string::npos) {
             recordingIndicatorOutput_.setRecordingActive(true);
-            triggerOutput_.pulse(TriggerOutput::Event::RecordingStart);
+            if (eventJson.find("\"adopted\":true") == std::string::npos)   // an adopted take sends no pulse (design 4.6)
+                triggerOutput_.pulse(TriggerOutput::Event::RecordingStart);
             return;
         }
         if (eventJson.find("\"active\":false") != std::string::npos)
@@ -14948,6 +16439,8 @@ void ApertarCoreApp::handleTriggerEvent(const std::string &eventJson)
 
 void ApertarCoreApp::publishPreviewFrame(const PreviewFrameDescriptor &frame)
 {
+    if (!frame.registration && !secondaryRole())
+        noteRelayFrame(static_cast<int64_t>(frame.timestampUs));   // the live sync check pairs these with cam1's (design 7.6)
     std::vector<int> attachedFds;
     if (frame.registration) {
         const int layoutPlaneCount = std::max(0, std::min(frame.planeCount, 3));

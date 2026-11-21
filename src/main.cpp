@@ -1,9 +1,14 @@
 #include "ApertarCoreApp.hpp"
+#include "camera/CameraPort.hpp"
+#include "ipc/PrimaryWait.hpp"
 
 #include <csignal>
+#include <cstdlib>
 #include <cerrno>
 #include <fcntl.h>
+#include <filesystem>
 #include <iostream>
+#include <poll.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -33,6 +38,8 @@ void printUsage(const char *argv0)
         << "  --media PATH        Recording media root (default: /media/RAW)\n"
         << "  --web-bind ADDR     Web control bind address (default: 0.0.0.0)\n"
         << "  --web-port PORT     Web control port, 0 disables it (default: 8000)\n"
+        << "  --camera PORT       Camera by port: cam0 (default), cam1, or an I2C node such as i2c@88000\n"
+        << "  --check-dual        Exit 0 when a sensor is on cam0 and on the --camera port, else 1 (sysfs only)\n"
         << "  --simulate          Run without opening the camera yet\n"
         << "  --help              Show this help\n";
 }
@@ -42,6 +49,7 @@ void printUsage(const char *argv0)
 int main(int argc, char **argv)
 {
     apertar::ApertarCoreApp::Options options;
+    bool checkDual = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -51,6 +59,10 @@ int main(int argc, char **argv)
         }
         if (arg == "--simulate") {
             options.simulateCamera = true;
+            continue;
+        }
+        if (arg == "--check-dual") {
+            checkDual = true;
             continue;
         }
         if (arg == "--socket" && i + 1 < argc) {
@@ -63,6 +75,10 @@ int main(int argc, char **argv)
         }
         if (arg == "--web-bind" && i + 1 < argc) {
             options.webBindAddress = argv[++i];
+            continue;
+        }
+        if (arg == "--camera" && i + 1 < argc) {
+            options.camera = argv[++i];
             continue;
         }
         if (arg == "--web-port" && i + 1 < argc) {
@@ -86,6 +102,15 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    // The cam1 unit's ExecCondition: exit 1 makes systemd skip the secondary without a failure or a restart. sysfs and
+    // config.txt only, never libcamera: a camera-manager start would disturb the sensor the primary runs.
+    if (checkDual) {
+        std::string why;
+        const bool dual = apertar::cameraport::dualSensorsPresent({}, options.camera, 20000, 500, &why);
+        std::cerr << why << "\n";
+        return dual ? 0 : 1;
+    }
+
     // Camera shutdown takes locks and joins threads: never do it inside a
     // signal handler, which may interrupt a thread already holding those locks.
     int signalPipe[2];
@@ -103,9 +128,67 @@ int main(int argc, char **argv)
     ::sigaction(SIGINT, &action, nullptr);
     ::sigaction(SIGTERM, &action, nullptr);
 
+    // A secondary reads only its own hardware file: with none, every reader would fall back to the primary's
+    // /home/pi/apertar-hardware.conf and take its [storage] buffer and [camera] keys. Exit 2, a launch error, which the
+    // cam1 unit does not restart.
+    if (apertar::cameraport::isSecondary(options.camera)) {
+        const char *hardwareConfig = std::getenv("APERTAR_HARDWARE_CONFIG");
+        std::error_code error;
+        if (!hardwareConfig || !*hardwareConfig || !std::filesystem::is_regular_file(hardwareConfig, error)) {
+            std::cerr << "ApertarCore camera " << options.camera << ": no hardware file of its own ("
+                      << (hardwareConfig && *hardwareConfig ? std::string(hardwareConfig) + " not found"
+                                                            : std::string("APERTAR_HARDWARE_CONFIG not set"))
+                      << "); install config/apertar-hardware-cam1.conf there. A second Core never reads the primary's file.\n";
+            return 2;
+        }
+    }
+
+    // A secondary with no sensor on its port exits 0 before app.start(): start() restores the low-power state and
+    // starts threads before the camera, and a failed start exits 1, which Restart=on-failure would loop. sysfs only,
+    // no libcamera call, so the primary's camera is never touched.
+    if (!options.simulateCamera && !options.camera.empty() && options.camera != "cam0") {
+        const auto node = apertar::cameraport::resolve({}, options.camera);
+        std::string why;
+        if (!apertar::cameraport::secondaryHasSensor({}, options.camera,
+                                                     node.valid && apertar::cameraport::configNamesPort({}, node.port),
+                                                     20000, 500, &why)) {
+            std::cerr << why << "\n";
+            return 0;
+        }
+    }
+
+    // Start order (design 3.4, P10): a secondary waits for the primary's socket to answer (30 s), then for the primary
+    // to be idle, before its first camera start; a signal ends the wait. Without the primary's socket it starts after
+    // 30 s without the idle wait. The primary does not wait.
+    if (!options.simulateCamera && apertar::cameraport::isSecondary(options.camera)) {
+        std::cerr << "ApertarCore secondary wait: up to " << apertar::primarywait::kSocketTimeoutMs / 1000
+                  << " s for the primary's socket " << apertar::primarywait::kPrimarySocket
+                  << ", then until the primary is idle\n";
+        long waitedMs = 0;
+        const auto outcome = apertar::primarywait::waitForPrimaryIdle(
+            apertar::primarywait::kPrimarySocket, apertar::primarywait::kSocketTimeoutMs, apertar::primarywait::kPollMs,
+            [&](int ms) {
+                pollfd stop{signalPipe[0], POLLIN, 0};
+                return ::poll(&stop, 1, ms) > 0;
+            }, &waitedMs);
+        if (outcome == apertar::primarywait::Outcome::Cancelled) {
+            std::cerr << "ApertarCore secondary wait: stopped by a signal\n";
+            return 0;
+        }
+        if (outcome == apertar::primarywait::Outcome::TimedOut)
+            std::cerr << "ApertarCore secondary wait: the primary's socket did not answer within "
+                      << apertar::primarywait::kSocketTimeoutMs / 1000 << " s; starting without the idle wait\n";
+        else
+            std::cerr << "ApertarCore secondary wait: the primary is idle after " << waitedMs << " ms; starting\n";
+    }
+
     apertar::ApertarCoreApp app(options);
 
     if (!app.start()) {
+        if (apertar::cameraport::busyExitRequested().load()) {
+            std::cerr << "ApertarCore camera " << options.camera << " is held by another Core; exiting.\n";
+            return 0;
+        }
         std::cerr << "ApertarCore failed to start.\n";
         return 1;
     }
