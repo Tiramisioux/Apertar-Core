@@ -285,6 +285,18 @@ int main()
         check(!bad.ok && bad.text.empty() && bad.error.find("891000000") != std::string::npos, "IMX283 at 891 MHz is refused");
     }
     {
+        // DB-79: the owner's commented #dtoverlay=imx283,always-on is reused with always-on kept, when it sits in the
+        // same section as the other sensor lines; one in another section is not reused (the firmware reads sections apart).
+        const std::string cam0Line = "\ndtoverlay=imx585,cam0,link-frequency=891000000\n";
+        std::string same_section = kApertar;
+        same_section.replace(same_section.find(cam0Line), cam0Line.size(), cam0Line + "#dtoverlay=imx283,always-on\n");
+        Request q = same(s);
+        q.sensors["cam1"] = "imx283";
+        const auto r = applyRequest(same_section, q, facts(board5));
+        check(r.ok && r.changes.size() == 1 && lineOf(r.text, 43) == "dtoverlay=imx283,always-on",
+              "IMX283 on cam1: the commented line in the board section is reused, always-on kept");
+    }
+    {
         Request q = same(s);
         q.sensors["cam1"] = "imx283";
         const auto r = applyRequest(kApertar, q, facts(board5));
