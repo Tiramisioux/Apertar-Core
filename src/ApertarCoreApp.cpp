@@ -5189,10 +5189,10 @@ pcie_controller=1000110000.pcie
 # Write buffer: frames = the original queue (12 frames; a frame is dropped when it is full), ram = a large RAM queue
 # sized from the free memory at the start of a take (CineMate style). ram refuses itself when it would be smaller
 # than the original queue. Takes effect at the next take.
-buffer=frames
-buffer_ram_fraction=0.6
-buffer_ram_floor_mb=512
-buffer_ram_max_fraction=0.5
+# buffer=frames
+# buffer_ram_fraction=0.6
+# buffer_ram_floor_mb=512
+# buffer_ram_max_fraction=0.5
 # Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
 # buffer_stop_percent=90
 # Frames per folder: 0 keeps every frame of a take in its clip folder; 100 to 100000 starts a new part_NNN folder inside
@@ -5213,8 +5213,8 @@ buffer_ram_max_fraction=0.5
 # Highest ISO in Clear HDR, per sensor mode; 0 = no cap. SDR is never capped. Restart Core after a change.
 # 12-bit: the sensor merges HG/LG only up to gain code 57 (17.1 dB) = ISO 720.
 # 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
-clear_hdr_iso_max_12bit=720
-clear_hdr_iso_max_16bit=1585
+# clear_hdr_iso_max_12bit=720
+# clear_hdr_iso_max_16bit=1585
 
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
