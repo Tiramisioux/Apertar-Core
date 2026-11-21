@@ -196,7 +196,7 @@ The card edits the file the way its own comments say: it comments and uncomments
 | Onboard audio | `dtparam=audio=on` in `[all]` |
 | Display | the DPI overlays at the end of the file |
 
-**Edit file** opens the whole file as text, for the lines the card has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup.
+Core writes only the lines the card's controls generate. Editing the whole file as text is off, as in Apertar 1.6.0, which has no such card: a `text` request is refused with "config.txt is edited as text over ssh, not here." With `APERTAR_BOOT_CONFIG_TEXT=on` in Core's environment (a systemd drop-in with `Environment=`, so it is set over ssh only) the card adds **Edit file**, for the lines it has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup. With the switch on, anyone who can reach the WebUI can write any `config.txt` as root (`kernel=`, `cmdline=`, `initramfs` included); leave it off on a camera others can reach.
 
 A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included.
 
@@ -214,7 +214,7 @@ If the camera does not come back after a change, put the card in a reader and co
 
 The card saves with the `set_boot_config` command through `POST /api/command`, the same door as every other setting; `GET /api/boot-config` reads the file.
 
-Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and optionally `text` (the whole file as edited; the other fields go on top of it).
+Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and, only with `APERTAR_BOOT_CONFIG_TEXT=on`, `text` (the whole file as edited; the other fields go on top of it).
 
 ## Building From Source
 

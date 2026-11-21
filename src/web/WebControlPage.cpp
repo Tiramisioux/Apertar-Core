@@ -22025,7 +22025,7 @@ std::string_view webControlPageHtml()
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
     const bootConfig = {
       linkNote: "",           // the two IMX585 lines differed in config.txt: Save writes Camera 0's rate on both
-      payload: null,          // the last GET: path, revision, state, drm, text, helper
+      payload: null,          // the last GET: path, revision, state, drm, text, helper, text_editable (Edit file is offered)
       form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
       loading: false,
       saving: false,
@@ -22827,6 +22827,7 @@ std::string_view webControlPageHtml()
       const bootState = payload ? payload.state : null;
       const editable = !!(bootState && bootState.editable);
       const dirty = bootConfigDirty();
+      document.getElementById("editBootConfigButton").classList.toggle("hidden", !(payload && payload.text_editable));
       setText("bootConfigStatePill", bootConfig.loading ? "Loading" : bootConfig.saving ? "Saving" : bootConfig.waiting ? "Rebooting"
         : !payload ? "Not Loaded" : !editable ? "Read Only" : dirty ? "Unsaved" : bootConfig.savedPendingReboot ? "Reboot to Apply" : "Ready");
       document.getElementById("saveBootConfigButton").disabled = !editable || !dirty || bootConfigBusy();

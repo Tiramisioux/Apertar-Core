@@ -3658,6 +3658,15 @@ std::filesystem::path bootConfigPath()
     return kBootConfigPath;
 }
 
+// APERTAR_BOOT_CONFIG_TEXT=on: the card may save config.txt as text typed by hand (Edit file, the text field). Off, as in
+// 1.6.0, Core writes only the lines its own controls generate, so nobody who can reach the WebUI can hand it a file to
+// install as root. Read from Core's environment, so it is set over ssh only, as APERTAR_SCRIPT_PATHS=ssh.
+bool bootConfigTextEnabled()
+{
+    const char *value = std::getenv("APERTAR_BOOT_CONFIG_TEXT");
+    return value && std::string(value) == "on";
+}
+
 bool fsyncPath(const std::filesystem::path &path)
 {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -3842,6 +3851,7 @@ std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts
     return "{\"path\":" + bootconf::jsonString(path.string()) + ",\"readable\":" + (readable ? "true" : "false") +
            ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(text)) +
            ",\"helper\":" + (::access(kBootConfigHelper, X_OK) == 0 ? "true" : "false") +
+           ",\"text_editable\":" + (bootConfigTextEnabled() ? "true" : "false") +
            ",\"backup_path\":" + bootconf::jsonString(std::filesystem::exists(backup, ec) ? backup : std::string()) +
            ",\"state\":" + bootconf::stateJson(state, facts) + ",\"drm\":" + drmConnectorsJson() +
            ",\"text\":" + bootconf::jsonString(text) + "}";
@@ -3910,6 +3920,8 @@ std::string bootConfigGet(int id)
 std::string bootConfigSet(const ControlCommand &command)
 {
     const std::optional<std::string> revision = command.string("revision");
+    if (command.string("text") && !bootConfigTextEnabled())
+        return errorReply(command.id, "config.txt is edited as text over ssh, not here.");
     bootconf::Request request;
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
