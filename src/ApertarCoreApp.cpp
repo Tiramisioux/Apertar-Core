@@ -5173,6 +5173,11 @@ std::string defaultHardwareConfigTemplate()
 # INA219 I2C bus example: /dev/i2c-4 -> bus=4
 # Address can be decimal or hex.
 
+[network]
+# Hotspot fallback wait in seconds (0-86400); 0 removes the delay.
+# An established Wi-Fi connection is left alone. Restart apertar-network.service after changes.
+hotspot_delay_seconds=60
+
 [ina219]
 enabled=true
 bus=4
@@ -5264,6 +5269,9 @@ sync_offset_ms=0
 enabled=false
 bus=1
 address=0x20
+active_low=true
+poll_ms=40
+debounce_ms=60
 # A pin that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
 # invert_on_start=false
 
@@ -5273,20 +5281,57 @@ address=0x20
 enabled=false
 bus=1
 address=0x49
+poll_ms=30
+debounce_ms=60
+invert_direction=false
+reset_on_start=false
+max_events_per_poll=8
+encoder0_cw=iso_up
+encoder0_ccw=iso_down
+encoder0_press=iso
+encoder1_cw=shutter_up
+encoder1_ccw=shutter_down
+encoder1_press=shutter
+encoder2_cw=wb_up
+encoder2_ccw=wb_down
+encoder2_press=wb
+encoder3_cw=fps_up
+encoder3_ccw=fps_down
+encoder3_press=resolution
 
-[gpio]
+[gpio_buttons]
 # GPIO button actions use the same names as [pcf8574].
+# Grove digital ports use the BCM number printed on the Grove Base HAT, for example D5 -> d5.
 # Example: d17=recindicatorled reserves GPIO17 as the recording LED output.
 enabled=false
+# chip=auto is the Pi's 40-pin header; another chip by path, for example /dev/gpiochip13.
+chip=auto
+active_low=true
+pull=up
+poll_ms=12
+debounce_ms=60
 # A button that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
 # invert_on_start=false
+# Example buttons (GPIO 5 and 6 are also the pins of the [gpio_encoders] example):
+# d5=capture
+# d6=eject
 
 [gpio_encoders]
 # Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].
+# For Grove Encoder, connect SIGA/SIGB to the two configured digital pins.
+# chip, active_low, pull, poll_ms and debounce_ms are shared with [gpio_buttons]: set them there.
 enabled=false
+# Example encoder:
+# encoder0_a=5
+# encoder0_b=6
+# encoder0_cw=iso_up
+# encoder0_ccw=iso_down
+# encoder0_press_gpio=13
+# encoder0_press=iso
+# encoder0_steps_per_event=4
 
 [gpio_switches]
-# Optional two- and three-way switches on GPIO pins, read like [gpio] (chip, pull, active_low, debounce_ms).
+# Optional two- and three-way switches on GPIO pins; chip, pull, active_low and debounce_ms come from [gpio_buttons].
 # Two-way: switch0_pins=17, switch0_on=..., switch0_off=...
 # Three-way: switch1_pins=22,23, switch1_position0=... (22 closed), switch1_position1=... (middle), switch1_position2=... (23 closed)
 # The position a switch is in is applied when Core starts.
@@ -5294,9 +5339,19 @@ enabled=false
 
 [grove_analog]
 # Optional Grove Base HAT analog controls: potentiometers, sliders, rotary angle sensors.
+# ADC address is usually 0x04 on STM32 HATs and 0x08 on newer MM32 HATs.
 enabled=false
 bus=1
 address=0x04
+poll_ms=80
+deadband=32
+emit_on_start=false
+a0=wb
+a0_min=2500
+a0_max=8000
+a0_step=50
+a1=iso
+a1_mode=preset
 
 [trigger_output]
 # Optional capture trigger pulse for DIY hot shoe, flash sync, tally, or accessories.
