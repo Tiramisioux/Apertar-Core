@@ -22019,7 +22019,7 @@ std::string_view webControlPageHtml()
       }
     }
 
-    // ---- Boot Config card (System pane): /boot/firmware/config.txt through /api/boot-config ----------------------
+    // ---- Boot Config card (System pane): /boot/firmware/config.txt, read by /api/boot-config, saved by set_boot_config --
     // Core reads the file into a state (sensor per connector, link frequency, buses, RP1 clock, DPI display) and edits
     // the lines already there; this card shows that state, asks Core what a change would do (dry_run) before saving,
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
@@ -22200,15 +22200,13 @@ std::string_view webControlPageHtml()
       return Object.assign(body, extra || {});
     }
 
+    // set_boot_config through /api/command, like every other setter. A refusal comes back as { ok: false, error }.
     async function bootConfigPost(body, revision) {
-      const headers = { "Content-Type": "application/json" };
+      const payload = Object.assign({ cmd: "set_boot_config" }, body);
       if (revision)
-        headers["X-Apertar-Revision"] = revision;
+        payload.revision = revision;
       try {
-        const response = await fetch("/api/boot-config", { method: "POST", headers, body: JSON.stringify(body), cache: "no-store" });
-        const result = await response.json();
-        result.httpStatus = response.status;
-        return result;
+        return await sendCommand(payload);
       } catch (error) {
         return { ok: false, error: (error && error.message) || "Could not reach the camera." };
       }
@@ -23034,8 +23032,7 @@ std::string_view webControlPageHtml()
       bootConfig.saving = false;
       if (!result.ok) {
         hideBootConfigPanels();
-        if (result.code === "stale" || result.code === "old_page")
-          await loadBootConfig(true, false, true);   // the card keeps its choices; Save asks again against the new file
+        await loadBootConfig(true, false, true);   // the card keeps its choices; Save asks again against the file as it is now
         showBootConfigMessage(result.error || "Could not save config.txt.");
         renderBootConfig();
         return;

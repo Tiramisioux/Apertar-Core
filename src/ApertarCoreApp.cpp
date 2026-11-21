@@ -3658,13 +3658,6 @@ std::filesystem::path bootConfigPath()
     return kBootConfigPath;
 }
 
-// One writer at a time: the fan mode and the Boot config card both read, change and replace config.txt.
-std::mutex &bootConfigMutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
 bool fsyncPath(const std::filesystem::path &path)
 {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -3774,7 +3767,6 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
     const std::string existing = readTextFileRaw(bootConfigPath());
     if (existing.empty()) {
         if (errorMessage)
@@ -3906,49 +3898,42 @@ bool bootConfigRequestFrom(const ControlCommand &command, bootconf::Request *req
     return true;
 }
 
-struct BootConfigReply {
-    int status = 200;
-    std::string body;
-};
-
-BootConfigReply bootConfigGet(int id)
+// GET /api/boot-config: read only, no lock (the command that writes holds commandMutex_), as GET /api/config.
+std::string bootConfigGet(int id)
 {
     const bootconf::Facts facts = bootConfigFacts();
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
-    return {200, okReply(id, "\"boot_config\":" + bootConfigJson(readTextFileRaw(bootConfigPath()), facts))};
+    return okReply(id, "\"boot_config\":" + bootConfigJson(readTextFileRaw(bootConfigPath()), facts));
 }
 
-// set_boot_config / POST /api/boot-config. dry_run=true answers what would change without writing (the card's review).
-// A save carries the revision it was made against; a display change needs confirm_display=true (the DPI guard).
-BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional<std::string> &revision, bool browser)
+// set_boot_config. dry_run=true answers what would change without writing (the card's review). A save carries the
+// revision it was made against; a display change needs confirm_display=true (the DPI guard).
+std::string bootConfigSet(const ControlCommand &command)
 {
+    const std::optional<std::string> revision = command.string("revision");
     bootconf::Request request;
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
-        return {400, errorReplyBody(command.id, error, "\"code\":\"invalid\"")};
+        return errorReplyBody(command.id, error, "\"code\":\"invalid\"");
     const auto dryRunValue = boolFieldValue(command.string("dry_run").value_or("false"));
     const auto confirmDisplayValue = boolFieldValue(command.string("confirm_display").value_or("false"));
     if (!dryRunValue || !confirmDisplayValue)
-        return {400, errorReplyBody(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.",
-                                    "\"code\":\"invalid\"")};
+        return errorReplyBody(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.",
+                              "\"code\":\"invalid\"");
     const bool dryRun = *dryRunValue;
     const bool confirmDisplay = *confirmDisplayValue;
 
     const bootconf::Facts facts = bootConfigFacts();
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
     const std::filesystem::path path = bootConfigPath();
     const std::string text = readTextFileRaw(path);
     if (text.empty())
-        return {500, errorReplyBody(command.id, "Could not read " + path.string() + ".", "\"code\":\"unreadable\"")};
+        return errorReplyBody(command.id, "Could not read " + path.string() + ".", "\"code\":\"unreadable\"");
     const std::string current = bootconf::revisionOf(text);
     if (!dryRun) {
-        if (!revision && browser)
-            return {409, errorReplyBody(command.id, "Apertar was updated: reload this page.", "\"code\":\"old_page\"")};
         if (revision && *revision != current)
-            return {409, errorReplyBody(command.id,
-                                        "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
-                                        "Reload the card and choose again.",
-                                        "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current))};
+            return errorReplyBody(command.id,
+                                  "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
+                                  "Reload the card and choose again.",
+                                  "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current));
     }
 
     // text: the file as the operator edited it on the card. The card's choices go on top of that text, and the result
@@ -3957,11 +3942,11 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
     if (edited) {
         const std::string problem = bootconf::textProblem(*edited);
         if (!problem.empty())
-            return {400, errorReplyBody(command.id, problem, "\"code\":\"invalid\"")};
+            return errorReplyBody(command.id, problem, "\"code\":\"invalid\"");
     }
     bootconf::ApplyResult result = bootconf::applyRequest(edited ? *edited : text, request, facts);
     if (!result.ok)
-        return {400, errorReplyBody(command.id, result.error, "\"code\":\"refused\"")};
+        return errorReplyBody(command.id, result.error, "\"code\":\"refused\"");
     if (edited) {
         result.before = bootconf::readState(bootconf::parseDocument(text, facts.board), facts.board);
         result.changes = bootconf::lineChanges(text, result.text);
@@ -3971,26 +3956,26 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
         ",\"display_changed\":" + (result.displayChanged ? "true" : "false") +
         ",\"text\":" + bootconf::jsonString(result.text) + ",\"state\":" + bootconf::stateJson(result.after, facts);
     if (dryRun)
-        return {200, okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" +
-                                             bootconf::jsonString(current) + ",\"drm\":" + drmConnectorsJson())};
+        return okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" +
+                                       bootconf::jsonString(current) + ",\"drm\":" + drmConnectorsJson());
     if (result.displayChanged && !confirmDisplay)
-        return {409, errorReplyBody(command.id,
-                                    "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
-                                    "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
-                                    "Send confirm_display=true to save anyway.",
-                                    "\"code\":\"confirm_display\",\"drm\":" + drmConnectorsJson())};
+        return errorReplyBody(command.id,
+                              "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
+                              "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
+                              "Send confirm_display=true to save anyway.",
+                              "\"code\":\"confirm_display\",\"drm\":" + drmConnectorsJson());
     if (result.changes.empty())
-        return {200, okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current))};
+        return okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current));
 
     std::string how;
     bool denied = false;
     if (!writeBootConfigText(result.text, &error, &how, &denied))
-        return {denied ? 403 : 500, errorReplyBody(command.id, error, denied ? "\"code\":\"permission\"" : "\"code\":\"write_failed\"")};
+        return errorReplyBody(command.id, error, denied ? "\"code\":\"permission\"" : "\"code\":\"write_failed\"");
     std::cerr << "ApertarCore boot config: wrote " << path.string() << " (" << result.changes.size()
               << " line(s), via " << how << "); takes effect at the next reboot\n";
-    return {200, okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
-                                         ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(readTextFileRaw(path))) +
-                                         ",\"reboot_required\":true")};
+    return okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
+                                   ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(readTextFileRaw(path))) +
+                                   ",\"reboot_required\":true");
 }
 
 std::string normalizedPowerError(const std::string &errorMessage)
@@ -9779,42 +9764,11 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
-    // System pane, Boot config card: /boot/firmware/config.txt (bootConfigGet / bootConfigSet above).
+    // System pane, Boot config card: reads /boot/firmware/config.txt (bootConfigGet above); it saves with set_boot_config.
     if (request.method == "GET" && request.path == "/api/boot-config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
-        const BootConfigReply reply = bootConfigGet(-1);
-        response.status = reply.status;
-        response.body = reply.body;
-        return response;
-    }
-
-    if (request.method == "POST" && request.path == "/api/boot-config") {
-        WebServer::Response response;
-        response.contentType = "application/json; charset=utf-8";
-        // The body is the card's fields as one JSON object; the command parser wants a name, so it gets one.
-        std::string payload = request.body;
-        const size_t brace = payload.find('{');
-        if (brace == std::string::npos) {
-            response.status = 400;
-            response.body = errorReply(-1, "Expected a JSON object.");
-            return response;
-        }
-        const size_t next = payload.find_first_not_of(" \t\r\n", brace + 1);
-        const bool empty = next != std::string::npos && payload[next] == '}';
-        payload.insert(brace + 1, empty ? "\"cmd\":\"set_boot_config\"" : "\"cmd\":\"set_boot_config\",");
-        const ParseResult parsed = parseControlCommand(payload);
-        if (!parsed.ok) {
-            response.status = 400;
-            response.body = errorReply(-1, parsed.error);
-            return response;
-        }
-        const auto revisionHeader = request.headers.find("x-apertar-revision");
-        const std::optional<std::string> revision = revisionHeader != request.headers.end()
-            ? std::optional<std::string>(revisionHeader->second) : parsed.command.string("revision");
-        const BootConfigReply reply = bootConfigSet(parsed.command, revision, request.headers.count("origin") > 0);
-        response.status = reply.status;
-        response.body = reply.body;
+        response.body = bootConfigGet(-1);
         return response;
     }
 
@@ -16017,10 +15971,10 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
     }
 
     if (command.name == "get_boot_config")
-        return bootConfigGet(command.id).body;
+        return bootConfigGet(command.id);
 
     if (command.name == "set_boot_config")
-        return bootConfigSet(command, command.string("revision"), false).body;
+        return bootConfigSet(command);
 
     if (command.name == "set_fan_mode") {
         const auto value = command.string("value");
