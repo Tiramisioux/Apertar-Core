@@ -21016,7 +21016,7 @@ std::string_view webControlPageHtml()
       state.configSaveInFlight = true;
       updateConfigEditorControls();
       try {
-        // The revision the text was loaded at: Core refuses a save over a newer file, and an old tab without one.
+        // The revision the text was loaded at: Core refuses a save over a newer file.
         const headers = { "Content-Type": "text/plain; charset=utf-8" };
         if (state.configRevision)
           headers["X-Apertar-Revision"] = state.configRevision;
@@ -21026,11 +21026,8 @@ std::string_view webControlPageHtml()
           body: text,
         });
         const payload = await response.json();
-        if (!payload.ok) {
-          const failure = new Error(payload.error || "Could not save config.");
-          failure.payload = payload;
-          throw failure;
-        }
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not save config.");
         state.configDirty = false;
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
@@ -21042,13 +21039,7 @@ std::string_view webControlPageHtml()
           showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
       } catch (error) {
         // A refused save leaves the text in the box (no reload), so nothing typed is lost.
-        const payload = error && error.payload;
-        if (payload) {
-          const found = payload.new_errors && payload.new_errors.length > 0 ? payload.new_errors : payload.issues;
-          const kept = payload.code === "stale" || payload.code === "conflict" || payload.code === "merge_review"
-            ? " Your text stays in the box. Press Reload Config to see the newer file." : "";
-          showConfigIssues(error.message + kept, found);
-        }
+        showConfigIssues(error.message || "Could not save config.", []);
         showToast(error.message || "Could not save config.", true);
       } finally {
         state.configSaveInFlight = false;

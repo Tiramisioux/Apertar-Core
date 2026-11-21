@@ -5143,21 +5143,6 @@ std::string controlsIssuesJson(const std::vector<hwconf::Issue> &issues)
     return out.str();
 }
 
-std::string controlsConflictsJson(const std::vector<hwconf::Conflict> &conflicts)
-{
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < conflicts.size(); ++i) {
-        const hwconf::Conflict &conflict = conflicts[i];
-        out << (i > 0 ? "," : "") << "{\"section\":\"" << escapeJson(conflict.section) << "\""
-            << ",\"key\":\"" << escapeJson(conflict.key) << "\""
-            << ",\"base\":\"" << escapeJson(conflict.base) << "\""
-            << ",\"current\":\"" << escapeJson(conflict.current) << "\"}";
-    }
-    out << ']';
-    return out.str();
-}
-
 std::string controlsReplacedJson(const hardware::ReplacedInfo &replaced)
 {
     std::ostringstream out;
@@ -9077,16 +9062,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        // The page names the revision it loaded. A browser without one is a tab from before the update; a script
-        // (no Origin) keeps last-writer-wins.
+        // The page names the revision it loaded, to be refused when the file is newer. Without it the text is
+        // saved over the current file, as in 1.6.0.
         hardware::HardwareConfigStore &store = hardware::configStore();
         const auto revisionHeader = request.headers.find("x-apertar-revision");
-        if (revisionHeader == request.headers.end() && request.headers.count("origin")) {
-            response.status = 409;
-            response.body = errorReplyBody(-1, "Apertar was updated: reload this page. Your text stays in the box.",
-                                           "\"code\":\"old_page\"");
-            return response;
-        }
         const std::string base = revisionHeader != request.headers.end() ? revisionHeader->second : store.currentRevision();
 
         hardware::StoreFlags flags;
@@ -9096,15 +9075,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             const bool changed = result.needsReview || result.code == "stale" || result.code == "conflict" ||
                 result.code == "being_written" || result.code == "locked";
             response.status = changed ? 409 : 400;
-            const std::string code = result.needsReview ? "merge_review" : result.code;
             const std::string message = result.needsReview
                 ? "The file changed since you loaded it. Reload; your text stays in the box."
                 : result.error;
-            response.body = errorReplyBody(-1, message,
-                "\"code\":\"" + escapeJson(code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
+            response.body = errorReply(-1, message);
             return response;
         }
         if (result.written) {
