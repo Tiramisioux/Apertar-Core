@@ -11732,6 +11732,30 @@ bool CameraController::setFps(double fps)
     return applyFpsStepLocked(effectiveFps, rampingTake, /*commit=*/!rampingTake, rungChange ? &requested : nullptr);
 }
 
+bool CameraController::ladderStepInTake(double fps) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!recording_ || !settings_.fpsSpeedRamp || settings_.photoModeEnabled ||
+        isProcessedVideoFormat(settings_.recordingFormat) || !ladderActiveForLocked(settings_) ||
+        std::abs(fps - settings_.fps) < 0.0001)
+        return false;
+    // Only when the running resolution cannot hold it: a ramp inside the mode's range stays one clip (a ramp down
+    // returns to a better resolution after the take, restoreFpsAfterRampLocked).
+    CaptureSettings fields = settings_;
+    fillLadderFieldsLocked(fields);
+    if (fields.fpsTakeMax <= 0.0 || fps <= fields.fpsTakeMax + 0.0001)
+        return false;
+    CaptureSettings probe = settings_;
+    probe.fps = fps;
+    const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, probe);
+    const int index = ladder::chooseMode(candidates, fps);
+    if (index < 0)
+        return false;
+    const ladder::Rung &rung = candidates[static_cast<size_t>(index)].mode;
+    return rung.width != settings_.resolution.width || rung.height != settings_.resolution.height ||
+        rung.bits != settings_.rawBitDepth || rung.clearHdr != settings_.clearHdr;
+}
+
 bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake, bool commit, const CaptureSettings *rung)
 {
     CaptureSettings next = settings_;

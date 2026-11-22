@@ -106,6 +106,9 @@ public:
 
     bool setResolution(Resolution resolution);
     bool setFps(double fps);
+    // A ramping take with Dynamic resolution on: is this FPS above what the running mode holds, and held by another? Then the app ends the take,
+    // sets the FPS (the camera moves to that mode) and starts the next take: a new clip at the step.
+    bool ladderStepInTake(double fps) const;
     bool setIso(uint32_t iso);
     bool setIsoAuto(bool enabled = true); // false: lock at the gain in use
     bool setShutterUs(uint32_t shutterUs);

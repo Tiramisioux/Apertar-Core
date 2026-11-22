@@ -14289,6 +14289,28 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         const auto value = command.number("value");
         if (!value)
             return errorReply(command.id, "set_fps requires value.");
+        // Dynamic resolution in a speed ramp: an FPS of another mode ends the take and starts the next one in that
+        // mode (a new clip at the step; about a second without frames while the camera reconfigures). Not while
+        // CAM1 records with it: its take would split on its own clock.
+        if (camera_.ladderStepInTake(*value) && !(cam1Client_.configured() && cam1Client_.snapshot().recording)) {
+            std::cerr << "ApertarCore Dynamic resolution: the ramp reaches " << *value
+                      << " fps, another mode: a new clip at the step\n";
+            ControlCommand stop;
+            stop.name = "record_stop";
+            const std::string stopped = handleCommandLocal(stop);
+            if (!jsonkeys::boolOf(stopped, "ok").value_or(false))
+                return errorReply(command.id, "Dynamic resolution: the take did not stop for the step: " +
+                                                  jsonkeys::stringOf(stopped, "error").value_or("unknown error"));
+            if (!camera_.setFps(*value))
+                return errorReply(command.id, camera_.lastError());
+            ControlCommand start;
+            start.name = "record_start";
+            const std::string started = handleCommandLocal(start);
+            if (!jsonkeys::boolOf(started, "ok").value_or(false))
+                return errorReply(command.id, "Dynamic resolution: the camera moved to the new mode, but the next clip "
+                                              "did not start: " + jsonkeys::stringOf(started, "error").value_or("unknown error"));
+            return okReply(command.id, settingsBody(camera_.settings()));
+        }
         return camera_.setFps(*value)
             ? okReply(command.id, settingsBody(camera_.settings()))
             : errorReply(command.id, camera_.lastError());
