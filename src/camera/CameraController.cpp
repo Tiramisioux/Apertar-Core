@@ -3212,10 +3212,6 @@ std::string compressionLabel(const CaptureSettings &settings)
     return settings.cdngCompression == CdngCompression::LosslessJpeg ? "Lossless JPEG" : "Uncompressed";
 }
 
-constexpr const char *kLadderOwnsMode =
-    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Modes > Mode Ladder) "
-    "to choose it by hand.";
-
 constexpr const char *kLadderOwnsCompression =
     "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
     "(Settings > Modes > Mode Ladder) to choose it by hand.";
@@ -11569,10 +11565,7 @@ bool CameraController::setResolution(Resolution resolution)
         setErrorLocked("Resolution changes are blocked while recording.");
         return false;
     }
-    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
-        setErrorLocked(kLadderOwnsMode);
-        return false;
-    }
+    const bool ladderWasActive = ladderActiveForLocked(settings_);   // a manual pick pins the mode (ladderOverride_)
 
     if (!validateResolution(resolution))
         return false;
@@ -11604,8 +11597,13 @@ bool CameraController::setResolution(Resolution resolution)
 
     CaptureSettings next = settings_;
     next.resolution = resolution;
-    ladderOverride_ = false;      // a real resolution change ends a Clear HDR override
-    return applySettingsLocked(next, true);
+    const bool overrideBefore = ladderOverride_;
+    ladderOverride_ = ladderWasActive || overrideBefore;   // pinned until the next fps change
+    if (!applySettingsLocked(next, true)) {
+        ladderOverride_ = overrideBefore;
+        return false;
+    }
+    return true;
 }
 
 bool CameraController::setFps(double fps)
@@ -11970,6 +11968,8 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
     }
     out.limitBy = cap.by;
     out.limitWhy = sustained::whyText(context, mode, cap, ceiling);
+    if (ladderOverride_ && modeLadder_.enabled)
+        out.limitWhy += " You chose this mode: Dynamic resolution waits for the next fps change.";
 }
 
 // The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
@@ -12707,10 +12707,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
         setErrorLocked("Raw bit depth changes are blocked while recording.");
         return false;
     }
-    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
-        setErrorLocked(kLadderOwnsMode);
-        return false;
-    }
+    const bool ladderWasActive = ladderActiveForLocked(settings_);   // a manual pick pins the mode (ladderOverride_)
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
         ? session_->sensorFamily()
@@ -12723,8 +12720,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
             emitSettingsEventLocked();
             return true;
         }
-        ladderOverride_ = false;      // a real bit depth change ends a Clear HDR override
-        return applySettingsLocked(next, true);
+        return applySettingsLocked(next, true);   // 10-bit by rule: no choice to pin
     }
 
     CaptureSettings requested = settings_;
@@ -12738,11 +12734,13 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
-    // A real bit depth change ends a Clear HDR override, except the 16-bit that turning Clear HDR on is followed by
-    // (the hardware clear_hdr action sends it right after set_clear_hdr; the touch UI stays at 12-bit).
-    if (!(settings_.clearHdr && requested.rawBitDepth == 16))
-        ladderOverride_ = false;
-    return applySettingsLocked(next, true);
+    const bool overrideBefore = ladderOverride_;
+    ladderOverride_ = ladderWasActive || overrideBefore;   // pinned until the next fps change
+    if (!applySettingsLocked(next, true)) {
+        ladderOverride_ = overrideBefore;
+        return false;
+    }
+    return true;
 }
 
 bool CameraController::setClearHdr(bool enabled)
@@ -12752,8 +12750,8 @@ bool CameraController::setClearHdr(bool enabled)
         setErrorLocked("Clear HDR changes are blocked while recording.");
         return false;
     }
-    // An explicit choice beats the ladder: it holds the mode until fps, resolution, format, bit depth,
-    // Ramp-ready or the ladder itself change (they end ladderOverride_).
+    // An explicit choice beats Dynamic resolution: it pins the mode until the fps, the record format or the
+    // enabled list changes, or the switch goes off (they end ladderOverride_).
     const bool ladderWasActive = ladderActiveForLocked(settings_);
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
