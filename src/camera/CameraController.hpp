@@ -155,7 +155,7 @@ public:
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
-    // T34: the mode ladder. Any of rungs / enabled / rampReady / aspects; dryRun only validates. Fills the
+    // Dynamic resolution. Any of modes / enable_mode / disable_mode / enabled / aspects; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
     // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
     // saved in a take too, with no check or apply (a filter unchanged from Core's copy saves nothing);

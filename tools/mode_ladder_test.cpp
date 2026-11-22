@@ -40,7 +40,7 @@ int main()
         check(l.aspects == std::vector<std::string>{ "16:9", "2.39:1" }, "fromText: the aspects, in their order");
         check(l.enabled && modesText(l.rungs) == kModes, "fromText: enabled and the modes");
         const Ladder all = fromText(true, kModes, "");
-        check(all.aspects.empty() && all.enabled && !all.rampReady && modesText(all.rungs) == kModes,
+        check(all.aspects.empty() && all.enabled && modesText(all.rungs) == kModes,
               "fromText: an empty filter is All");
         const std::vector<std::string> other = { "1:1", "1.33:1", "1.85:1", "2.55:1", "4:3", "3:2", "1.37:1" };   // IMX585 decimals and the Record pane's IMX283 names
         check(fromText(true, kModes, aspectsText(other)).aspects == other, "round trip: 1:1, 1.33:1, 1.85:1, 2.55:1, 4:3, 3:2, 1.37:1");
@@ -52,7 +52,7 @@ int main()
     {
         const Ladder l = parseFile(kOldFile);
         check(l.aspects.empty(), "old file (no aspects= line): All");
-        check(l.enabled && !l.rampReady && modesText(l.rungs) == kModes, "old file: enabled and the rungs as before");
+        check(l.enabled && modesText(l.rungs) == kModes, "old file: enabled and the rungs as before");
         check(parseFile("").aspects.empty() && !parseFile("").enabled, "no file: All, ladder off");
     }
 
@@ -80,7 +80,7 @@ int main()
             const Ladder first = parseFile("aspects=" + value + "\n" + kOldFile);
             const Ladder last = parseFile(kOldFile + "aspects=" + value + "\n");
             const bool ok = first.aspects.empty() && last.aspects.empty() && first.enabled && last.enabled &&
-                            !first.rampReady && modesText(first.rungs) == kModes && modesText(last.rungs) == kModes;
+                            modesText(first.rungs) == kModes && modesText(last.rungs) == kModes;
             check(ok, ("bad aspects (" + why + "): All, rungs and enabled intact").c_str());
         }
         std::string most;   // exactly 32 is fine
@@ -109,7 +109,7 @@ int main()
         Ladder l = parseFile(kOldFile);
         l.aspects = { "16:9" };
         const Ladder back = fromText(l.enabled, modesText(l.rungs), aspectsText(l.aspects));
-        check(back.enabled && !back.rampReady && modesText(back.rungs) == kModes && back.aspects == l.aspects,
+        check(back.enabled && modesText(back.rungs) == kModes && back.aspects == l.aspects,
               "take-over: the old file's values come back from their text");
         check(modesText(parseFile("rungs=" + kRungs + "\n").rungs) == kModes, "parseFile: \"rungs\", the first name of resolutions");
         check(parseFile("enabled=true\nresolutions=1920x1080:12:sdr\nresolutions=3840x2160:99:sdr\n").rungs.empty(),
@@ -125,6 +125,21 @@ int main()
         error.clear();
         check(!parseAspects("16:9,x", out, error) && out.empty() && contains(error, "\"x\""), "parseAspects: a bad label is refused and named");
         check(aspectsText({ "16:9", "2.39:1" }) == "16:9,2.39:1" && aspectsText({}).empty(), "aspectsText: joined by commas, All empty");
+    }
+
+    // ---- parseModes: the old fields are read and dropped ----
+    {
+        std::vector<Rung> out;
+        std::string error;
+        check(parseModes(kRungs, out, error) && modesText(out) == kModes && out[0].compression.empty(),
+              "parseModes: threshold, compression and Log of an old ladder text are dropped");
+        check(parseModes("3840x2160:16:hdr:25:none:log10,1920x1080:10:sdr::lossy_3to1", out, error) && out.size() == 2,
+              "parseModes: the old spellings of the extra fields still read");
+        error.clear();
+        check(!parseModes("3840x2160:99:sdr", out, error) && contains(error, "size, bits"), "parseModes: bits 99 is refused and named");
+        check(!parseModes("3840x2160:16", out, error) && contains(error, "expected WIDTHxHEIGHT:BITS:hdr|sdr"), "parseModes: two fields are refused");
+        check(!parseModes("", out, error) && error == "Add at least one resolution.", "parseModes: an empty text is refused");
+        check(parseModes("3840x2160:16:hdr:1:2:3:4", out, error) == false, "parseModes: seven fields are refused");
     }
 
     // ---- toJson ----
@@ -185,7 +200,7 @@ int main()
         order[0].usable = false;
         check(chooseMode(order, 25) == -1, "chooseMode: no usable mode is -1");
         const Ladder owner = parseFile("enabled=true\nresolutions=3840x2160:16:hdr:25:lossless_jpeg,3840x2160:12:sdr:30:lossless_jpeg\naspects=\n");
-        check(owner.enabled && modesText(owner.rungs) == "3840x2160:16:hdr,3840x2160:12:sdr" && owner.rungs[0].compression.empty() && owner.rungs[0].threshold == 0.0,
+        check(owner.enabled && modesText(owner.rungs) == "3840x2160:16:hdr,3840x2160:12:sdr" && owner.rungs[0].compression.empty(),
               "take-over: the owner's ladder becomes the enabled list, thresholds and compression dropped");
     }
 

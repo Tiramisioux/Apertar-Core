@@ -1,6 +1,6 @@
-// Mode ladder (T34): pure logic, no libcamera, so it compiles and is tested on any host.
-// CameraController owns the sanitiser, so it supplies each rung's state (valid, usable,
-// ceiling) as plain numbers; this file parses, validates, chooses and prints.
+// Dynamic resolution (the mode ladder): pure logic, no libcamera, so it compiles and is tested on any host.
+// CameraController owns the sanitiser, so it supplies each mode's state (valid, usable,
+// ceiling) as plain numbers; this file parses, validates, orders, chooses and prints.
 #pragma once
 
 #include <algorithm>
@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-#include <apertar/core/Types.hpp>
-
 namespace apertar::ladder {
 
 struct Rung {
@@ -19,25 +17,12 @@ struct Rung {
     uint32_t height = 2160;
     uint32_t bits = 12;       // 10, 12 or 16
     bool clearHdr = false;
-    double threshold = 0.0;   // highest FPS this rung serves; 0 = the mode's own ceiling
-    // The raw format of this resolution: "none" (uncompressed cDNG), "lossless_jpeg", "lossy_3to1" or
-    // "lossy_5to1" (lossy DNG, no Clear HDR). Empty = the default: Clear HDR uncompressed, SDR lossless.
+    // The raw format the table gives this mode: "none" (uncompressed cDNG), "lossless_jpeg", or empty = the default:
+    // Clear HDR uncompressed, SDR lossless. Set by CameraController from the table's cell; never saved or parsed.
     std::string compression;
-    CdngLog cdngLog = CdngLog::Off;  // CineMate Log for this resolution: off, or on (one step below the source depth)
 };
 
-inline bool knownCompression(const std::string &c)
-{
-    return c.empty() || c == "none" || c == "lossless_jpeg" || c == "lossy_3to1" || c == "lossy_5to1";
-}
-
-// The depth this resolution stores through CineMate Log, 0 = linear.
-inline unsigned logBits(const Rung &r)
-{
-    return cdngLogStoredBits(r.cdngLog, r.bits);
-}
-
-// What this resolution records with: the named compression, else the default for its class.
+// What this mode records with: the named compression, else the default for its class.
 inline std::string effectiveCompression(const Rung &r)
 {
     return !r.compression.empty() ? r.compression : (r.clearHdr ? "none" : "lossless_jpeg");
@@ -45,7 +30,6 @@ inline std::string effectiveCompression(const Rung &r)
 
 struct Ladder {
     bool enabled = false;     // Dynamic resolution is on: Core honours the table
-    bool rampReady = false;   // gone with the user ladder; always false, removed with the old editor's code
     std::vector<Rung> rungs;  // the enabled modes, empty = the default list; the order of use is tryOrder's
     // The WebUI's aspect filter on Activated sensor modes, the ratios as the card labels them ("16:9",
     // "2.39:1"); empty = All. Kept here so the camera remembers it; it never changes which mode runs.
@@ -85,46 +69,11 @@ inline std::string label(const Rung &r)       // "4K Clear HDR 16-bit", "3840x20
     return size + (r.clearHdr ? " Clear HDR " : " SDR ") + std::to_string(r.bits) + "-bit";
 }
 
-// One number per rung, in and out of takes.
-inline double rungCeiling(const Rung &r, const RungState &s)
-{
-    if (!s.usable || s.modeCeiling <= 0.0)
-        return 0.0;
-    return r.threshold > 0.0 ? std::min(r.threshold, s.modeCeiling) : s.modeCeiling;
-}
-
-inline double ladderCeiling(const Ladder &l, const std::vector<RungState> &s)
-{
-    double top = 0.0;
-    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
-        top = std::max(top, rungCeiling(l.rungs[i], s[i]));
-    return top;
-}
-
-// The first usable rung that reaches targetFps (upper bound inclusive). If none does,
-// the usable rung with the highest ceiling. -1 when no rung is usable.
-inline int chooseRung(const Ladder &l, const std::vector<RungState> &s, double targetFps)
-{
-    int best = -1;
-    double bestCeiling = 0.0;
-    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
-        const double ceiling = rungCeiling(l.rungs[i], s[i]);
-        if (ceiling <= 0.0)
-            continue;
-        if (ceiling >= targetFps - 0.0005)
-            return static_cast<int>(i);
-        if (ceiling > bestCeiling) {
-            bestCeiling = ceiling;
-            best = static_cast<int>(i);
-        }
-    }
-    return best;
-}
-
-// Resolution text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]], joined by ",".
-// log = CineMate Log on (one step down); log10 and log8 are old spellings that still parse as log; absent = off.
-// Example: 3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::lossless_jpeg
-inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::string &error)
+// A list of modes as the settings and set_mode_ladder carry it: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",". The text of
+// an old ladder has up to three more fields (threshold, compression, Log); they are read and dropped: the table
+// decides them now.
+// Example: 3840x2160:16:hdr,3840x2160:12:sdr
+inline bool parseModes(const std::string &text, std::vector<Rung> &out, std::string &error)
 {
     out.clear();
     std::stringstream list(text);
@@ -135,13 +84,11 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
         std::string part;
         while (std::getline(fields, part, ':'))
             f.push_back(part);
-        if (!item.empty() && item.back() == ':')
-            f.push_back("");
         Rung r;
         char *end = nullptr;
         const auto x = f.empty() ? std::string::npos : f[0].find('x');
         if (f.size() < 3 || f.size() > 6 || x == std::string::npos) {
-            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]].";
+            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr.";
             return false;
         }
         r.width = static_cast<uint32_t>(std::strtoul(f[0].c_str(), &end, 10));
@@ -153,27 +100,6 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
             return false;
         }
         r.clearHdr = f[2] == "hdr";
-        if (f.size() >= 4 && !f[3].empty()) {
-            r.threshold = std::strtod(f[3].c_str(), &end);
-            if (!end || *end != '\0' || !(r.threshold > 0.0 && r.threshold <= 280.0)) {
-                error = "\"" + item + "\": the threshold must be an FPS above 0 and at most 280, or empty.";
-                return false;
-            }
-        }
-        if (f.size() >= 5) {
-            r.compression = f[4];
-            if (!knownCompression(r.compression)) {
-                error = "\"" + item + "\": compression must be none, lossless_jpeg, lossy_3to1 or lossy_5to1.";
-                return false;
-            }
-        }
-        if (f.size() == 6) {
-            if (f[5] == "log" || f[5] == "log10" || f[5] == "log8") r.cdngLog = CdngLog::Auto;
-            else {
-                error = "\"" + item + "\": the last field must be log.";
-                return false;
-            }
-        }
         out.push_back(r);
     }
     if (out.empty()) {
@@ -190,22 +116,7 @@ inline std::string number(double v)
     return o.str();
 }
 
-inline std::string rungsText(const std::vector<Rung> &rungs)
-{
-    std::string text;
-    for (const auto &r : rungs) {
-        if (!text.empty())
-            text += ",";
-        text += std::to_string(r.width) + "x" + std::to_string(r.height) + ":" + std::to_string(r.bits) + ":" +
-                (r.clearHdr ? "hdr" : "sdr") +
-                (r.threshold > 0.0 || !r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + (r.threshold > 0.0 ? number(r.threshold) : "") : "") +
-                (!r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + r.compression : "") +
-                (r.cdngLog == CdngLog::Auto ? ":log" : "");
-    }
-    return text;
-}
-
-// The enabled modes as saved: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",", without the fields an old ladder had.
+// The enabled modes as saved: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",".
 inline std::string modesText(const std::vector<Rung> &rungs)
 {
     std::string text;
@@ -256,59 +167,6 @@ inline std::string aspectsText(const std::vector<std::string> &aspects)
     return text;
 }
 
-// Errors refuse a save. Warnings are shown and saved (they depend on the format).
-inline void validate(const Ladder &l, const std::vector<RungState> &s,
-                     std::vector<std::string> &errors, std::vector<std::string> &warnings)
-{
-    const auto name = [](size_t i) { return "Resolution " + std::to_string(i + 1); };
-    if (l.rungs.size() > 8)
-        errors.push_back("At most 8 resolutions.");
-    double lastThreshold = 0.0, reached = 0.0;
-    size_t lastThresholdRung = 0;
-    for (size_t i = 0; i < l.rungs.size(); ++i) {
-        const Rung &r = l.rungs[i];
-        for (size_t j = 0; j < i; ++j)
-            if (sameMode(r, l.rungs[j]))
-                errors.push_back(name(i) + " repeats resolution " + std::to_string(j + 1) + ".");
-        if (r.threshold > 0.0) {
-            if (lastThreshold > 0.0 && r.threshold <= lastThreshold)
-                errors.push_back("Thresholds must rise down the list: " + name(i) + " (" + number(r.threshold) +
-                                 " fps) is not above resolution " + std::to_string(lastThresholdRung + 1) + " (" +
-                                 number(lastThreshold) + " fps).");
-            lastThreshold = r.threshold;
-            lastThresholdRung = i;
-        }
-        if (r.clearHdr && (r.compression == "lossy_3to1" || r.compression == "lossy_5to1"))
-            errors.push_back(name(i) + ": lossy DNG does not support Clear HDR.");
-        if (i >= s.size())
-            continue;
-        if (!s[i].valid) {
-            errors.push_back(name(i) + ": " + label(r) + " is not a mode of this sensor.");
-            continue;
-        }
-        if (!s[i].usable) {
-            warnings.push_back(name(i) + " (" + label(r) + ") cannot run in this format; it is skipped.");
-            continue;
-        }
-        if (r.threshold > s[i].modeCeiling + 0.0005)
-            warnings.push_back(name(i) + " stops at " + number(s[i].modeCeiling) + " fps here, not " +
-                               number(r.threshold) + ".");
-        const double ceiling = rungCeiling(r, s[i]);
-        if (ceiling <= reached + 0.0005)
-            warnings.push_back(name(i) + " is never used: an earlier resolution already reaches " + number(reached) + " fps.");
-        reached = std::max(reached, ceiling);
-        if (i > 0) {
-            const Rung &p = l.rungs[i - 1];
-            if (p.clearHdr != r.clearHdr || p.bits != r.bits)
-                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) + " changes " +
-                                   label(p) + " to " + label(r) + ": the look changes between takes.");
-            if (p.width != r.width || p.height != r.height)
-                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) +
-                                   " changes the frame size.");
-        }
-    }
-}
-
 // A sensor mode the editor may add (from the probe), with its state in this format.
 struct PoolEntry {
     Rung mode;
@@ -340,8 +198,6 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"bits\":" + std::to_string(r.bits) + ",\"clear_hdr\":" + (r.clearHdr ? "true" : "false") +
                ",\"label\":" + quote(label(r)) + ",\"class\":" + quote(classLabel(r)) +
                ",\"compression\":" + quote(effectiveCompression(r)) +
-               ",\"compression_set\":" + (r.compression.empty() ? "false" : "true") +
-               ",\"log_bits\":" + std::to_string(logBits(r)) +
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling) +
                ",\"window_w\":" + std::to_string(st.windowWidth) + ",\"window_h\":" + std::to_string(st.windowHeight) +
                ",\"binning\":" + std::to_string(st.binning) +
@@ -350,36 +206,26 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"lossless_jpeg\":" + number(st.ceilingBy[1]) + ",\"lossy_3to1\":" + number(st.ceilingBy[2]) +
                ",\"lossy_5to1\":" + number(st.ceilingBy[3]) + "}";
     };
+    const auto ceilingOf = [](const RungState &st) { return st.usable ? std::max(st.modeCeiling, 0.0) : 0.0; };
+    double top = 0.0;
+    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
+        top = std::max(top, ceilingOf(s[i]));
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
-        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(modesText(l.rungs)) +
+        ",\"resolutions_text\":" + quote(modesText(l.rungs)) +
         ",\"aspects\":" + list(l.aspects) +
-        ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_resolution\":" + std::to_string(running + 1) +
+        ",\"ceiling\":" + number(top) + ",\"running_resolution\":" + std::to_string(running + 1) +
         ",\"resolutions\":[";
-    double from = 0.0;  // a rung serves (from, ceiling]
+    double from = 0.0;  // a mode serves (from, ceiling]
     for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
-        const double ceiling = rungCeiling(l.rungs[i], s[i]);
-        out += std::string(i ? "," : "") + "{" + mode(l.rungs[i], s[i]) + ",\"threshold\":" +
-               number(l.rungs[i].threshold) + ",\"ceiling\":" + number(ceiling) + ",\"from\":" + number(from) + "}";
+        const double ceiling = ceilingOf(s[i]);
+        out += std::string(i ? "," : "") + "{" + mode(l.rungs[i], s[i]) + ",\"ceiling\":" + number(ceiling) +
+               ",\"from\":" + number(from) + "}";
         from = std::max(from, ceiling);
     }
     out += "],\"pool\":[";
     for (size_t i = 0; i < pool.size(); ++i)
         out += std::string(i ? "," : "") + "{" + mode(pool[i].mode, pool[i].state) + "}";
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
-}
-
-// A list of modes as the settings and set_mode_ladder carry it. The fields an old ladder had after the third
-// (threshold, compression, Log) are read and dropped: the table decides them now.
-inline bool parseModes(const std::string &text, std::vector<Rung> &out, std::string &error)
-{
-    if (!parseRungs(text, out, error))
-        return false;
-    for (Rung &r : out) {
-        r.threshold = 0.0;
-        r.compression.clear();
-        r.cdngLog = CdngLog::Off;
-    }
-    return true;
 }
 
 // Errors refuse a save: a repeated mode, a mode this sensor does not have. A warning is shown and saved.

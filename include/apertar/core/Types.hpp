@@ -184,7 +184,6 @@ struct CaptureSettings {
     double fpsTakeMax = 0.0;  // Runtime (T34): the highest FPS a take in the current mode reaches (its rung's ceiling).
     bool ladderActive = false;     // Runtime (T34): the mode ladder picks the sensor mode from the FPS.
     uint32_t ladderRung = 0;       // Runtime (T34): the running rung, 1-based, 0 = the mode is not a rung.
-    bool ladderRampReady = false;  // Runtime (T34): Ramp-ready is choosing (with Speed Ramp on).
     bool ladderEnabled = false;    // Runtime (T34): the ladder is switched on (it may be idle, e.g. in H.264).
     bool ladderOverride = false;   // Runtime: an explicit Clear HDR choice holds the mode; the ladder waits for the next fps/mode change.
     uint32_t ladderCount = 0;      // Runtime (T34): resolutions in the ladder.
@@ -347,8 +346,7 @@ inline const char *toString(CdngLog log)
 }
 
 // False for an unknown value (out is then left alone). "off" is Off; "auto", "on" and the legacy explicit
-// targets "12", "10", "8" (old settings, presets, scripts) all mean Auto. The ladder words log, log10, log8
-// are mapped by the ladder parser.
+// targets "12", "10", "8" (old settings, presets, scripts) all mean Auto.
 inline bool cdngLogFromString(const std::string &value, CdngLog &out)
 {
     if (value == "off") out = CdngLog::Off;

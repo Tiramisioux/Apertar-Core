@@ -32,7 +32,6 @@ struct PrimaryView {
     bool ladderKnown = false;
     std::string ladderResolutions;      // the ladder's `resolutions_text`
     bool ladderEnabled = false;
-    bool ladderRampReady = false;
     std::string sensor;                 // the primary's sensor name, for commandclasses::effectiveTies
 };
 
@@ -125,7 +124,7 @@ inline bool ladderInactiveHere(std::string_view primary)
 
 inline bool ladderDiffers(std::string_view primary, std::string_view cam1)
 {
-    for (const char *key : {"ladder_enabled", "ladder_ramp_ready", "ladder_count", "ladder_tops"}) {
+    for (const char *key : {"ladder_enabled", "ladder_count", "ladder_tops"}) {
         const auto a = detail::raw(primary, key);
         const auto b = detail::raw(cam1, key);
         if (a && b && !detail::sameValue(*a, *b)) return true;
@@ -191,7 +190,7 @@ inline std::vector<std::string> differences(std::string_view primary, std::strin
                                 "af_window_h"})
             plain(key);
         if (!detail::ladderInactiveHere(primary)) {
-            for (const char *key : {"ladder_enabled", "ladder_ramp_ready", "ladder_override", "ladder_resolution", "ladder_count",
+            for (const char *key : {"ladder_enabled", "ladder_override", "ladder_resolution", "ladder_count",
                                     "ladder_tops"})
                 plain(key);
         }
@@ -217,7 +216,6 @@ struct PlanInputs {
     std::string ladderResolutions;     // the primary's ladder: its `resolutions_text`, "" when unknown
     bool ladderKnown = false;
     bool ladderEnabled = false;
-    bool ladderRampReady = false;
 };
 
 inline const char *boolText(bool value) { return value ? "true" : "false"; }
@@ -237,7 +235,7 @@ inline std::vector<Step> planResync(const PlanInputs &in)
         if (in.kind == Kind::LadderOff || jsonkeys::boolOf(in.cam1, "ladder_enabled").value_or(false))
             steps.push_back({"set_mode_ladder", {{"enabled", "false"}}});
     } else if (in.ladderKnown && !detail::ladderInactiveHere(in.primary) && ladderDiffers(in.primary, in.cam1)) {
-        Fields fields = {{"enabled", boolText(in.ladderEnabled)}, {"ramp_ready", boolText(in.ladderRampReady)}};
+        Fields fields = {{"enabled", boolText(in.ladderEnabled)}};
         if (!in.ladderResolutions.empty()) fields["resolutions"] = in.ladderResolutions;
         steps.push_back({"set_mode_ladder", fields});
     }

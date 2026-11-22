@@ -181,7 +181,6 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
@@ -3185,9 +3184,9 @@ void applyClearHdrCompression(CaptureSettings &next, bool wasClearHdr)
         next.cdngCompression = next.clearHdr ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
 }
 
-// T34: a ladder resolution names its own raw format (Patrik, 2026-10-28): uncompressed or lossless
-// cDNG, or lossy DNG at 3:1 or 5:1 (another recording format in Core, no Clear HDR). Unnamed means
-// the default: Clear HDR uncompressed, SDR lossless. MLV has no compression to choose.
+// The table's cell names the raw format of a mode: uncompressed or lossless cDNG. Unnamed means the default:
+// Clear HDR uncompressed, SDR lossless. The ceilings of the lossy ratios (fillRungExtrasLocked) are asked through
+// here too. Lossy DNG and MLV keep the operator's setting when the ladder picks a mode.
 void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
 {
     if (settings.recordingFormat != RecordingFormat::Cdng)   // lossy DNG and MLV keep the operator's setting
@@ -3594,8 +3593,8 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 }
 
 // The storage pre-roll's target: the highest fps the SENSOR delivers for the running mode (resolution, bit depth, Clear
-// HDR: the lower of the table and the startup probe). Not applied: the lossless-JPEG cap, the mode ladder's rung
-// ceilings and user thresholds, the speed-ramp limits and the IMX477 uncompressed-cDNG table (modeMaximumFps has the
+// HDR: the lower of the table and the startup probe). Not applied: the lossless-JPEG cap, the mode ladder's caps
+// from the table of known limits, the speed-ramp limits and the IMX477 uncompressed-cDNG table (modeMaximumFps has the
 // last one).
 double prerollMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
@@ -11684,7 +11683,7 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
     next.fps = effectiveFps;
     if (rung) {   // T34: the FPS moved the camera to another rung; one reconfigure applies the whole mode
         std::cerr << "ApertarCore mode ladder: " << ladder::label({rung->resolution.width, rung->resolution.height,
-                                                                    rung->rawBitDepth, rung->clearHdr, 0.0, ""})
+                                                                    rung->rawBitDepth, rung->clearHdr, ""})
                   << " at " << effectiveFps << " fps\n";
         next.resolution = rung->resolution;
         next.rawBitDepth = rung->rawBitDepth;
@@ -11747,9 +11746,9 @@ void CameraController::restoreFpsAfterRampLocked()
 }
 
 // ---- Mode ladder (T34) ---------------------------------------------------------------------
-// The FPS picks the sensor mode: rung 1 serves the lowest rates, the next rung takes over above
-// its threshold. Rungs change between takes only; ModeLadder.hpp holds the logic, this is the
-// part that needs the sanitiser and the camera.
+// The FPS picks the sensor mode: the first enabled mode, best first, whose cap in the table of known limits
+// holds it. The mode changes between takes only; ModeLadder.hpp holds the logic, this is the part that needs the
+// sanitiser and the camera.
 
 // What the ladder knows about each rung of `ladder` in base's format and compression.
 std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder::Ladder &ladder,
@@ -11899,7 +11898,6 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
 {
     out.fpsTakeMax = out.fpsMax;
     out.ladderRung = 0;
-    out.ladderRampReady = false;
     out.ladderEnabled = modeLadder_.enabled;
     out.ladderOverride = ladderOverride_ && modeLadder_.enabled;
     out.ladderTops.clear();
@@ -12238,7 +12236,7 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return true;
     }
     const auto text = [](const CaptureSettings &s) {
-        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, 0.0, "" });
+        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, "" });
     };
     if (wanted.resolution.width == settings.resolution.width && wanted.resolution.height == settings.resolution.height &&
         wanted.rawBitDepth == settings.rawBitDepth && wanted.clearHdr == settings.clearHdr) {
@@ -13124,10 +13122,7 @@ bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool str
     next.fpsSpeedRampKeepExposure = keepExposure;
     next.fpsSpeedRampStretchAudio = stretchAudio;
     next.fpsSpeedRampReturn = returnAfter;
-    if (!recording_ && enabled != settings_.fpsSpeedRamp)
-        ladderOverride_ = false;   // Ramp-ready changes the rung with Speed Ramp: a Clear HDR override ends
-    const bool ladderChange = ladderRewriteLocked(next);   // T34: Ramp-ready changes the rung with Speed Ramp
-    return applySettingsLocked(next, ladderChange);
+    return applySettingsLocked(next, false);
 }
 
 bool CameraController::setAutofocusMode(AutofocusMode mode)

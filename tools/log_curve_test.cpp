@@ -3,7 +3,6 @@
 #include "cdng/ClearHdrCcmp.hpp"
 #include "cdng/LogCurve.hpp"
 #include <apertar/core/Types.hpp>
-#include "camera/ModeLadder.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -260,7 +259,7 @@ int main()
         check(bits(RecordingFormat::Mlv, true, 12, CdngLog::Auto) == 0, "MLV unavailable");
     }
 
-    std::printf("7. one Off/On switch: strings, stored bits, ladder text\n");
+    std::printf("7. one Off/On switch: strings, stored bits\n");
     {
         using namespace apertar;
         const auto parse = [](const char *text, CdngLog start) {
@@ -279,24 +278,6 @@ int main()
               cdngLogStoredBits(CdngLog::Auto, 10) == 8 && cdngLogStoredBits(CdngLog::Auto, 8) == 0 &&
               cdngLogStoredBits(CdngLog::Auto, 14) == 0 && cdngLogStoredBits(CdngLog::Off, 16) == 0,
               "stored bits: auto 16/12/10/8 -> 12/10/8/0, off 0");
-
-        std::vector<apertar::ladder::Rung> rungs;
-        std::string error;
-        const bool ok = apertar::ladder::parseRungs(
-            "3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::none:log10,1920x1080:10:sdr::none:log8,1920x1080:12:sdr", rungs, error);
-        check(ok && rungs.size() == 4, "ladder parses log, log10, log8 and no field");
-        check(ok && rungs[0].cdngLog == CdngLog::Auto && rungs[1].cdngLog == CdngLog::Auto &&
-              rungs[2].cdngLog == CdngLog::Auto && rungs[3].cdngLog == CdngLog::Off, "log/log10/log8 are Auto, absent is Off");
-        const std::string text = ok ? apertar::ladder::rungsText(rungs) : "";
-        check(text.find("log10") == std::string::npos && text.find("log8") == std::string::npos &&
-              text.find(":log") != std::string::npos, "rungsText prints only log");
-        std::vector<apertar::ladder::Rung> again;
-        check(apertar::ladder::parseRungs(text, again, error) && apertar::ladder::rungsText(again) == text, "ladder text round-trips");
-        check(ok && apertar::ladder::logBits(rungs[0]) == 12 && apertar::ladder::logBits(rungs[1]) == 10 &&
-              apertar::ladder::logBits(rungs[2]) == 8 && apertar::ladder::logBits(rungs[3]) == 0, "rung log_bits resolve one step down");
-        std::vector<apertar::ladder::Rung> bad;
-        check(!apertar::ladder::parseRungs("3840x2160:16:hdr:25:none:logx", bad, error) &&
-              error.find("the last field must be log") != std::string::npos, "ladder rejects other words");
     }
 
     std::printf(g_failed ? "%d check(s) failed\n" : "all checks passed\n", g_failed);

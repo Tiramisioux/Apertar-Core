@@ -322,7 +322,6 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
@@ -8522,7 +8521,6 @@ void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
         relayView_.ladderKnown = text.has_value();
         relayView_.ladderResolutions = text.value_or("");
         relayView_.ladderEnabled = jsonkeys::boolOf(ladderJson, "enabled").value_or(false);
-        relayView_.ladderRampReady = jsonkeys::boolOf(ladderJson, "ramp_ready").value_or(false);
     }
 }
 
@@ -10147,7 +10145,6 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_take_max\":" << jsonNumber(settings.fpsTakeMax, 3)
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount

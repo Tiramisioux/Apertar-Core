@@ -838,7 +838,6 @@ void ControlClient::serviceResync()
     plan.ladderResolutions = view.ladderResolutions;
     plan.ladderKnown = view.ladderKnown;
     plan.ladderEnabled = view.ladderEnabled;
-    plan.ladderRampReady = view.ladderRampReady;
     const std::vector<resync::Step> steps = resync::planResync(plan);
     std::cerr << "ApertarCore cam1 resync (" << (kind == resync::Kind::Full ? "full" : "ladder off") << ":";
     for (const resync::Step &step : steps)
