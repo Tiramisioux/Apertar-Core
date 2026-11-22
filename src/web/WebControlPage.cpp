@@ -6038,6 +6038,11 @@ std::string_view webControlPageHtml()
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
+              <div class="field-stack ladder-dim">
+                <span class="input-label">Preview temporal denoise</span>
+                <div class="pill-grid two-col" id="settingsModeLadderTdnOptions"></div>
+                <span class="subtle-note" id="settingsModeLadderTdnNote"></span>
+              </div>
             </div>
           </section>
 
@@ -6691,10 +6696,13 @@ std::string_view webControlPageHtml()
               </section>
               <section class="select-block" data-search="frames per folder part split clip folder dng take long">
                 <div class="select-topline">
-                  <span>Frames per folder</span>
+                  <span>Split long takes</span>
                 </div>
-                <span class="subtle-note">Needed for long cDNG takes: a folder with many files slows file creation. No effect on MLV, ProRes and H.264.</span>
-                <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
+                <span class="subtle-note">Needed for long cDNG takes: a folder with many files slows file creation. Automatic turns it on above 32 fps. No effect on MLV, ProRes and H.264.</span>
+                <span class="subtle-note">Off keeps every frame of a take in one folder. On starts a new part_NNN folder inside the clip every N frames (the part size below), so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
+                <div class="pill-grid three-col" id="settingsSplitModeOptions"></div>
+                <span class="subtle-note" id="settingsSplitModeNote"></span>
+                <span class="input-label">Part size (frames per folder, 0 = off)</span>
                 <div class="field-stack">
                   <input class="settings-input" id="settingsFramesPerFolderInput" type="number" min="0" max="100000" step="1" value="0">
                   <button class="secondary-button" id="settingsFramesPerFolderApply" type="button">Apply</button>
@@ -9599,6 +9607,14 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsModeLadderValue").classList.toggle("off", !enabled);
       document.getElementById("settingsModeLadderCard").classList.toggle("dynres-off", !enabled);
       const busy = recording || state.ladderToggling;
+      const tdnOption = server && server.tdn === "off_in_4k" ? "off_in_4k" : "keep";
+      buildOptionButtons("settingsModeLadderTdnOptions", [
+        { label: "Keep", value: "keep", enabled: !busy && enabled },
+        { label: "Off in 4K", value: "off_in_4k", enabled: !busy && enabled },
+      ], tdnOption, (value) => void setModeLadder({ tdn: value }), 2);
+      setText("settingsModeLadderTdnNote", tdnOption === "off_in_4k"
+        ? "Off in 4K: Dynamic resolution turns it off when it picks 4K or a crop, and back on for 2K."
+        : "Keep: Dynamic resolution never touches it. While it is on, 4K is not used.");
       buildOptionButtons("settingsModeLadderOptions", [
         { label: "Off", value: "Off", enabled: !busy },
         { label: "On", value: "On", enabled: !busy },
@@ -15579,6 +15595,10 @@ std::string_view webControlPageHtml()
         snapshot.frames_per_folder = source.frames_per_folder;
       if (typeof source.frames_per_folder_env === "boolean")
         snapshot.frames_per_folder_env = source.frames_per_folder_env;
+      if (typeof source.split_mode === "string")
+        snapshot.split_mode = source.split_mode;
+      if (typeof source.split_effective === "boolean")
+        snapshot.split_effective = source.split_effective;
       if (typeof source.clip_merge_enabled === "boolean")
         snapshot.clip_merge_enabled = source.clip_merge_enabled;
       if (typeof source.clip_merge_env_off === "boolean")
@@ -15761,9 +15781,16 @@ std::string_view webControlPageHtml()
         case "set_storage_preroll":
           snapshot.storage_preroll_auto = payload.value === "on";
           break;
-        case "set_frames_per_folder":
-          snapshot.frames_per_folder = Number(payload.value) || 0;
+        case "set_frames_per_folder": {
+          const partSize = Number(payload.value) || 0;
+          if (partSize > 0)
+            snapshot.frames_per_folder = partSize;
+          if (typeof payload.mode === "string")
+            snapshot.split_mode = payload.mode;
+          else if (payload.value !== undefined)
+            snapshot.split_mode = partSize === 0 ? "off" : (snapshot.split_mode === "auto" ? "auto" : "on");
           break;
+        }
         case "set_clip_merge":
           snapshot.clip_merge_enabled = payload.enabled === true;
           break;
@@ -17085,7 +17112,7 @@ std::string_view webControlPageHtml()
       if (systemFields) {
         for (const key of Object.keys(systemFields)) {
           if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_") || key.startsWith("frames_per_folder")
-               || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
+               || key.startsWith("split_mode") || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
             snapshot[key] = systemFields[key];
         }
       }
@@ -17750,14 +17777,15 @@ std::string_view webControlPageHtml()
         clipSplitRow.hidden = !splitKnown;
         if (splitKnown) {
           const perFolder = snapshot.frames_per_folder;
+          const splitOff = typeof snapshot.split_mode === "string" ? snapshot.split_mode === "off" : perFolder === 0;
           // Off, the presets, and a value from the config file that is not a preset (Core takes 0 or 100-100000).
           const presets = [1000, 2000, 5000, 10000];
           if (perFolder > 0 && !presets.includes(perFolder))
             presets.push(perFolder), presets.sort((a, b) => a - b);
           const splitContainer = document.getElementById("clipSplitOptions");
-          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 ? String(perFolder) : "Off", async (value) => {
+          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 && !splitOff ? String(perFolder) : "Off", async (value) => {
             const wanted = value === "Off" ? 0 : Number(value);
-            if (wanted === perFolder)
+            if (wanted === (splitOff ? 0 : perFolder))
               return;
             try {
               await sendCommand({ cmd: "set_frames_per_folder", value: wanted });
@@ -17770,10 +17798,10 @@ std::string_view webControlPageHtml()
             for (const button of splitContainer.querySelectorAll("button"))
               button.disabled = true;
           const fps = Number(snapshot.fps);
-          const perFolderTime = perFolder > 0 && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
+          const perFolderTime = perFolder > 0 && !splitOff && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
           setText("clipSplitNote", (splitFromEnv ? "Set by APERTAR_CDNG_FRAMES_PER_FOLDER. " : "")
-            + (perFolder > 0
-              ? "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
+            + (perFolder > 0 && !splitOff
+              ? (snapshot.split_mode === "auto" ? "Automatic: above 32 fps on exFAT or FAT, " : "") + "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
               : "All frames of a take in one folder. On exFAT, writing slows down as the folder grows, and long takes can drop frames."));
         }
       }
@@ -18186,6 +18214,24 @@ std::string_view webControlPageHtml()
         fpfApply.disabled = framesPerFolderEnv;
       if (fpfEnvNote)
         fpfEnvNote.hidden = !framesPerFolderEnv;
+      // Off, On or Automatic ([storage] split). An old Core has no split_mode: a part size above 0 is On.
+      const splitMode = typeof systemState.split_mode === "string" ? systemState.split_mode : (framesPerFolder > 0 ? "on" : "off");
+      const splitOptions = document.getElementById("settingsSplitModeOptions");
+      buildOptionButtonsInto(splitOptions, [{ label: "Off", value: "off" }, { label: "On", value: "on" }, { label: "Automatic", value: "auto" }],
+        splitMode, async (value) => {
+          try {
+            await sendCommand({ cmd: "set_frames_per_folder", mode: value });
+          } catch (error) {
+            showToast(error.message, true);
+          }
+        }, 3);
+      if (framesPerFolderEnv && splitOptions)
+        for (const button of splitOptions.querySelectorAll("button"))
+          button.disabled = true;
+      const splitEffective = snapshot.split_effective === true;
+      setText("settingsSplitModeNote", splitMode === "off" ? "Off: every frame of a take goes into one folder."
+        : (splitMode === "on" ? (splitEffective ? "On: parts of " + framesPerFolder + " frames." : "On, but this recording format writes one file per take: no parts.")
+          : (splitEffective ? "Automatic: this take splits, above 32 fps on exFAT or FAT." : "Automatic: this take does not split.")));
       const clipMergeEnvOff = !!systemState.clip_merge_env_off;
       const clipMergeNote = document.getElementById("settingsClipMergeNote");
       if (clipMergeNote)
