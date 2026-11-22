@@ -16258,7 +16258,8 @@ std::string_view webControlPageHtml()
     const clipUi = {
       items: [], savedTemplate: null, dirty: false, saveTimer: 0, seq: 0, dragging: false, editing: -1,
       ptype: "mouse", dropHandled: false, src: null, lastDrag: null, suppressClickUntil: 0,
-      example: "", error: "", statusText: "", statusKind: "", statusTimer: 0, recording: false, sig: "", bound: false
+      example: "", error: "", statusText: "", statusKind: "", statusTimer: 0, recording: false, sig: "", bound: false,
+      custom: false   // the Custom pill was chosen: it stays active until a preset is picked, even if the name equals one
     };
 
     function clipParse(template) {
@@ -16753,20 +16754,22 @@ std::string_view webControlPageHtml()
         camNote.classList.toggle("hidden", !dualNames);
       // The presets match with a trailing _{cam} taken off while two sensors are in use.
       let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === (dualNames ? current.replace(/_\{cam\}$/, "") : current));
+      if (clipUi.custom)
+        activeIndex = -1;
       setText("settingsClipNamesValue", activeIndex >= 0 ? CLIP_PRESETS[activeIndex].label : "Custom");
       const options = CLIP_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, enabled: !clipUi.recording }));
-      options.push({ value: "", label: "Custom", enabled: false });
+      options.push({ value: "", label: "Custom", enabled: !clipUi.recording });
       buildOptionButtons("clipNamePresets", options, activeIndex >= 0 ? CLIP_PRESETS[activeIndex].value : "", (value) => {
+        // Custom keeps the name as it is; the pills below are its composer.
+        clipUi.custom = value === "";
+        if (clipUi.custom) {
+          clipRenderComposer();
+          return;
+        }
         clipUi.items = clipEnsureCam(clipParse(value));
         clipUi.editing = -1;
         clipChanged();
       }, 4);
-      const customButton = document.getElementById("clipNamePresets").lastElementChild;
-      if (customButton) {
-        customButton.disabled = true;
-        customButton.classList.remove("disabled");
-        customButton.classList.toggle("active", activeIndex < 0);
-      }
       row.innerHTML = "";
       if (!clipUi.items.length) {
         const hint = document.createElement("span");
@@ -16815,6 +16818,7 @@ std::string_view webControlPageHtml()
       if (!clipUi.dirty && clipUi.savedTemplate !== template) {
         clipUi.savedTemplate = template;
         clipUi.items = clipEnsureCam(clipParse(template));
+        clipUi.custom = false;
         rebuild = true;
       }
       if (rebuild) {
