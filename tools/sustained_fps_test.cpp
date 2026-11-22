@@ -1,4 +1,4 @@
-// Host test for src/camera/SustainedFps.hpp (the known fps limits for 30-minute takes). The numbers of table A are
+// Host test for src/camera/SustainedFps.hpp (the known fps limits and the take length each is for). The numbers of table A are
 // pinned on purpose: a change of an analysis result must change this file too.
 //   g++ -std=c++20 -O2 -Wall -Wextra -I src -I include tools/sustained_fps_test.cpp -o /tmp/sft && /tmp/sft
 #include "camera/SustainedFps.hpp"
@@ -53,15 +53,15 @@ int main()
     // ---- table A, pinned: fps30 and its step, NVMe then USB SSD ----
     struct Row { const char *name; Mode mode; bool log; double nvme, nvmeCap, t7, t7Cap; };
     const Row rows[] = {
-        { "4K Clear HDR 16-bit", k4kHdr16, false, 20, 20, 9, 9 },
+        { "4K Clear HDR 16-bit", k4kHdr16, false, 25, 25, 9, 9 },
         { "2K Clear HDR 16-bit", k2kHdr16, false, 30, 30, 27, 25 },
         { "4K Clear HDR 12-bit", k4kHdr12, false, 20, 20, 12, 12 },
         { "4K SDR 12-bit", k4kSdr12, false, 40, 33, 18, 18 },
         { "2K SDR 12-bit", k2kSdr12, false, 60, 60, 48, 33 },
         { "4K SDR 10-bit", k4kSdr10, false, 45, 33, 20, 20 },
         { "2K SDR 10-bit", k2kSdr10, false, 60, 60, 48, 33 },
-        { "4K Clear HDR 16-bit + Log", k4kHdr16, true, 24, 24, 8, 8 },
-        { "2880x2160 SDR 12-bit", kCrop2880, false, 56, 50, 24, 24 },
+        { "4K Clear HDR 16-bit + Log", k4kHdr16, true, 25, 25, 8, 8 },
+        { "2880x2160 SDR 12-bit", kCrop2880, false, 60, 60, 24, 24 },
     };
     for (const Row &row : rows) {
         Context a = nvme(), b = t7();
@@ -79,23 +79,26 @@ int main()
     // ---- labels, groups, compression, short takes ----
     {
         const Limit hdr = limitFor(nvme(), k4kHdr16);
-        check(hdr.label == Label::Unconfirmed && hdr.group == Group::BackEnd && !std::strcmp(hdr.compression, "none") &&
-                  same(hdr.fpsShort, 27.0),
-              "NVMe 4K Clear HDR 16-bit: unconfirmed, back end, uncompressed, 27 fps for short takes");
+        check(hdr.label == Label::Measured && hdr.group == Group::BackEnd && !std::strcmp(hdr.compression, "none") &&
+                  hdr.minutes == 5 && same(hdr.fpsShort, 0.0),
+              "NVMe 4K Clear HDR 16-bit: measured for 5 minutes, back end, uncompressed");
         const Limit sdr = limitFor(nvme(), k4kSdr12);
-        check(sdr.label == Label::Derived && sdr.group == Group::Encoder && !std::strcmp(sdr.compression, "lossless_jpeg"),
-              "NVMe 4K SDR 12-bit: derived, encoder, lossless");
-        check(limitFor(nvme(), k2kSdr12).label == Label::Probable && limitFor(nvme(), k2kSdr12).group == Group::Sensor,
-              "NVMe 2K SDR 12-bit: probable, sensor wall");
+        check(sdr.label == Label::Measured && sdr.minutes == 15 && sdr.group == Group::Encoder && !std::strcmp(sdr.compression, "lossless_jpeg"),
+              "NVMe 4K SDR 12-bit: measured for 15 minutes, encoder, lossless");
+        check(limitFor(nvme(), k2kSdr12).label == Label::Measured && limitFor(nvme(), k2kSdr12).minutes == 1 &&
+                  limitFor(nvme(), k2kSdr12).group == Group::Sensor,
+              "NVMe 2K SDR 12-bit: measured for 1 minute, sensor wall");
         const Limit t7hdr = limitFor(t7(), k2kHdr16);
         check(t7hdr.label == Label::Measured && t7hdr.group == Group::Drive && !std::strcmp(t7hdr.compression, "lossless_jpeg"),
               "USB SSD 2K Clear HDR 16-bit: measured, drive, lossless");
         bool everyCellHasSource = true, everyFpsPositive = true;
         for (const Cell &cell : kCells) {
             everyCellHasSource = everyCellHasSource && cell.source && *cell.source;
-            everyFpsPositive = everyFpsPositive && cell.fps30 > 0.0 && cell.fpsShort >= 0.0;
+            everyFpsPositive = everyFpsPositive && cell.fps30 > 0.0 && cell.fpsShort >= 0.0 && cell.minutes > 0 &&
+                               (cell.label == Label::Measured || cell.minutes == 30);
         }
-        check(everyCellHasSource && everyFpsPositive, "every cell has a source and a positive limit");
+        check(everyCellHasSource && everyFpsPositive,
+              "every cell has a source, a positive limit and a take length (30 unless measured)");
         check(!std::strcmp(labelName(Label::Measured), "measured") && !std::strcmp(labelName(Label::Derived), "derived") &&
                   !std::strcmp(labelName(Label::Probable), "probable") && !std::strcmp(labelName(Label::Unconfirmed), "unconfirmed"),
               "labelName: measured, derived, probable, unconfirmed");
@@ -109,12 +112,12 @@ int main()
     // ---- a mode without a cell: the nearest larger one of its class, else the pixel rate, else nothing ----
     {
         const Limit crop = limitFor(nvme(), Mode{ 3840, 1744, true, 16, false });
-        check(crop.found && !crop.exact && same(crop.fps30, 20.0) && crop.cell && crop.cell->width == 3840 &&
-                  crop.label == Label::Unconfirmed,
-              "3840x1744 Clear HDR 16-bit takes the 4K cell (20 fps), label as weak as the cell");
+        check(crop.found && !crop.exact && same(crop.fps30, 25.0) && crop.minutes == 5 && crop.cell && crop.cell->width == 3840 &&
+                  crop.label == Label::Derived,
+              "3840x1744 Clear HDR 16-bit takes the 4K cell (25 fps, 5 minutes), derived at best");
         const Limit small = limitFor(nvme(), Mode{ 1920, 1016, true, 16, false });
         check(small.found && !small.exact && same(small.fps30, 30.0) && small.cell && small.cell->width == 1920 &&
-                  small.label == Label::Probable,
+                  small.label == Label::Derived,
               "1920x1016 Clear HDR 16-bit takes the 2K cell, not the 4K one: nearest larger, derived at best");
         const Limit hdr12 = limitFor(nvme(), Mode{ 1920, 1080, true, 12, false });
         check(hdr12.found && same(hdr12.fps30, 20.0), "Clear HDR 12-bit 2K has no cell: the 4K one (20 fps) stands in");
@@ -154,8 +157,8 @@ int main()
         const Cap lower = capFor(nvme(), k4kSdr12, 30.0);
         check(same(lower.fps, 30.0) && !std::strcmp(lower.by, "sensor"), "4K SDR 12-bit with a sensor ceiling of 30: step 30");
         const Cap table = capFor(nvme(), k4kHdr16, 30.0);
-        check(same(table.fps, 20.0) && !std::strcmp(table.by, "back end") && !*table.lever,
-              "4K Clear HDR 16-bit: 20 fps, by the back end, no lever");
+        check(same(table.fps, 25.0) && same(table.limit, 25.0) && !std::strcmp(table.by, "back end") && !*table.lever,
+              "4K Clear HDR 16-bit: 25 fps, by the back end, no lever");
         check(same(capFor(t7(), k4kSdr12, 60.0).fps, 18.0) && !std::strcmp(capFor(t7(), k4kSdr12, 60.0).by, "drive"),
               "4K SDR 12-bit on the USB SSD: 18 fps, by the drive");
     }
@@ -164,21 +167,21 @@ int main()
     {
         Context c = nvme();
         c.log = true;
-        check(same(limitFor(c, k4kHdr16).fps30, 24.0) && limitFor(c, k4kHdr16).cell->log, "Log on: 4K Clear HDR 16-bit takes the Log row");
+        check(same(limitFor(c, k4kHdr16).fps30, 25.0) && limitFor(c, k4kHdr16).cell->log, "Log on: 4K Clear HDR 16-bit takes the Log row");
         check(same(limitFor(c, k2kHdr16).fps30, 30.0) && same(limitFor(c, k4kSdr12).fps30, 40.0),
               "Log on: no effect at 2K or in SDR");
         c.lock = true;
         const Cap lock = capFor(c, k4kHdr16, 30.0);
-        check(same(lock.limit, 23.0) && same(lock.fps, 23.0) && !std::strcmp(lock.lever, "phase lock"),
-              "phase lock costs a back-end mode 1 fps: 24 becomes 23");
+        check(same(lock.limit, 24.0) && same(lock.fps, 24.0) && !std::strcmp(lock.lever, "phase lock"),
+              "phase lock costs a back-end mode 1 fps: 25 becomes 24");
         check(same(capFor(c, k4kSdr12, 60.0).limit, 40.0) && same(capFor(c, k2kHdr16, 30.0).limit, 30.0),
               "phase lock costs nothing in an encoder or sensor mode");
         c.aidsOn = false;
-        check(same(capFor(c, k4kHdr16, 30.0).limit, 22.0) && !std::strcmp(capFor(c, k4kHdr16, 30.0).lever, "aids"),
+        check(same(capFor(c, k4kHdr16, 30.0).limit, 23.0) && !std::strcmp(capFor(c, k4kHdr16, 30.0).lever, "aids"),
               "aids off costs a back-end mode another fps");
         Context a = nvme();
         a.audioOn = false;
-        check(same(capFor(a, k4kHdr16, 30.0).fps, 20.0), "audio off changes nothing: the table is for audio on");
+        check(same(capFor(a, k4kHdr16, 30.0).fps, 25.0), "audio off changes nothing: the table is for audio on");
         Context t = nvme();
         t.tdn = true;
         const Cap tdn = capFor(t, k4kSdr12, 60.0);
@@ -201,7 +204,7 @@ int main()
         const Cap flat = capFor(c, k2kSdr12, 60.0);
         check(same(flat.fps, 30.0) && !std::strcmp(flat.lever, "split"),
               "split off on exFAT: 2K SDR 12-bit (60) is held at the flat-folder limit, step 30");
-        check(same(capFor(c, k4kHdr16, 30.0).fps, 20.0) && !*capFor(c, k4kHdr16, 30.0).lever,
+        check(same(capFor(c, k4kHdr16, 30.0).fps, 25.0) && !*capFor(c, k4kHdr16, 30.0).lever,
               "split off: a mode already under 32 fps is left alone");
         c.fatLike = false;
         check(same(capFor(c, k2kSdr12, 60.0).fps, 60.0), "split off on ext4: no flat-folder limit");
@@ -213,15 +216,14 @@ int main()
     // ---- the sentence for the limit line ----
     {
         const auto why = [](const Context &c, const Mode &m, double ceiling) { return whyText(c, m, capFor(c, m, ceiling), ceiling); };
-        check(why(nvme(), k4kHdr16, 30.0) == "4K Clear HDR 16-bit holds 20 fps for 30-minute takes on this NVMe card (unconfirmed). "
-                                             "27 fps holds up to 8 minutes (measured).",
-              "why: 4K Clear HDR 16-bit on the NVMe holds 20 fps, and 27 for 8 minutes");
+        check(why(nvme(), k4kHdr16, 30.0) == "4K Clear HDR 16-bit holds 25 fps for 5-minute takes on this NVMe card (measured).",
+              "why: 4K Clear HDR 16-bit on the NVMe holds 25 fps, labelled with the 5 minutes measured");
         check(why(t7(), k2kSdr12, 60.0) == "2K SDR 12-bit holds 33 fps for 30-minute takes on this USB SSD (measured).",
               "why: 2K SDR 12-bit on the USB SSD holds 33 fps, measured, no short-take sentence");
         Context lock = nvme();
         lock.log = lock.lock = true;
-        check(why(lock, k4kHdr16, 30.0) == "4K Clear HDR 16-bit + Log holds 23 fps for 30-minute takes on this NVMe card (derived). "
-                                           "Phase lock is on: 4K Clear HDR 16-bit + Log holds 23 fps instead of 24.",
+        check(why(lock, k4kHdr16, 30.0) == "4K Clear HDR 16-bit + Log holds 24 fps for 15-minute takes on this NVMe card (measured). "
+                                           "Phase lock is on: 4K Clear HDR 16-bit + Log holds 24 fps instead of 25.",
               "why: phase lock names the loss");
         Context tdn = nvme();
         tdn.tdn = true;
@@ -231,7 +233,7 @@ int main()
         Context flat = nvme();
         flat.splitOn = false;
         flat.fatLike = true;
-        check(why(flat, k2kSdr12, 60.0) == "2K SDR 12-bit holds 30 fps for 30-minute takes on this NVMe card (probable). "
+        check(why(flat, k2kSdr12, 60.0) == "2K SDR 12-bit holds 30 fps for 1-minute takes on this NVMe card (measured). "
                                            "Split long takes is off: takes over 30 minutes slow down above 32 fps. Turn it on.",
               "why: split off on exFAT");
         Context unknown = nvme();
@@ -248,7 +250,7 @@ int main()
         check(why(board, k4kHdr16, 30.0) == "Limits are not measured on this Raspberry Pi.", "why: another board");
         Context full = nvme();
         full.fillFraction = 0.96;
-        check(why(full, k2kHdr16, 30.0) == "2K Clear HDR 16-bit holds 30 fps for 30-minute takes on this NVMe card (probable). "
+        check(why(full, k2kHdr16, 30.0) == "2K Clear HDR 16-bit holds 30 fps for 1-minute takes on this NVMe card (measured). "
                                            "The card is over 94 percent full: it stalled near 96 percent in 4K Clear HDR 16-bit takes.",
               "why: a nearly full NVMe card");
         check(modeName(Mode{ 2880, 2160, false, 12, false }) == "2880x2160 SDR 12-bit" && Context{} == Context{},
@@ -270,7 +272,7 @@ int main()
         check(same(capFor(c, k4kSdr12, 60.0).fps, 18.0), "speed test: a faster drive never raises a limit");
         Context n = nvme();
         n.speedMBps = 20.0;
-        check(same(capFor(n, k4kHdr16, 30.0).fps, 20.0) && same(capFor(n, k2kSdr12, 60.0).fps, 60.0),
+        check(same(capFor(n, k4kHdr16, 30.0).fps, 25.0) && same(capFor(n, k2kSdr12, 60.0).fps, 60.0),
               "speed test: the NVMe column's cells are not drive-limited, no guard");
         Context sd = t7();
         sd.storageMeasured = false;
@@ -302,11 +304,11 @@ int main()
         const auto stepped = [](const Context &c, double fps, const Mode &chosen, const Mode &best, double bestCeiling) {
             return steppedDownText(c, fps, chosen, best, capFor(c, best, bestCeiling));
         };
-        check(stepped(nvme(), 25.0, k2kHdr16, k4kHdr16, 30.0) ==
-                  "At 25 fps the camera records 2K Clear HDR 16-bit: 4K Clear HDR 16-bit holds 20 fps for 30 minutes on this NVMe card (unconfirmed).",
-              "stepped down: 4K Clear HDR 16-bit holds 20, so 2K Clear HDR 16-bit at 25");
+        check(stepped(nvme(), 30.0, k2kHdr16, k4kHdr16, 30.0) ==
+                  "At 30 fps the camera records 2K Clear HDR 16-bit: 4K Clear HDR 16-bit holds 25 fps for 5 minutes on this NVMe card (measured).",
+              "stepped down: 4K Clear HDR 16-bit holds 25, so 2K Clear HDR 16-bit at 30");
         check(stepped(nvme(), 33.0, k4kSdr12, k2kHdr16, 30.0) ==
-                  "At 33 fps the camera records 4K SDR 12-bit: 2K Clear HDR 16-bit holds 30 fps (probable).",
+                  "At 33 fps the camera records 4K SDR 12-bit: 2K Clear HDR 16-bit holds 30 fps (measured).",
               "stepped down: giving up Clear HDR names the last Clear HDR mode, no storage clause");
         check(stepped(t7(), 25.0, k2kHdr16, k4kSdr12, 60.0) ==
                   "This USB SSD writes about 105 MB/s: 4K SDR 12-bit holds 18 fps (derived). At 25 fps the camera records 2K Clear HDR 16-bit.",
@@ -331,7 +333,7 @@ int main()
         check(stepped(board, 25.0, k2kHdr16, k4kHdr16, 30.0) == "Limits are not measured on this Raspberry Pi.", "stepped down: another board");
         check(highestText(nvme(), 60.0, k2kSdr12) == "60 fps is the most the enabled resolutions hold here (2K SDR 12-bit).",
               "highest: the most the enabled modes hold");
-        check(neverUsedText(k4kHdr16, capFor(nvme(), k4kHdr16, 30.0)) == " Never used here: 4K Clear HDR 16-bit already holds 20 fps.",
+        check(neverUsedText(k4kHdr16, capFor(nvme(), k4kHdr16, 30.0)) == " Never used here: 4K Clear HDR 16-bit already holds 25 fps.",
               "never used: the earlier mode and its cap");
     }
 

@@ -11978,7 +11978,7 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
                                     : base + " \u00b7 " + compressionLabel(out);
 }
 
-// The derived limit fields (never persisted): what the table says the running mode holds for a 30-minute take at
+// The derived limit fields (never persisted): what the table says the running mode holds, for the take length the table names, at
 // the storage and switches in use. Information only; nothing here changes a setting.
 void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
 {
@@ -12159,6 +12159,7 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
         const sustained::Cap cap = sustained::capFor(context, limitMode, state.modeCeiling);
         ladder::StepInfo step;
         step.fps30 = cap.row.found ? cap.row.fps30 : 0.0;
+        step.minutes = cap.row.found ? cap.row.minutes : 30;
         step.fpsShort = cap.row.found ? cap.row.fpsShort : 0.0;
         step.basis = cap.row.found ? sustained::labelName(cap.row.label) : "sensor";
         step.wall = cap.by;

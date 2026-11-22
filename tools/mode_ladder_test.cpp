@@ -163,12 +163,12 @@ int main()
         states[1].modeCeiling = 20;
         states[2].modeCeiling = 33;
         std::vector<StepInfo> info(3);
-        info[0].fps30 = 20; info[0].fpsShort = 27; info[0].basis = "unconfirmed"; info[0].wall = "back end"; info[0].why = "first";
+        info[0].fps30 = 20; info[0].fpsShort = 27; info[0].minutes = 5; info[0].basis = "unconfirmed"; info[0].wall = "back end"; info[0].why = "first";
         info[1].neverUsed = true; info[1].why = "second \"quoted\"";
         const std::string json = toJson(l, states, 0, info, {}, {}, {});
-        check(contains(json, "\"steps\":[{\"label\":\"4K Clear HDR 16-bit\",\"cap\":20,\"from\":0,\"fps30\":20,\"fps_short\":27,"
+        check(contains(json, "\"steps\":[{\"label\":\"4K Clear HDR 16-bit\",\"cap\":20,\"from\":0,\"fps30\":20,\"fps_short\":27,\"minutes\":5,"
                              "\"basis\":\"unconfirmed\",\"wall\":\"back end\",\"never_used\":false,\"why\":\"first\"}"),
-              "toJson steps: label, cap, from, the table's numbers and the sentence");
+              "toJson steps: label, cap, from, the table's numbers, the take length and the sentence");
         check(contains(json, "\"label\":\"4K SDR 12-bit\",\"cap\":20,\"from\":20,") && contains(json, "\"never_used\":true,\"why\":\"second \\\"quoted\\\"\""),
               "toJson steps: the second step serves nothing above the first (from 20), never_used, the text is escaped");
         check(contains(json, "\"label\":\"1920x1080 SDR 12-bit\",\"cap\":33,\"from\":20,"), "toJson steps: the third serves 20 to 33");
@@ -197,8 +197,8 @@ int main()
             }
             const auto pick = [&](double fps) { const int i = chooseMode(candidates, fps); return i < 0 ? std::string("none") : label(candidates[static_cast<size_t>(i)].mode); };
             if (kind == Kind::Nvme) {
-                check(pick(20) == "4K Clear HDR 16-bit" && pick(21) == "1920x1080 Clear HDR 16-bit" && pick(30) == "1920x1080 Clear HDR 16-bit",
-                      "table C NVMe: up to 20 fps 4K Clear HDR 16-bit, 21 to 30 the 2K one");
+                check(pick(25) == "4K Clear HDR 16-bit" && pick(26) == "1920x1080 Clear HDR 16-bit" && pick(30) == "1920x1080 Clear HDR 16-bit",
+                      "table C NVMe: up to 25 fps 4K Clear HDR 16-bit, 26 to 30 the 2K one");
                 check(pick(33) == "4K SDR 12-bit" && pick(34) == "1920x1080 SDR 12-bit" && pick(60) == "1920x1080 SDR 12-bit",
                       "table C NVMe: 33 fps 4K SDR 12-bit, 34 to 60 2K SDR 12-bit");
                 check(pick(80) == "1920x1080 SDR 12-bit", "table C NVMe: above 60 nothing holds it, the highest cap is used");

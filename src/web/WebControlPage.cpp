@@ -5808,7 +5808,7 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Dynamic resolution</h3>
-                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera holds for 30-minute takes on a hot drive. When the FPS goes up, the resolution goes down first, then the bit depth, then Clear HDR to SDR.</p>
+                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera held in measured takes on a warm drive (each step names the take length). When the FPS goes up, the resolution goes down first, then the bit depth, then Clear HDR to SDR.</p>
                 </div>
                 <div class="online-pill off" id="settingsModeLadderValue">Off</div>
               </div>
@@ -5834,7 +5834,7 @@ std::string_view webControlPageHtml()
               <div class="field-stack ladder-dim">
                 <div class="ladder-list-head">
                   <span class="input-label">Steps</span>
-                  <span class="ladder-note">Best picture first. 30-minute takes, hot drive.</span>
+                  <span class="ladder-note">Best picture first. Measured take lengths, warm drive.</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
@@ -8805,7 +8805,7 @@ std::string_view webControlPageHtml()
       text.appendChild(createDomElement("div", "ladder-row-range", step.never_used === true ? "Never used here"
         : (from > 0 ? "Above " + from + " fps, up to " + cap + " fps" : "Up to " + cap + " fps")));
       text.appendChild(createDomElement("div", "ladder-row-meta", Number(step.fps30) > 0
-        ? "30-minute limit " + Number(step.fps30) + " fps (" + step.basis + "), limited by " + step.wall + "."
+        ? (Number(step.minutes) || 30) + "-minute limit " + Number(step.fps30) + " fps (" + step.basis + "), limited by " + step.wall + "."
         : "Not measured: the sensor's limit."));
       if (step.why)
         text.appendChild(createDomElement("div", "ladder-row-desc", step.why));

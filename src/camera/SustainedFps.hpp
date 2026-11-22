@@ -1,5 +1,6 @@
-// The known fps limits: the fps a mode holds for a 30-minute take on a hot drive, per storage type, Pi board,
-// resolution, bit depth and Clear HDR, with the label and the source of every number. Pure, std only (no
+// The known fps limits: the fps a mode holds for a take of a stated length, per storage type, Pi board,
+// resolution, bit depth and Clear HDR, with the label, the take length and the source of every number. A measured
+// number is the highest fps held clean at the longest take length run; a number not yet measured is for 30 minutes. Pure, std only (no
 // libcamera, no MediaProfile); host-tested by tools/sustained_fps_test.cpp. To update the analysis, edit the
 // rows in kCells and kPixelRates and nothing else; the test pins the numbers, so a change is deliberate.
 #pragma once
@@ -25,7 +26,8 @@ struct Cell {
     unsigned bits;
     bool log;                   // the row that replaces the Clear HDR 16-bit one while CineMate Log is on
     const char *compression;    // "none" or "lossless_jpeg"
-    double fps30;               // held for a 30-minute take, split on, reference levers
+    double fps30;               // held for a take of `minutes`, split on, reference levers
+    unsigned minutes;           // measured: the longest take length held clean at fps30; otherwise 30 (the aim)
     double fpsShort;            // held for takes up to about 8 minutes, measured; 0 = none known (information only)
     Label label;                // of fps30
     Group group;
@@ -33,46 +35,47 @@ struct Cell {
 };
 
 // IMX585, 16:9, cDNG, Raspberry Pi 5 / CM5. Reference levers: TDN off, phase lock off, audio on, WebUI client
-// connected, aids on, split on, exFAT, drive hot. The numbers are from the owner's take campaigns on a CM5 Lite
-// (November 2026); each row says what was run.
+// connected, aids on, split on, exFAT, drive warm. The numbers are from the owner's take campaigns on a CM5 Lite
+// (November 2026, NVMe estimator set EST-05fb8f1-a with its 15-minute takes P6/P6b); each row says what was run.
 inline constexpr Cell kCells[] = {
     // Corsair MP600 Mini on the CFexpress hat: Clear HDR uncompressed, SDR lossless JPEG.
-    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 16, false, "none", 20, 27, Label::Unconfirmed, Group::BackEnd,
-      "25, 26 and 27 fps failed 15-minute takes after 190-316 GB (warm drive, 2026-11-21); 20 is a placeholder" },
-    { Kind::Nvme, Board::Pi5, 1920, 1080, true, 16, false, "none", 30, 0, Label::Probable, Group::Sensor,
-      "60 s clean at 30 fps, 125 MB/s, drive up to 64 C; 30 minutes not run" },
-    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 12, false, "none", 20, 0, Label::Unconfirmed, Group::BackEnd,
-      "gaps at every fps from 25 to 30; 22 and 23 not run" },
-    { Kind::Nvme, Board::Pi5, 3840, 2160, false, 12, false, "lossless_jpeg", 40, 0, Label::Derived, Group::Encoder,
-      "40-42 fps at 60 s; uncompressed takes held 37 fps for 15 minutes and failed at 38; lossless takes not run" },
-    { Kind::Nvme, Board::Pi5, 1920, 1080, false, 12, false, "lossless_jpeg", 60, 0, Label::Probable, Group::Sensor,
-      "60 s and 5 minutes clean at 60 fps" },
-    { Kind::Nvme, Board::Pi5, 3840, 2160, false, 10, false, "lossless_jpeg", 45, 0, Label::Derived, Group::Encoder,
-      "45-47 fps at 60 s" },
-    { Kind::Nvme, Board::Pi5, 1920, 1080, false, 10, false, "lossless_jpeg", 60, 0, Label::Probable, Group::Sensor,
+    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 16, false, "none", 25, 5, 0, Label::Measured, Group::BackEnd,
+      "25-27 fps held 3 and 5 minutes (27: 11 of 12 takes); 25 stayed clean 12.6 minutes of a 15-minute take; 15-minute "
+      "takes at 25, 26 and 27 stopped after 7-13 minutes, when the warm drive paused writes at 414-447 MB/s" },
+    { Kind::Nvme, Board::Pi5, 1920, 1080, true, 16, false, "none", 30, 1, 0, Label::Measured, Group::Sensor,
+      "60 s clean at 30 fps (the mode's top), 125 MB/s; longer takes not run" },
+    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 12, false, "none", 20, 30, 0, Label::Unconfirmed, Group::BackEnd,
+      "capture gaps at every fps from 25 to 30; nothing held clean, 20 is a placeholder" },
+    { Kind::Nvme, Board::Pi5, 3840, 2160, false, 12, false, "lossless_jpeg", 40, 15, 0, Label::Measured, Group::Encoder,
+      "lossless 40 and 39 fps held 15 minutes, about 250 MB/s, drive up to 68 C, no write pause" },
+    { Kind::Nvme, Board::Pi5, 1920, 1080, false, 12, false, "lossless_jpeg", 60, 1, 0, Label::Measured, Group::Sensor,
+      "60 s clean at 60 fps (the mode's top); longer takes not run at the reference levers" },
+    { Kind::Nvme, Board::Pi5, 3840, 2160, false, 10, false, "lossless_jpeg", 45, 30, 0, Label::Derived, Group::Encoder,
+      "45-47 fps at 60 s; no take held clean at the fps tried (60)" },
+    { Kind::Nvme, Board::Pi5, 1920, 1080, false, 10, false, "lossless_jpeg", 60, 30, 0, Label::Probable, Group::Sensor,
       "follows the 2K 12-bit row" },
-    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 16, true, "none", 24, 0, Label::Derived, Group::BackEnd,
-      "25 fps held 3 and 5 minutes at 307 MB/s, drive up to 66 C; Log costs the back end 2-3 fps" },
-    { Kind::Nvme, Board::Pi5, 2880, 2160, false, 12, false, "lossless_jpeg", 56, 0, Label::Derived, Group::Encoder,
-      "59 fps at 60 s" },
+    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 16, true, "none", 25, 15, 0, Label::Measured, Group::BackEnd,
+      "25 and 24 fps held 15 minutes at 311 MB/s, 280 GB, drive up to 69 C, no write pause; above 25 the back end drops" },
+    { Kind::Nvme, Board::Pi5, 2880, 2160, false, 12, false, "lossless_jpeg", 60, 1, 0, Label::Measured, Group::Encoder,
+      "60 s clean at 60 fps; longer takes not run" },
     // Samsung T7 over USB, about 100-105 MB/s in takes: Clear HDR lossless, where it holds more.
-    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 16, false, "lossless_jpeg", 9, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 16, false, "lossless_jpeg", 9, 30, 0, Label::Derived, Group::Drive,
       "about 10 MB per frame at 105 MB/s" },
-    { Kind::UsbSsd, Board::Pi5, 1920, 1080, true, 16, false, "lossless_jpeg", 27, 0, Label::Measured, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 1920, 1080, true, 16, false, "lossless_jpeg", 27, 30, 0, Label::Measured, Group::Drive,
       "lossless 27 fps passed 30 minutes (older build)" },
-    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 12, false, "lossless_jpeg", 12, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 12, false, "lossless_jpeg", 12, 30, 0, Label::Derived, Group::Drive,
       "frame size over the drive's speed" },
-    { Kind::UsbSsd, Board::Pi5, 3840, 2160, false, 12, false, "lossless_jpeg", 18, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 3840, 2160, false, 12, false, "lossless_jpeg", 18, 30, 0, Label::Derived, Group::Drive,
       "frame size over the drive's speed; 4K never run on this drive" },
-    { Kind::UsbSsd, Board::Pi5, 1920, 1080, false, 12, false, "lossless_jpeg", 48, 0, Label::Measured, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 1920, 1080, false, 12, false, "lossless_jpeg", 48, 30, 0, Label::Measured, Group::Drive,
       "lossless 48 fps passed 30 minutes" },
-    { Kind::UsbSsd, Board::Pi5, 3840, 2160, false, 10, false, "lossless_jpeg", 20, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 3840, 2160, false, 10, false, "lossless_jpeg", 20, 30, 0, Label::Derived, Group::Drive,
       "frame size over the drive's speed" },
-    { Kind::UsbSsd, Board::Pi5, 1920, 1080, false, 10, false, "lossless_jpeg", 48, 0, Label::Probable, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 1920, 1080, false, 10, false, "lossless_jpeg", 48, 30, 0, Label::Probable, Group::Drive,
       "follows the 2K 12-bit row" },
-    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 16, true, "lossless_jpeg", 8, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 3840, 2160, true, 16, true, "lossless_jpeg", 8, 30, 0, Label::Derived, Group::Drive,
       "the Clear HDR 16-bit row less the Log gain" },
-    { Kind::UsbSsd, Board::Pi5, 2880, 2160, false, 12, false, "lossless_jpeg", 24, 0, Label::Derived, Group::Drive,
+    { Kind::UsbSsd, Board::Pi5, 2880, 2160, false, 12, false, "lossless_jpeg", 24, 30, 0, Label::Derived, Group::Drive,
       "frame size over the drive's speed" },
 };
 
@@ -90,7 +93,7 @@ struct PixelRate {
 
 inline constexpr PixelRate kPixelRates[] = {
     { Kind::Nvme, Board::Pi5, false, 12, 330.0, Label::Derived, Group::Encoder,
-      "4K at 40-42 fps and 2880x2160 at 56 fps" },
+      "4K lossless at 40 fps for 15 minutes (measured); 2880x2160 held 60 fps for 60 s" },
     { Kind::UsbSsd, Board::Pi5, false, 12, 149.0, Label::Derived, Group::Drive,
       "4K at 18 fps and 2880x2160 at 24 fps" },
 };
@@ -172,6 +175,7 @@ inline double flatFolderMaxFps(double takeSeconds = 1800.0) { return std::sqrt(1
 struct Limit {
     bool found = false;             // false: no row for this class, only the sensor's ceiling applies
     double fps30 = 0.0;             // before the lever shifts
+    unsigned minutes = 30;          // the take length fps30 is for
     double fpsShort = 0.0;
     Label label = Label::Unconfirmed;
     Group group = Group::Sensor;
@@ -207,7 +211,7 @@ inline Limit limitFor(const Context &context, const Mode &mode)
                 larger = &c;
         }
     if (exact) {
-        out = { true, exact->fps30, exact->fpsShort, exact->label, exact->group, exact->compression, exact->source,
+        out = { true, exact->fps30, exact->minutes, exact->fpsShort, exact->label, exact->group, exact->compression, exact->source,
                 exact, true, false };
     } else {
         for (const PixelRate &rate : kPixelRates) {
@@ -215,12 +219,12 @@ inline Limit limitFor(const Context &context, const Mode &mode)
                 rate.bits != mode.bits || pixels <= 0.0)
                 continue;
             const double fps = std::max(rate.mpxPerSecond * 1e6 / pixels, larger ? larger->fps30 : 0.0);
-            out = { true, fps, 0.0, weaker(rate.label, larger ? larger->label : rate.label), rate.group,
+            out = { true, fps, larger ? larger->minutes : 30u, 0.0, weaker(rate.label, larger ? larger->label : rate.label), rate.group,
                     "lossless_jpeg", rate.source, larger, false, true };
             break;
         }
         if (!out.found && larger)
-            out = { true, larger->fps30, larger->fpsShort, weaker(larger->label, Label::Derived), larger->group,
+            out = { true, larger->fps30, larger->minutes, larger->fpsShort, weaker(larger->label, Label::Derived), larger->group,
                     larger->compression, larger->source, larger, false, false };
     }
     if (out.found && !context.storageMeasured)
@@ -350,7 +354,7 @@ inline std::string whyText(const Context &context, const Mode &mode, const Cap &
     } else if (!cap.row.found) {
         text = "No measurement for " + name + ": the sensor's own limit of " + wholeFps(sensorCeiling) + " fps applies.";
     } else {
-        text = name + " holds " + wholeFps(cap.fps) + " fps for 30-minute takes on this " + storageName(context.storage) +
+        text = name + " holds " + wholeFps(cap.fps) + " fps for " + std::to_string(cap.row.minutes) + "-minute takes on this " + storageName(context.storage) +
                " (" + labelName(cap.row.label) + ").";
         if (cap.row.fpsShort > cap.limit)
             text += " " + wholeFps(cap.row.fpsShort) + " fps holds up to 8 minutes (measured).";
@@ -391,7 +395,7 @@ inline std::string steppedDownText(const Context &context, double fps, const Mod
     else if (best.hdr && !chosen.hdr)
         text = at + ": " + holds + " (" + labelName(bestCap.row.label) + ").";
     else
-        text = at + ": " + holds + " for 30 minutes on this " + storageName(context.storage) + " (" +
+        text = at + ": " + holds + " for " + std::to_string(bestCap.row.minutes) + " minutes on this " + storageName(context.storage) + " (" +
                labelName(bestCap.row.label) + ").";
     const bool drive = context.storageMeasured && context.storage == Kind::UsbSsd && bestCap.row.group == Group::Drive;
     return text + (drive ? std::string() : speedTestNote(context, bestCap)) + contextNotes(context);

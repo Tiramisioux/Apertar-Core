@@ -179,6 +179,7 @@ struct PoolEntry {
 struct StepInfo {
     double fps30 = 0.0;       // the table's number before the levers and the rounding; 0 = no row
     double fpsShort = 0.0;    // what the mode holds for takes up to about 8 minutes; 0 = none known
+    unsigned minutes = 30;    // the take length fps30 is for: the longest measured, or 30 when not measured
     std::string basis;        // measured, derived, probable, unconfirmed, or sensor (no measurement)
     std::string wall;         // back end, encoder, drive, sensor or TDN
     std::string why;
@@ -242,7 +243,7 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
         const double ceiling = ceilingOf(s[i]);
         out += std::string(i ? "," : "") + "{\"label\":" + quote(label(l.rungs[i])) +
                ",\"cap\":" + number(ceiling) + ",\"from\":" + number(from) + ",\"fps30\":" + number(info[i].fps30) +
-               ",\"fps_short\":" + number(info[i].fpsShort) + ",\"basis\":" + quote(info[i].basis) +
+               ",\"fps_short\":" + number(info[i].fpsShort) + ",\"minutes\":" + std::to_string(info[i].minutes) + ",\"basis\":" + quote(info[i].basis) +
                ",\"wall\":" + quote(info[i].wall) + ",\"never_used\":" + (info[i].neverUsed ? "true" : "false") +
                ",\"why\":" + quote(info[i].why) + "}";
         from = std::max(from, ceiling);
