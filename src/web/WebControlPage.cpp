@@ -10501,11 +10501,12 @@ std::string_view webControlPageHtml()
     }
 
     function timecodeFilesChoices() {
-      return [{ value: "Same as Mode", label: "Same as Mode", enabled: true }].concat(timecodeChoices());
+      return timecodeChoices();
     }
 
+    // The timecode the files really get: the file mode, which follows Mode until the files are set apart.
     function timecodeFilesLabel(snapshot) {
-      return fileTimecodeSeparate(snapshot) ? fileTimecodeLabel(snapshot) : "Same as Mode";
+      return fileTimecodeLabel(snapshot);
     }
 
     function timecodeSummaryLabel(snapshot) {
@@ -10526,9 +10527,9 @@ std::string_view webControlPageHtml()
       return timecodeCommand(value, fileTimecodeSeparate(state.snapshot) ? "ui" : "");
     }
 
-    // Files: Same as Mode sets both again (Core writes fileTimecodeSeparate=false), a fixed value sets the files apart.
+    // Files: Time of Day or Clip sets the file timecode apart from Mode.
     function timecodeFilesCommand(value) {
-      return value === "Same as Mode" ? timecodeCommand(uiTimecodeLabel(state.snapshot)) : timecodeCommand(value, "files");
+      return timecodeCommand(value, "files");
     }
 
     function autofocusModeLabel(modeValue) {
@@ -11871,7 +11872,7 @@ std::string_view webControlPageHtml()
             card.appendChild(createFavoriteSelectBlock("Mode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
               await dispatchFavoriteCommand(timecodeModeCommand(value));
             }));
-            card.appendChild(createFavoriteSelectBlock("Files", fileTimecodeSeparate(snapshot) ? timecodeDisplayName(fileTimecodeLabel(snapshot)) : "Same as Mode", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+            card.appendChild(createFavoriteSelectBlock("Files", timecodeDisplayName(fileTimecodeLabel(snapshot)), timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
               await dispatchFavoriteCommand(timecodeFilesCommand(value));
             }, 3));
             break;
