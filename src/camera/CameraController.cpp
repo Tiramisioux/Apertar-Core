@@ -11935,10 +11935,28 @@ std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Lad
     double full = 0.0;
     for (const auto &rung : pool)
         full = std::max(full, window(rung));
-    std::vector<ladder::Rung> modes;
+    std::vector<ladder::Rung> full_window;
+    double largest = 0.0;
     for (const auto &rung : pool)
-        if (window(rung) >= full)
-            modes.push_back(rung);
+        if (window(rung) >= full) {
+            full_window.push_back(rung);
+            largest = std::max(largest, double(rung.width) * rung.height);
+        }
+    // The default order never drops the resolution and then raises it again: Clear HDR (16, then 12-bit) only at the
+    // largest size, SDR 12-bit at every size, and 10-bit only once the resolution has dropped. The picture gives up
+    // bit depth and Clear HDR first, then resolution, then the last bit depth.
+    const bool smallerSdr = std::any_of(full_window.begin(), full_window.end(), [&](const ladder::Rung &r) {
+        return !r.clearHdr && double(r.width) * r.height < largest;
+    });
+    std::vector<ladder::Rung> modes;
+    for (const auto &rung : full_window) {
+        const bool largestSize = double(rung.width) * rung.height >= largest;
+        if (rung.clearHdr && !largestSize)
+            continue;
+        if (!rung.clearHdr && rung.bits == 10 && largestSize && smallerSdr)
+            continue;
+        modes.push_back(rung);
+    }
     return modes;
 }
 
