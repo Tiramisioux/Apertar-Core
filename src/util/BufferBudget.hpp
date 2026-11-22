@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 
+#include "camera/SustainedFps.hpp"
 #include "cdng/FramePath.hpp"
 
 namespace apertar {
@@ -94,6 +95,17 @@ inline uint64_t readMemInfoBytes(const char *key, const char *path = "/proc/memi
     return 0;
 }
 
+// Whether a take is split into part_NNN folders: off, on, or automatic (on where a flat folder would not last the take).
+enum class SplitMode { Off, On, Auto };
+
+inline const char *splitModeName(SplitMode mode)
+{
+    return mode == SplitMode::Off ? "off" : mode == SplitMode::Auto ? "auto" : "on";
+}
+
+// The part size when the file or the variable names none.
+constexpr unsigned kDefaultFramesPerFolder = 5000;
+
 // The [storage] keys of apertar-hardware.conf that set the same four things as the APERTAR_CDNG_* variables.
 // A missing or bad key is "not set" (the default, or the variable, decides). The environment wins over the file.
 struct BufferConf {
@@ -102,7 +114,8 @@ struct BufferConf {
     std::optional<unsigned> floorMb;    // buffer_ram_floor_mb     0..1048576
     std::optional<double> maxFraction;  // buffer_ram_max_fraction 0.1..0.75
     std::optional<unsigned> stopPercent;  // buffer_stop_percent    0 (never) or 50..99
-    std::optional<unsigned> framesPerFolder;  // frames_per_folder 0 (one folder) or 100..100000 (framepath::)
+    std::optional<unsigned> framesPerFolder;  // frames_per_folder, the part size: 100..100000 (framepath::); 0 only in an old file, where it means no split
+    std::optional<SplitMode> split;           // split=off|on|auto
     std::optional<bool> clipMerge;            // clip_merge=on|off: Core's merge worker flattens split clips when idle
 };
 
@@ -127,6 +140,8 @@ inline std::string bufferConfProblem(const std::string &key, const std::string &
     }
     if (key == "frames_per_folder")
         return framepath::framesPerFolderProblem(value);
+    if (key == "split")
+        return (value == "off" || value == "on" || value == "auto") ? "" : "is not off, on or auto";
     if (key == "clip_merge")
         return (value == "on" || value == "off") ? "" : "is not on or off";
     if (key == "buffer_ram_floor_mb") {
@@ -187,6 +202,8 @@ inline BufferConf parseBufferConf(const std::string &text)
             conf.floorMb = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
         else if (key == "frames_per_folder")
             conf.framesPerFolder = static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 10));
+        else if (key == "split")
+            conf.split = value == "off" ? SplitMode::Off : value == "auto" ? SplitMode::Auto : SplitMode::On;
         else if (key == "clip_merge")
             conf.clipMerge = value == "on";
     }
@@ -308,17 +325,51 @@ inline std::string requestedBufferMode(const char *envValue, const BufferConf &c
     return conf.ram.value_or(false) ? "ram" : "frames";
 }
 
-// frames_per_folder of the next take: a set APERTAR_CDNG_FRAMES_PER_FOLDER wins (a bad value is 0, one folder), else the
-// file's frames_per_folder=, else 0. Published as an atomic (state frames_per_folder); the camera reads it again at each take.
-inline unsigned requestedFramesPerFolder(const char *envValue, const BufferConf &conf)
+// Split mode of the next take: a set APERTAR_CDNG_FRAMES_PER_FOLDER wins (0 or a bad value: off, a part size: on), else the
+// file's split=, else an old file's frames_per_folder (0: off, a size: on), else on. Published as an atomic (state
+// split_mode); the camera reads it again at each take.
+inline SplitMode requestedSplitMode(const char *envValue, const BufferConf &conf)
 {
     if (envValue && *envValue)
+        return framepath::parseFramesPerFolder(envValue).value_or(0) > 0 ? SplitMode::On : SplitMode::Off;
+    if (conf.split)
+        return *conf.split;
+    if (conf.framesPerFolder)
+        return *conf.framesPerFolder > 0 ? SplitMode::On : SplitMode::Off;
+    return SplitMode::On;
+}
+
+// frames_per_folder of the next take, the part size: a set APERTAR_CDNG_FRAMES_PER_FOLDER wins, else the file's
+// frames_per_folder=, else 5000; 0 (one folder) when the split is off. Published as an atomic (state frames_per_folder).
+inline unsigned requestedFramesPerFolder(const char *envValue, const BufferConf &conf)
+{
+    if (requestedSplitMode(envValue, conf) == SplitMode::Off)
+        return 0;
+    if (envValue && *envValue)
         return framepath::parseFramesPerFolder(envValue).value_or(0);
-    return conf.framesPerFolder.value_or(0);
+    return conf.framesPerFolder.value_or(0) > 0 ? *conf.framesPerFolder : kDefaultFramesPerFolder;
+}
+
+// What one take does: parts of partSize frames, or 0 for one folder. Per-frame formats only (cDNG, lossy DNG; an MLV
+// take is one file). Automatic splits where a flat folder would not last a 30-minute take: exFAT or FAT above
+// SustainedFps.hpp's flat-folder fps; a take that ramps its fps may go above it, so it counts as above.
+inline unsigned framesPerFolderForTake(SplitMode mode, unsigned partSize, bool perFrameFormat, bool fatLike, double fps,
+                                       bool fpsRamps)
+{
+    if (mode == SplitMode::Off || !perFrameFormat)
+        return 0;
+    if (mode == SplitMode::Auto && !(fatLike && (fpsRamps || fps > sustained::flatFolderMaxFps())))
+        return 0;
+    return partSize;
 }
 inline std::atomic<unsigned> &framesPerFolderRequest()
 {
-    static std::atomic<unsigned> value{0};
+    static std::atomic<unsigned> value{kDefaultFramesPerFolder};
+    return value;
+}
+inline std::atomic<SplitMode> &splitModeRequest()
+{
+    static std::atomic<SplitMode> value{SplitMode::On};
     return value;
 }
 // The merge worker's switch: [storage] clip_merge (default on); APERTAR_CLIP_MERGE=0 forces it off.

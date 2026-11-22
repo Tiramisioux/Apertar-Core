@@ -191,6 +191,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
         << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
         << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -4411,12 +4412,17 @@ public:
             std::lock_guard<std::mutex> partLock(partMutex_);
             partsCreated_.clear();
         }
+        splitMode_ = bufferbudget::SplitMode::Off;
         if (recordingFormat_ != RecordingFormat::Mlv && !prerollTake_.load(std::memory_order_acquire)) {
             const char *const env = std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER");
             if (env && *env && !framepath::parseFramesPerFolder(env))
                 std::cerr << "ApertarCore recording: APERTAR_CDNG_FRAMES_PER_FOLDER=" << env
                           << " is not 0 or a whole number from 100 to 100000: one folder\n";
-            framesPerFolder_ = bufferbudget::requestedFramesPerFolder(env, loadBufferConf());
+            const bufferbudget::BufferConf conf = loadBufferConf();
+            splitMode_ = bufferbudget::requestedSplitMode(env, conf);
+            const bool fatLike = mediaProfile_.filesystem == MediaFilesystem::Exfat || mediaProfile_.filesystem == MediaFilesystem::Vfat;
+            framesPerFolder_ = bufferbudget::framesPerFolderForTake(splitMode_, bufferbudget::requestedFramesPerFolder(env, conf),
+                                                                    true, fatLike, settings.fps, settings.fpsSpeedRamp);
         }
         if (framesPerFolder_ > 0) {
             std::error_code partEc;
@@ -4524,6 +4530,7 @@ public:
                   << " writeback=" << (startWritebackPerFrame() ? "on" : "off")
                   << " sync_ms=" << syncMs
                   << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no")
+                  << " split=" << bufferbudget::splitModeName(splitMode_)
                   << " frames_per_folder=" << framesPerFolder_;
         if (fpsLimitProbeOnly())
             std::cerr << " fps_limit=probe";
@@ -5788,6 +5795,7 @@ private:
     // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made by the writers
     // (ensurePartFolder, before the frame is written), so stop()'s bounded wait covers a mkdir on a dead medium.
     unsigned framesPerFolder_ = 0;
+    bufferbudget::SplitMode splitMode_ = bufferbudget::SplitMode::Off;   // the mode that decided framesPerFolder_ (the clip line)
     std::mutex partMutex_;
     std::unordered_set<uint64_t> partsCreated_;
     std::mutex writtenFilesMutex_;
@@ -11966,6 +11974,10 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
     out.limitBasis = "sensor";
     out.limitBy = "sensor";
     out.limitWhy.clear();
+    out.splitEffective = !out.photoModeEnabled && out.recordingFormat != RecordingFormat::Mlv && !isProcessedVideoFormat(out.recordingFormat) &&
+        bufferbudget::framesPerFolderForTake(bufferbudget::splitModeRequest().load(std::memory_order_acquire),
+                                             bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire), true,
+                                             ladderContext_.fatLike, out.fps, out.fpsSpeedRamp) > 0;
     if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat)) {
         out.limitWhy = "Limits are not measured for H.264, ProRes and stills.";
         return;

@@ -259,6 +259,7 @@ std::string bufferSettingMembers()
         + ",\"storage_preroll_fps\":" + storagepreroll::prerollFpsText(storagepreroll::prerollFps())
         + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\""
         + ",\"frames_per_folder\":" + std::to_string(bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire))
+        + ",\"split_mode\":\"" + bufferbudget::splitModeName(bufferbudget::splitModeRequest().load(std::memory_order_acquire)) + "\""
         + ",\"frames_per_folder_env\":" + (std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") && *std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") ? "true" : "false")
         + ",\"clip_merge_enabled\":" + (bufferbudget::clipMergeRequest().load(std::memory_order_acquire) ? "true" : "false")
         + ",\"clip_merge_env_off\":" + (bufferbudget::clipMergeEnvOff(std::getenv("APERTAR_CLIP_MERGE")) ? "true" : "false");
@@ -277,6 +278,8 @@ void refreshBufferRequest()
     const bufferbudget::BufferConf storageConf = bufferbudget::parseBufferConf(hardware::configStore().currentText());
     bufferbudget::framesPerFolderRequest().store(
         bufferbudget::requestedFramesPerFolder(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
+    bufferbudget::splitModeRequest().store(
+        bufferbudget::requestedSplitMode(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
     bufferbudget::clipMergeRequest().store(
         bufferbudget::requestedClipMerge(std::getenv("APERTAR_CLIP_MERGE"), storageConf), std::memory_order_release);
 }
@@ -332,6 +335,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
         << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
         << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -5180,10 +5184,13 @@ pcie_controller=1000110000.pcie
 # buffer_ram_max_fraction=0.5
 # Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
 # buffer_stop_percent=90
-# Frames per folder: 0 keeps every frame of a take in its clip folder; 100 to 100000 starts a new part_NNN folder inside
-# the clip every that many frames (an exFAT create walks the whole folder, so long takes in one folder get slower).
+# Split a take into part_NNN folders inside the clip (an exFAT create walks the whole folder, so long takes in one folder
+# get slower): on splits every cDNG and lossy DNG take (the default), auto only where a flat folder would not last 30 minutes
+# (exFAT or FAT above 32 fps), off keeps every frame in the clip folder. MLV is never split.
 # Takes effect at the next take. Resolve and Premiere import one folder as one clip: split clips are merged first.
-# frames_per_folder=0
+# split=on
+# Frames per part, 100 to 100000.
+# frames_per_folder=5000
 # Merge split clips back into one folder while the camera is idle (on, the default) or leave them split (off).
 # clip_merge=on
 
@@ -10155,6 +10162,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
         << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
         << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -12180,7 +12188,9 @@ void ApertarCoreApp::refreshLadderContext()
     context.fillFraction = total > 0 ? 1.0 - double(free) / double(total) : 0.0;
     context.aidsOn = ui.focusPeakingEnabled || ui.zebraEnabled;
     context.audioOn = ui.recordAudioEnabled;
-    context.splitOn = bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire) > 0;
+    const bufferbudget::SplitMode split = bufferbudget::splitModeRequest().load(std::memory_order_acquire);
+    context.splitOn = split != bufferbudget::SplitMode::Off;
+    context.splitAuto = split == bufferbudget::SplitMode::Auto;
     ladderFillHigh_.store(context.fillFraction > 0.94, std::memory_order_relaxed);
     camera_.setLadderContext(context);
 }
@@ -14100,23 +14110,33 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
     }
 
-    // frames_per_folder=<N> and clip_merge=on|off in [storage], through the store like set_buffer_mode. Allowed while
-    // recording: frames_per_folder applies to the next take, clip_merge to the merge worker's next rename.
+    // frames_per_folder=<N>, split=off|on|auto and clip_merge=on|off in [storage], through the store like set_buffer_mode.
+    // Allowed while recording: the split applies to the next take, clip_merge to the merge worker's next rename.
+    // set_frames_per_folder takes value (0 = no split, else the part size, which turns the split on unless it is automatic)
+    // and/or mode (off, on or auto).
     if (command.name == "set_frames_per_folder" || command.name == "set_clip_merge") {
         const bool fpf = command.name == "set_frames_per_folder";
-        std::string key, value;
+        std::vector<hwconf::Edit> edits;
         if (fpf) {
             const auto v = command.string("value");
-            if (!v || !framepath::framesPerFolderProblem(*v).empty())
-                return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000.");
-            key = "frames_per_folder";
-            value = *v;
+            const auto m = command.string("mode");
+            if ((!v && !m) || (v && !framepath::framesPerFolderProblem(*v).empty()) ||
+                (m && *m != "off" && *m != "on" && *m != "auto"))
+                return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000, or mode=off, on or auto.");
+            const unsigned size = v ? static_cast<unsigned>(std::strtoul(v->c_str(), nullptr, 10)) : 0;
+            if (size > 0)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "frames_per_folder", *v });
+            if (m)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", *m });
+            else if (v && size == 0)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", "off" });
+            else if (bufferbudget::splitModeRequest().load(std::memory_order_acquire) != bufferbudget::SplitMode::Auto)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", "on" });
         } else {
             const auto enabled = command.string("enabled");
             if (!enabled || (*enabled != "true" && *enabled != "false" && *enabled != "1" && *enabled != "0"))
                 return errorReply(command.id, "set_clip_merge needs enabled=true or enabled=false.");
-            key = "clip_merge";
-            value = (*enabled == "true" || *enabled == "1") ? "on" : "off";
+            edits.push_back({ hwconf::Edit::Op::Set, "storage", "clip_merge", (*enabled == "true" || *enabled == "1") ? "on" : "off" });
         }
         hardware::HardwareConfigStore &store = hardware::configStore();
         const std::string base = command.string("base").value_or("");
@@ -14124,7 +14144,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.backup = true;
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
-            { { hwconf::Edit::Op::Set, "storage", key, value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+            edits, command.string("by").value_or("api"), flags, hardwareConfigFacts());
         if (!result.ok)
             return errorReply(command.id, result.error);
         if (result.written) {

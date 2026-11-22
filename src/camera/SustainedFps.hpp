@@ -115,7 +115,8 @@ struct Context {
     bool log = false;               // CineMate Log
     bool aidsOn = true;             // focus peaking or zebra
     bool audioOn = true;
-    bool splitOn = true;            // the clip folder is split into parts
+    bool splitOn = true;            // the clip folder is split into parts (automatic counts as on: it splits where it matters)
+    bool splitAuto = false;         // the split is automatic; the table does not read it, the line does
     bool fatLike = false;           // exFAT or FAT: a flat folder slows file creation
     double fillFraction = 0.0;      // how full the medium is, 0 to 1
 

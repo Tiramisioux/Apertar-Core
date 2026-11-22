@@ -193,6 +193,7 @@ struct CaptureSettings {
     std::string limitBasis;        // Runtime: measured, derived, probable, unconfirmed, or sensor (no measurement).
     std::string limitBy;           // Runtime: the wall that sets it: back end, encoder, drive, sensor or TDN.
     std::string limitWhy;          // Runtime: one sentence for the limit line under the FPS picker.
+    bool splitEffective = false;   // Runtime: the next take is split into part folders, at this fps and format and on this storage.
     std::string ladderText;        // Runtime (T34): the running line, e.g. "Resolution 1 · 3840×2160 · ClearHDR16 · ≤25 · Uncompressed".
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
