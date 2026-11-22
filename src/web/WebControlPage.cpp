@@ -10283,6 +10283,17 @@ std::string_view webControlPageHtml()
       return options;
     }
 
+    // The dropdowns list the IMX585 sizes best first, as the Mode Ladder groups do; the pills keep 1.6.0's order.
+    function resolutionSelectOptions(snapshot, options) {
+      if (!imx585Selected(snapshot))
+        return options;
+      const rank = (option) => {
+        const index = imx585LadderGroups.findIndex((group) => group[0] === option.value);
+        return index < 0 ? imx585LadderGroups.length : index;
+      };
+      return options.slice().sort((a, b) => rank(a) - rank(b));
+    }
+
     function clearHdrAvailableForSnapshot(snapshot) {
       const format = String((snapshot && snapshot.recording_format) || "").toLowerCase();
       return imx585Selected(snapshot) && !(snapshot && snapshot.photo_mode_enabled)
@@ -12418,7 +12429,7 @@ std::string_view webControlPageHtml()
             const ladderActive = snapshot.ladder_active === true;
             const grid = createFavoriteFieldGrid();
             if (cropControlsVisible) {
-              grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionBaseOptions, resolutionBaseValue, async (value) => {
+              grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionSelectOptions(snapshot, resolutionBaseOptions), resolutionBaseValue, async (value) => {
                 for (const command of resolutionBaseCommands(snapshot, value))
                   await dispatchFavoriteCommand(command);
               }, false, ladderActive));
@@ -17457,7 +17468,7 @@ std::string_view webControlPageHtml()
       setText("settingsStillBurstLabel", uiState.photo_bracketing_enabled ? "EV Offset" : "Burst");
       ensureSelectOptions("settingsStillTimelapseSelect", [...stillTimelapseIntervalOptions,
         ...(stillTimelapseIntervalOptions.includes(stillTimelapseIntervalValue) ? [] : [stillTimelapseIntervalValue]), "Custom..."]);
-      ensureSelectEntries("settingsRecordResolutionSelect", resolutionBaseOptions);
+      ensureSelectEntries("settingsRecordResolutionSelect", resolutionSelectOptions(snapshot, resolutionBaseOptions));
       ensureSelectEntries("settingsRecordCropSelect", cropRatioOptions);
       ensureSelectOptions("settingsH264ResolutionSelect", h264ResolutionOptions.filter(value => {
         const maxWidth = Number(snapshot.recording_capabilities && snapshot.recording_capabilities.h264_max_width) || 2560;
