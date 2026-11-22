@@ -11966,6 +11966,32 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
     }
     out.limitBy = cap.by;
     out.limitWhy = sustained::whyText(context, mode, cap, ceiling);
+    if (ladderActiveForLocked(out)) {   // Dynamic resolution chose this mode: say what held a better one back
+        const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, out);
+        const ladder::Candidate *best = nullptr;   // the mode ranked before this one that came closest
+        double top = 0.0;
+        bool ranked = false;
+        for (const size_t k : ladder::tryOrder(candidates)) {
+            const ladder::Candidate &c = candidates[k];
+            if (!c.usable)
+                continue;
+            top = std::max(top, c.cap);
+            if (!ranked && c.mode.width == rung.width && c.mode.height == rung.height && c.mode.bits == rung.bits &&
+                c.mode.clearHdr == rung.clearHdr)
+                ranked = true;
+            else if (!ranked && (!best || c.cap > best->cap))
+                best = &c;
+        }
+        if (ranked && cap.fps >= top - 0.0005 && out.fps >= cap.fps - 0.0005) {
+            out.limitWhy = sustained::highestText(context, out.fps, mode);
+        } else if (ranked && best && best->cap < out.fps - 0.0005) {
+            ladder::Ladder single;
+            single.rungs.push_back(best->mode);
+            const sustained::Mode bestMode = limitModeLocked(best->mode);
+            const sustained::Cap bestCap = sustained::capFor(context, bestMode, ladderStatesLocked(single, out).front().modeCeiling);
+            out.limitWhy = sustained::steppedDownText(context, out.fps, mode, bestMode, bestCap);
+        }
+    }
     if (ladderOverride_ && modeLadder_.enabled)
         out.limitWhy += " You chose this mode: Dynamic resolution waits for the next fps change.";
 }
@@ -12056,15 +12082,38 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
 {
     // The enabled modes in the order the table tries them, with the step each serves.
     const std::vector<ladder::Candidate> candidates = candidatesLocked(draft, settings_);
+    const sustained::Context context = limitContextLocked(settings_);
     ladder::Ladder shown = draft;
     shown.rungs.clear();
     std::vector<ladder::RungState> states;
+    std::vector<ladder::StepInfo> info;
+    double reached = 0.0;                 // the highest cap of the steps before this one
+    sustained::Mode reachedMode;
+    sustained::Cap reachedCap;
     int running = -1;
     for (const size_t index : ladder::tryOrder(candidates)) {
         const ladder::Candidate &c = candidates[index];
         ladder::Ladder single;
         single.rungs.push_back(c.mode);
         ladder::RungState state = ladderStatesLocked(single, settings_).front();
+        const sustained::Mode limitMode = limitModeLocked(c.mode);
+        const sustained::Cap cap = sustained::capFor(context, limitMode, state.modeCeiling);
+        ladder::StepInfo step;
+        step.fps30 = cap.row.found ? cap.row.fps30 : 0.0;
+        step.fpsShort = cap.row.found ? cap.row.fpsShort : 0.0;
+        step.basis = cap.row.found ? sustained::labelName(cap.row.label) : "sensor";
+        step.wall = cap.by;
+        step.neverUsed = !c.usable || c.cap <= 0.0 || c.cap <= reached + 0.0005;
+        step.why = c.usable ? sustained::whyText(context, limitMode, cap, state.modeCeiling)
+                            : sustained::modeName(limitMode) + " cannot run in this format; it is skipped.";
+        if (c.usable && c.cap > 0.0 && step.neverUsed)
+            step.why += sustained::neverUsedText(reachedMode, reachedCap);
+        if (!step.neverUsed) {
+            reached = c.cap;
+            reachedMode = limitMode;
+            reachedCap = cap;
+        }
+        info.push_back(step);
         state.modeCeiling = c.cap;
         state.usable = c.usable && c.cap > 0.0;
         fillRungExtrasLocked(state, c.mode);
@@ -12083,7 +12132,7 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
         fillRungExtrasLocked(poolState, rung);
         pool.push_back({ rung, poolState });
     }
-    return ladder::toJson(shown, states, running, pool, errors, warnings);
+    return ladder::toJson(shown, states, running, info, pool, errors, warnings);
 }
 
 std::string CameraController::modeLadderJson() const

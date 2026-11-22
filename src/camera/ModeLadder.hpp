@@ -173,9 +173,21 @@ struct PoolEntry {
     RungState state;
 };
 
-// The get_mode_ladder / set_mode_ladder reply. running = 0-based rung index, -1 = off the ladder.
+// What the Dynamic resolution pane shows about one step beside its cap: the table's own number and where it comes
+// from, the sentence, and whether the step is ever chosen. CameraController fills it from the table.
+struct StepInfo {
+    double fps30 = 0.0;       // the table's number before the levers and the rounding; 0 = no row
+    double fpsShort = 0.0;    // what the mode holds for takes up to about 8 minutes; 0 = none known
+    std::string basis;        // measured, derived, probable, unconfirmed, or sensor (no measurement)
+    std::string wall;         // back end, encoder, drive, sensor or TDN
+    std::string why;
+    bool neverUsed = false;   // an earlier step already holds every fps this one does
+};
+
+// The get_mode_ladder / set_mode_ladder reply. running = 0-based rung index, -1 = off the ladder. info = one entry
+// per rung of l, for the "steps" list.
 inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int running,
-                          const std::vector<PoolEntry> &pool,
+                          const std::vector<StepInfo> &info, const std::vector<PoolEntry> &pool,
                           const std::vector<std::string> &errors, const std::vector<std::string> &warnings)
 {
     const auto quote = [](const std::string &t) {  // labels and messages come from this file: ASCII
@@ -220,6 +232,17 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
         const double ceiling = ceilingOf(s[i]);
         out += std::string(i ? "," : "") + "{" + mode(l.rungs[i], s[i]) + ",\"ceiling\":" + number(ceiling) +
                ",\"from\":" + number(from) + "}";
+        from = std::max(from, ceiling);
+    }
+    out += "],\"steps\":[";
+    from = 0.0;
+    for (size_t i = 0; i < l.rungs.size() && i < s.size() && i < info.size(); ++i) {
+        const double ceiling = ceilingOf(s[i]);
+        out += std::string(i ? "," : "") + "{\"label\":" + quote(label(l.rungs[i])) +
+               ",\"cap\":" + number(ceiling) + ",\"from\":" + number(from) + ",\"fps30\":" + number(info[i].fps30) +
+               ",\"fps_short\":" + number(info[i].fpsShort) + ",\"basis\":" + quote(info[i].basis) +
+               ",\"wall\":" + quote(info[i].wall) + ",\"never_used\":" + (info[i].neverUsed ? "true" : "false") +
+               ",\"why\":" + quote(info[i].why) + "}";
         from = std::max(from, ceiling);
     }
     out += "],\"pool\":[";

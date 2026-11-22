@@ -293,11 +293,24 @@ inline std::string modeName(const Mode &mode)
 
 inline const char *storageName(Kind storage) { return storage == Kind::Nvme ? "NVMe card" : "USB SSD"; }
 
+// fps is shown whole: the steps and the table's numbers are whole.
+inline std::string wholeFps(double fps) { return std::to_string(static_cast<long>(std::floor(fps + 1e-9))); }
+
+// What a sentence about a limit ends with: an unmeasured storage type, a nearly full card.
+inline std::string contextNotes(const Context &context)
+{
+    std::string text;
+    if (!context.storageMeasured)
+        text += " Storage type not measured: limits are the USB SSD's. Run the speed test.";
+    if (cardNearlyFull(context))
+        text += " The card is over 94 percent full: it stalled near 96 percent in 4K Clear HDR 16-bit takes.";
+    return text;
+}
+
 // The one sentence under the fps picker for the running mode (limit_why): what it holds, then what the levers
-// and the storage change. fps is shown whole: the steps and the table's numbers are whole.
+// and the storage change.
 inline std::string whyText(const Context &context, const Mode &mode, const Cap &cap, double sensorCeiling)
 {
-    const auto whole = [](double fps) { return std::to_string(static_cast<long>(std::floor(fps + 1e-9))); };
     const std::string name = modeName(mode) + (cap.row.cell && cap.row.cell->log ? " + Log" : "");
     if (context.board != Board::Pi5)
         return "Limits are not measured on this Raspberry Pi.";
@@ -306,28 +319,69 @@ inline std::string whyText(const Context &context, const Mode &mode, const Cap &
         text = "Preview temporal denoise is on: " + name + " drops frames at every rate tried (from 23 fps). "
                "Turn it off to use it.";
     } else if (!cap.row.found) {
-        text = "No measurement for " + name + ": the sensor's own limit of " + whole(sensorCeiling) + " fps applies.";
+        text = "No measurement for " + name + ": the sensor's own limit of " + wholeFps(sensorCeiling) + " fps applies.";
     } else {
-        text = name + " holds " + whole(cap.fps) + " fps for 30-minute takes on this " + storageName(context.storage) +
+        text = name + " holds " + wholeFps(cap.fps) + " fps for 30-minute takes on this " + storageName(context.storage) +
                " (" + labelName(cap.row.label) + ").";
         if (cap.row.fpsShort > cap.limit)
-            text += " " + whole(cap.row.fpsShort) + " fps holds up to 8 minutes (measured).";
+            text += " " + wholeFps(cap.row.fpsShort) + " fps holds up to 8 minutes (measured).";
         if (context.lock && cap.row.group == Group::BackEnd) {
             Context free = context;
             free.lock = false;
             const Cap without = capFor(free, mode, sensorCeiling);
             if (without.fps > cap.fps)
-                text += " Phase lock is on: " + name + " holds " + whole(cap.fps) + " fps instead of " +
-                        whole(without.fps) + ".";
+                text += " Phase lock is on: " + name + " holds " + wholeFps(cap.fps) + " fps instead of " +
+                        wholeFps(without.fps) + ".";
         }
         if (!context.splitOn && context.fatLike && cap.lever == std::string("split"))
             text += " Split long takes is off: takes over 30 minutes slow down above 32 fps. Turn it on.";
     }
-    if (!context.storageMeasured)
-        text += " Storage type not measured: limits are the USB SSD's. Run the speed test.";
-    if (cardNearlyFull(context))
-        text += " The card is over 94 percent full: it stalled near 96 percent in 4K Clear HDR 16-bit takes.";
-    return text;
+    return text + contextNotes(context);
+}
+
+// The USB SSD column's drive: about 105 MB/s in takes (a Samsung T7, the drive the numbers come from).
+inline constexpr unsigned kUsbSsdMegabytesPerSecond = 105;
+
+// The sentence for a mode the table chose below a better one: `best` is the mode ranked before the chosen one that
+// came closest to the fps (the highest cap, the first of equals), bestCap what it holds. Says what held it back.
+inline std::string steppedDownText(const Context &context, double fps, const Mode &chosen, const Mode &best,
+                                   const Cap &bestCap)
+{
+    const std::string at = "At " + wholeFps(fps) + " fps the camera records " + modeName(chosen);
+    const std::string name = modeName(best) + (bestCap.row.cell && bestCap.row.cell->log ? " + Log" : "");
+    const std::string holds = name + " holds " + wholeFps(bestCap.fps) + " fps";
+    std::string text;
+    if (context.board != Board::Pi5)
+        return "Limits are not measured on this Raspberry Pi.";
+    if (bestCap.by == std::string("TDN"))
+        text = "Preview temporal denoise is on: " + name + " drops frames at every rate tried (from 23 fps). " + at +
+               ". Turn it off to use " + name + ".";
+    else if (!bestCap.row.found)
+        text = at + ": " + name + " is limited to " + wholeFps(bestCap.fps) + " fps by the sensor.";
+    else if (bestCap.row.group == Group::Drive && context.storage == Kind::UsbSsd && context.storageMeasured)
+        text = "This USB SSD writes about " + std::to_string(kUsbSsdMegabytesPerSecond) + " MB/s: " + holds + " (" +
+               labelName(bestCap.row.label) + "). " + at + ".";
+    else if (best.hdr && !chosen.hdr)
+        text = at + ": " + holds + " (" + labelName(bestCap.row.label) + ").";
+    else
+        text = at + ": " + holds + " for 30 minutes on this " + storageName(context.storage) + " (" +
+               labelName(bestCap.row.label) + ").";
+    return text + contextNotes(context);
+}
+
+// The sentence when the fps is the most any enabled mode holds: nothing better was left to try.
+inline std::string highestText(const Context &context, double fps, const Mode &chosen)
+{
+    if (context.board != Board::Pi5)
+        return "Limits are not measured on this Raspberry Pi.";
+    return wholeFps(fps) + " fps is the most the enabled resolutions hold here (" + modeName(chosen) + ")." +
+           contextNotes(context);
+}
+
+// A step that no fps reaches: an earlier mode of the order already holds as much.
+inline std::string neverUsedText(const Mode &earlier, const Cap &earlierCap)
+{
+    return " Never used here: " + modeName(earlier) + " already holds " + wholeFps(earlierCap.fps) + " fps.";
 }
 
 } // namespace apertar::sustained

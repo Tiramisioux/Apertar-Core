@@ -147,11 +147,32 @@ int main()
         Ladder l = parseFile(kOldFile);
         l.aspects = { "16:9", "2.39:1" };
         const std::vector<RungState> states(l.rungs.size());
-        const std::string json = toJson(l, states, -1, {}, {}, {});
+        const std::string json = toJson(l, states, -1, {}, {}, {}, {});
         check(contains(json, ",\"aspects\":[\"16:9\",\"2.39:1\"],"), "toJson: \"aspects\":[\"16:9\",\"2.39:1\"]");
         check(contains(json, "\"resolutions_text\":\"" + kModes + "\""), "toJson: resolutions_text as before");
         l.aspects.clear();
-        check(contains(toJson(l, states, -1, {}, {}, {}), ",\"aspects\":[],"), "toJson: All is \"aspects\":[]");
+        check(contains(toJson(l, states, -1, {}, {}, {}, {}), ",\"aspects\":[],"), "toJson: All is \"aspects\":[]");
+    }
+
+    // ---- toJson: the steps, with the cap each serves from and the step that is never used ----
+    {
+        Ladder l = fromText(true, kModes, "");
+        std::vector<RungState> states(3);
+        states[0].usable = states[1].usable = states[2].usable = true;
+        states[0].modeCeiling = 20;
+        states[1].modeCeiling = 20;
+        states[2].modeCeiling = 33;
+        std::vector<StepInfo> info(3);
+        info[0].fps30 = 20; info[0].fpsShort = 27; info[0].basis = "unconfirmed"; info[0].wall = "back end"; info[0].why = "first";
+        info[1].neverUsed = true; info[1].why = "second \"quoted\"";
+        const std::string json = toJson(l, states, 0, info, {}, {}, {});
+        check(contains(json, "\"steps\":[{\"label\":\"4K Clear HDR 16-bit\",\"cap\":20,\"from\":0,\"fps30\":20,\"fps_short\":27,"
+                             "\"basis\":\"unconfirmed\",\"wall\":\"back end\",\"never_used\":false,\"why\":\"first\"}"),
+              "toJson steps: label, cap, from, the table's numbers and the sentence");
+        check(contains(json, "\"label\":\"4K SDR 12-bit\",\"cap\":20,\"from\":20,") && contains(json, "\"never_used\":true,\"why\":\"second \\\"quoted\\\"\""),
+              "toJson steps: the second step serves nothing above the first (from 20), never_used, the text is escaped");
+        check(contains(json, "\"label\":\"1920x1080 SDR 12-bit\",\"cap\":33,\"from\":20,"), "toJson steps: the third serves 20 to 33");
+        check(!contains(json, "ramp_ready") && !contains(json, "\"threshold\""), "toJson: no ramp_ready, no threshold");
     }
 
     // ---- Dynamic resolution: the order and the choice (table C), default list, no crops, TDN off, Log off ----

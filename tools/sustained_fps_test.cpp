@@ -255,6 +255,44 @@ int main()
               "modeName: sizes other than 4K and 2K are written out; a Context compares by value");
     }
 
+    // ---- the sentences when a mode below the best one runs ----
+    {
+        const auto stepped = [](const Context &c, double fps, const Mode &chosen, const Mode &best, double bestCeiling) {
+            return steppedDownText(c, fps, chosen, best, capFor(c, best, bestCeiling));
+        };
+        check(stepped(nvme(), 25.0, k2kHdr16, k4kHdr16, 30.0) ==
+                  "At 25 fps the camera records 2K Clear HDR 16-bit: 4K Clear HDR 16-bit holds 20 fps for 30 minutes on this NVMe card (unconfirmed).",
+              "stepped down: 4K Clear HDR 16-bit holds 20, so 2K Clear HDR 16-bit at 25");
+        check(stepped(nvme(), 33.0, k4kSdr12, k2kHdr16, 30.0) ==
+                  "At 33 fps the camera records 4K SDR 12-bit: 2K Clear HDR 16-bit holds 30 fps (probable).",
+              "stepped down: giving up Clear HDR names the last Clear HDR mode, no storage clause");
+        check(stepped(t7(), 25.0, k2kHdr16, k4kSdr12, 60.0) ==
+                  "This USB SSD writes about 105 MB/s: 4K SDR 12-bit holds 18 fps (derived). At 25 fps the camera records 2K Clear HDR 16-bit.",
+              "stepped down: a drive-limited mode names the drive");
+        Context unknown = t7();
+        unknown.storageMeasured = false;
+        check(stepped(unknown, 25.0, k2kHdr16, k4kSdr12, 60.0) ==
+                  "At 25 fps the camera records 2K Clear HDR 16-bit: 4K SDR 12-bit holds 18 fps for 30 minutes on this USB SSD (unconfirmed). "
+                  "Storage type not measured: limits are the USB SSD's. Run the speed test.",
+              "stepped down: an unmeasured drive is not named as the T7");
+        Context tdn = nvme();
+        tdn.tdn = true;
+        check(stepped(tdn, 25.0, k2kHdr16, k4kHdr16, 30.0) ==
+                  "Preview temporal denoise is on: 4K Clear HDR 16-bit drops frames at every rate tried (from 23 fps). "
+                  "At 25 fps the camera records 2K Clear HDR 16-bit. Turn it off to use 4K Clear HDR 16-bit.",
+              "stepped down: TDN names itself and the way back");
+        check(stepped(nvme(), 25.0, k2kHdr16, Mode{ 4096, 2304, true, 16, false }, 25.0) ==
+                  "At 25 fps the camera records 2K Clear HDR 16-bit: 4096x2304 Clear HDR 16-bit is limited to 25 fps by the sensor.",
+              "stepped down: a mode with no row is limited by the sensor");
+        Context board = nvme();
+        board.board = Board::Other;
+        check(stepped(board, 25.0, k2kHdr16, k4kHdr16, 30.0) == "Limits are not measured on this Raspberry Pi.", "stepped down: another board");
+        check(highestText(nvme(), 60.0, k2kSdr12) == "60 fps is the most the enabled resolutions hold here (2K SDR 12-bit).",
+              "highest: the most the enabled modes hold");
+        check(neverUsedText(k4kHdr16, capFor(nvme(), k4kHdr16, 30.0)) == " Never used here: 4K Clear HDR 16-bit already holds 20 fps.",
+              "never used: the earlier mode and its cap");
+    }
+
     // ---- the card ----
     {
         Context c = nvme();
