@@ -1820,7 +1820,27 @@ struct CdngLogTake {
     std::vector<uint16_t> copyTable;  // cDNG only: containerTable() for the copy worker; empty for Lossy DNG
     RawBitDepth viewDepth = RawBitDepth::Bits12;  // the frame view's bitDepth that copyTable expects
     bool codes12 = false;             // Clear HDR 12-bit: the stream is mapped through the CCMP codes
+    bool pisp = false;                // SDR cDNG from a PiSP-compressed stream: decoded to 16-bit, then mapped
 };
+
+// SDR cDNG with Log from a PiSP-compressed stream (every SDR mode on the Pi 5): each row is decoded to MSB-aligned
+// 16-bit samples and looked up in the take's table (which shifts them to the source depth first), so the frame
+// leaves as unpacked 16-bit containers of the stored depth, like the Clear HDR 16-bit Log path. src is the
+// copied compressed frame, dst holds width x height x 2 bytes. Returns false when the copy is short.
+bool decodePispLogFrame(const uint8_t *src, size_t size, uint32_t width, uint32_t height, uint32_t stride,
+                        uint8_t *dst, const uint16_t *table)
+{
+    const size_t rowBytes = ((static_cast<size_t>(width) + 7u) / 8u) * 8u;
+    for (uint32_t y = 0; y < height; ++y) {
+        const size_t offset = static_cast<size_t>(y) * stride;
+        if (offset + rowBytes > size)
+            return false;
+        auto *row = reinterpret_cast<uint16_t *>(dst + static_cast<size_t>(y) * width * 2u);
+        CdngEncoder::decodePispRowToMsb16(src + offset, row, width);
+        cdnglog::applyTable(row, width, table);
+    }
+    return true;
+}
 
 // Applies the take's table to a frame copy in place, row by row (the stride can pad past the width).
 void applyCdngLogFrame(uint8_t *data, size_t size, uint32_t width, uint32_t height, uint32_t stride,
@@ -4087,6 +4107,7 @@ struct CdngLogPlan {
     unsigned target = 0;
     bool lossy = false;
     bool codes12 = false;
+    bool pisp = false;
 };
 
 std::optional<CdngLogPlan> planCdngLog(const CaptureSettings &settings, SensorFamily sensorFamily,
@@ -4098,7 +4119,10 @@ std::optional<CdngLogPlan> planCdngLog(const CaptureSettings &settings, SensorFa
         return std::nullopt;
     const bool lossy = settings.recordingFormat == RecordingFormat::LossyDng;
     const bool codes12 = !lossy && clearHdrStoresCodes12(settings);
-    if (!lossy && (packing != PixelPacking::Unpacked || unpackedBytesPerSample != 2u)) {
+    // SDR cDNG arrives PiSP-compressed on the Pi 5; the copy worker decodes it before the lookup (the stream depth
+    // is then the sensor's own, 10 or 12, as the Lossy encoder reads it).
+    const bool pisp = !lossy && !settings.clearHdr && packing == PixelPacking::PispCompressed1;
+    if (!lossy && !pisp && (packing != PixelPacking::Unpacked || unpackedBytesPerSample != 2u)) {
         if (verbose)
             std::cerr << "ApertarCore CineMate Log: " << pixelPackingName(packing)
                       << " raw stream cannot be mapped on the copy worker, recording linear\n";
@@ -4127,7 +4151,7 @@ std::optional<CdngLogPlan> planCdngLog(const CaptureSettings &settings, SensorFa
                       << " bit, recording linear\n";
         return std::nullopt;
     }
-    return CdngLogPlan{*params, source, target, lossy, codes12};
+    return CdngLogPlan{*params, source, target, lossy, codes12, pisp};
 }
 
 // Null when Log is off, or when this stream cannot carry it; the take then records linear, as without Log.
@@ -4145,8 +4169,17 @@ std::shared_ptr<const CdngLogTake> buildCdngLogTake(const CaptureSettings &setti
     auto take = std::make_shared<CdngLogTake>();
     take->params = *params;
     take->codes12 = codes12;
+    take->pisp = plan->pisp;
     take->viewDepth = codes12 ? RawBitDepth::Bits12 : streamDepth;
-    if (codes12) {
+    if (plan->pisp) {
+        // The decoded samples are MSB-aligned 16-bit: index through value >> (16 - source) first.
+        std::vector<uint16_t> toSource(65536);
+        const unsigned down = 16u - plan->source;
+        for (size_t value = 0; value < toSource.size(); ++value)
+            toSource[value] = static_cast<uint16_t>(value >> down);
+        take->tables = cdnglog::buildTables(*params);
+        take->copyTable = cdnglog::containerTable(take->tables.forward, target == 8u ? 8u : 0u, toSource);
+    } else if (codes12) {
         take->tables = cdnglog::buildComposed(*params, ccmp::expansionTable());
         take->copyTable = cdnglog::containerTable(take->tables.forward, 0, ccmp::compressionLut());
     } else {
@@ -4157,7 +4190,7 @@ std::shared_ptr<const CdngLogTake> buildCdngLogTake(const CaptureSettings &setti
     if (take->tables.forward.empty() || (!lossy && take->copyTable.empty()))
         return nullptr;
     std::cerr << "ApertarCore " << params->describe() << (codes12 ? " composed with the CCMP expansion" : "")
-              << (lossy ? " (Lossy DNG)" : "") << "\n";
+              << (lossy ? " (Lossy DNG)" : "") << (plan->pisp ? " (decoded from the PiSP-compressed stream)" : "") << "\n";
     return take;
 }
 
@@ -5312,11 +5345,20 @@ private:
                 copyQueue_.pop_front();
             }
 
-            std::vector<uint8_t> rawCopy = acquireRawBuffer(copy.size);
+            // Log from a PiSP-compressed stream: the compressed frame lands in this thread's scratch, the
+            // decoded one (twice the bytes) in the pool buffer that goes to the writers.
+            const bool pispLog = log && log->pisp && !log->copyTable.empty() &&
+                copy.view.packing == PixelPacking::PispCompressed1;
+            thread_local std::vector<uint8_t> pispScratch;
+            const size_t decodedBytes = static_cast<size_t>(copy.view.width) * 2u * copy.view.height;
+            if (pispLog)
+                pispScratch.resize(copy.size);
+            std::vector<uint8_t> rawCopy = acquireRawBuffer(pispLog ? decodedBytes : copy.size);
             uint8_t *const rawData = rawCopy.data();
+            uint8_t *const landing = pispLog ? pispScratch.data() : rawData;
             const bool copied = copy.syncFd < 0 || dmabufCpuSync(copy.syncFd, true);
             if (copied) {
-                std::memcpy(rawData, copy.source, copy.size);
+                std::memcpy(landing, copy.source, copy.size);
                 if (copy.syncFd >= 0)
                     dmabufCpuSync(copy.syncFd, false);
             }
@@ -5327,7 +5369,24 @@ private:
                 if (dropWarning_) dropWarning_->markDropped();
                 continue;
             }
-            if (log && !log->copyTable.empty() && copy.view.packing == PixelPacking::Unpacked &&
+            if (pispLog) {
+                if (!decodePispLogFrame(landing, copy.size, copy.view.width, copy.view.height, copy.view.stride,
+                                        rawData, log->copyTable.data())) {
+                    recycleRawBuffer(std::move(rawCopy));
+                    if (dropWarning_) dropWarning_->markDropped();
+                    continue;
+                }
+                copy.size = decodedBytes;
+                copy.view.packing = PixelPacking::Unpacked;
+                copy.view.unpackedBytesPerSample = 2u;
+                copy.view.stride = copy.view.width * 2u;
+                copy.view.bitDepth = static_cast<RawBitDepth>(log->params.targetBits);
+                copy.metadata.linearizationTable = std::span<const uint16_t>(log->tables.inverse);
+                copy.metadata.hasBlackLevels = true;
+                std::fill(std::begin(copy.metadata.blackLevels), std::end(copy.metadata.blackLevels),
+                          static_cast<float>(log->params.blackLevel));
+                copy.metadata.blackLevelsOnContainerScale = true;
+            } else if (log && !log->copyTable.empty() && copy.view.packing == PixelPacking::Unpacked &&
                 copy.view.unpackedBytesPerSample == 2u && copy.view.bitDepth == log->viewDepth &&
                 copy.mapCodes12 == log->codes12) {
                 // On the copy, never the camera buffer. One table lookup per sample replaces
@@ -8143,11 +8202,15 @@ public:
 
         // The watcher's snapshot, not a fresh statvfs: this runs under the controller lock.
         recorder_.setMediaProfile(detectMediaProfile(cachedMediaSnapshotOrProbe(mediaRoot)));
-        recorder_.setFrameBytesHint(activeRawFrameBytes(rawStreamInfo_.stride, rawStreamInfo_.height) > 0
+        auto cdngLogTake = buildCdngLogTake(settings_, sensorFamily_, rawStreamInfo_.packing, rawStreamInfo_.bitDepth,
+                                            rawStreamInfo_.unpackedBytesPerSample);
+        // A Log take from a PiSP-compressed stream queues decoded 16-bit frames: twice the bytes of the stream's.
+        recorder_.setFrameBytesHint(cdngLogTake && cdngLogTake->pisp
+                                        ? static_cast<uint64_t>(rawStreamInfo_.width) * 2u * rawStreamInfo_.height
+                                        : activeRawFrameBytes(rawStreamInfo_.stride, rawStreamInfo_.height) > 0
                                         ? activeRawFrameBytes(rawStreamInfo_.stride, rawStreamInfo_.height)
                                         : rawStreamInfo_.frameSize);
-        recorder_.setCdngLog(buildCdngLogTake(settings_, sensorFamily_, rawStreamInfo_.packing, rawStreamInfo_.bitDepth,
-                                              rawStreamInfo_.unpackedBytesPerSample));
+        recorder_.setCdngLog(std::move(cdngLogTake));
         if (!recorder_.startAtFolder(clipFolder, settings, error)) {
             audioRecorder_.stop();
             gyroRecorder_.stop();
