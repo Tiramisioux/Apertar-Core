@@ -44,9 +44,9 @@ inline std::string effectiveCompression(const Rung &r)
 }
 
 struct Ladder {
-    bool enabled = false;     // the toggle: Core honours the ladder
-    bool rampReady = false;   // with Speed Ramp on: takes start in the top rung
-    std::vector<Rung> rungs;  // first = preferred mode, serves the lowest FPS; thresholds rise
+    bool enabled = false;     // Dynamic resolution is on: Core honours the table
+    bool rampReady = false;   // gone with the user ladder; always false, removed with the old editor's code
+    std::vector<Rung> rungs;  // the enabled modes, empty = the default list; the order of use is tryOrder's
     // The WebUI's aspect filter on Activated sensor modes, the ratios as the card labels them ("16:9",
     // "2.39:1"); empty = All. Kept here so the camera remembers it; it never changes which mode runs.
     std::vector<std::string> aspects;
@@ -205,6 +205,16 @@ inline std::string rungsText(const std::vector<Rung> &rungs)
     return text;
 }
 
+// The enabled modes as saved: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",", without the fields an old ladder had.
+inline std::string modesText(const std::vector<Rung> &rungs)
+{
+    std::string text;
+    for (const auto &r : rungs)
+        text += (text.empty() ? "" : ",") + std::to_string(r.width) + "x" + std::to_string(r.height) + ":" +
+                std::to_string(r.bits) + ":" + (r.clearHdr ? "hdr" : "sdr");
+    return text;
+}
+
 // The aspect filter's text: the card's ratio labels joined by "," ("16:9,2.39:1"), "" = All. At most
 // kMaxAspects labels of 1 to kMaxAspectLength characters from 0-9 . : (a repeat is dropped); anything else
 // is refused, so a hand edit or a damaged line can only mean All.
@@ -341,7 +351,7 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"lossy_5to1\":" + number(st.ceilingBy[3]) + "}";
     };
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
-        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(rungsText(l.rungs)) +
+        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(modesText(l.rungs)) +
         ",\"aspects\":" + list(l.aspects) +
         ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_resolution\":" + std::to_string(running + 1) +
         ",\"resolutions\":[";
@@ -358,28 +368,56 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
 }
 
-// The ladder from the text of its four settings (camera_settings.conf keys). A resolutions text that does not
-// parse is no ladder, and a bad filter is All; neither switches the camera.
-inline Ladder fromText(bool enabled, bool rampReady, const std::string &resolutions, const std::string &aspects)
+// A list of modes as the settings and set_mode_ladder carry it. The fields an old ladder had after the third
+// (threshold, compression, Log) are read and dropped: the table decides them now.
+inline bool parseModes(const std::string &text, std::vector<Rung> &out, std::string &error)
+{
+    if (!parseRungs(text, out, error))
+        return false;
+    for (Rung &r : out) {
+        r.threshold = 0.0;
+        r.compression.clear();
+        r.cdngLog = CdngLog::Off;
+    }
+    return true;
+}
+
+// Errors refuse a save: a repeated mode, a mode this sensor does not have. A warning is shown and saved.
+inline void validateModes(const Ladder &l, const std::vector<RungState> &s,
+                          std::vector<std::string> &errors, std::vector<std::string> &warnings)
+{
+    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
+        for (size_t j = 0; j < i; ++j)
+            if (sameMode(l.rungs[i], l.rungs[j]))
+                errors.push_back(label(l.rungs[i]) + " is listed twice.");
+        if (!s[i].valid)
+            errors.push_back(label(l.rungs[i]) + " is not a mode of this sensor.");
+        else if (!s[i].usable)
+            warnings.push_back(label(l.rungs[i]) + " cannot run in this format; it is skipped.");
+    }
+}
+
+// The ladder from the text of its settings (camera_settings.conf keys): the switch, the enabled modes and the
+// aspect filter. A modes text that does not parse is an empty list, which means the default list; a bad filter
+// is All.
+inline Ladder fromText(bool enabled, const std::string &modes, const std::string &aspects)
 {
     Ladder l;
     std::string error;
     l.enabled = enabled;
-    l.rampReady = rampReady;
-    if (!resolutions.empty() && !parseRungs(resolutions, l.rungs, error))
+    if (!modes.empty() && !parseModes(modes, l.rungs, error))
         l.rungs.clear();
     if (!parseAspects(aspects, l.aspects, error))
         l.aspects.clear();
-    if (l.rungs.empty())
-        l.enabled = false;  // a broken ladder never switches the camera
     return l;
 }
 
 // mode_ladder.conf, the file the ladder lived in before camera_settings.conf held it: one key per line.
-// Read only to take an old file over.
+// Read only to take an old file over. A resolutions line with thresholds, compression and Log fields reads as its
+// modes: the table decides the rest now.
 inline Ladder parseFile(const std::string &text)
 {
-    bool enabled = false, rampReady = false;
+    bool enabled = false;
     std::string resolutions, aspects;
     std::stringstream in(text);
     std::string line;
@@ -389,11 +427,54 @@ inline Ladder parseFile(const std::string &text)
             continue;
         const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
         if (key == "enabled") enabled = value == "true";
-        else if (key == "ramp_ready") rampReady = value == "true";
         else if (key == "resolutions" || key == "rungs") resolutions = value;   // "rungs": the first name
         else if (key == "aspects") aspects = value;
     }
-    return fromText(enabled, rampReady, resolutions, aspects);
+    return fromText(enabled, resolutions, aspects);
+}
+
+// Dynamic resolution: one enabled mode with what the camera knows about it right now.
+struct Candidate {
+    Rung mode;
+    bool usable = false;    // the sanitiser keeps it in the current format
+    bool crop = false;      // it reads a smaller window of the sensor than the full frame
+    double cap = 0.0;       // the highest fps it serves, a step of SustainedFps.hpp; 0 = not used
+};
+
+// The order the modes are tried in, best first: Clear HDR before SDR, deeper bit depth, a mode of the full frame
+// before a crop-in, more pixels first. Indexes into the candidates.
+inline std::vector<size_t> tryOrder(const std::vector<Candidate> &c)
+{
+    std::vector<size_t> order(c.size());
+    for (size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&c](size_t a, size_t b) {
+        const Rung &x = c[a].mode, &y = c[b].mode;
+        if (x.clearHdr != y.clearHdr) return x.clearHdr;
+        if (x.bits != y.bits) return x.bits > y.bits;
+        if (c[a].crop != c[b].crop) return !c[a].crop;
+        return uint64_t(x.width) * x.height > uint64_t(y.width) * y.height;
+    });
+    return order;
+}
+
+// The first usable mode in that order whose cap reaches targetFps (upper bound inclusive). If none does, the
+// usable mode with the highest cap (the first of equals). An index into the candidates; -1 when none is usable.
+inline int chooseMode(const std::vector<Candidate> &c, double targetFps)
+{
+    int best = -1;
+    double bestCap = 0.0;
+    for (const size_t i : tryOrder(c)) {
+        if (!c[i].usable || c[i].cap <= 0.0)
+            continue;
+        if (c[i].cap >= targetFps - 0.0005)
+            return static_cast<int>(i);
+        if (c[i].cap > bestCap) {
+            bestCap = c[i].cap;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
 }
 
 } // namespace apertar::ladder

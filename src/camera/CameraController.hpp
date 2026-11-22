@@ -161,8 +161,8 @@ public:
     // saved in a take too, with no check or apply (a filter unchanged from Core's copy saves nothing);
     // refused for a bad label. The ladder is saved in camera_settings.conf with the other settings.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                       std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
-                       std::string *json, std::string *error);
+                       const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
+                       const std::optional<std::string> &aspects, bool dryRun, std::string *json, std::string *error);
     std::string modeLadderJson() const;
     // The storage and the switches the known limits depend on, pushed by the application when they change
     // (the camera itself reads TDN, phase lock, Log and the split). An event goes out when they change.
@@ -255,6 +255,12 @@ private:
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void fillLimitFieldsLocked(CaptureSettings &out) const;
     // The probe's entry for a mode in Core's identity (the active picture); false in simulation or before the probe.
+    uint32_t modeBinningLocked(const ladder::Rung &rung) const;
+    sustained::Mode limitModeLocked(const ladder::Rung &rung) const;
+    sustained::Context limitContextLocked(const CaptureSettings &settings) const;
+    std::vector<ladder::Rung> poolModesLocked() const;
+    std::vector<ladder::Rung> enabledModesLocked(const ladder::Ladder &list) const;
+    std::vector<ladder::Candidate> candidatesLocked(const ladder::Ladder &list, const CaptureSettings &base) const;
     bool probedModeLocked(const ladder::Rung &rung, SensorMode *mode) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;

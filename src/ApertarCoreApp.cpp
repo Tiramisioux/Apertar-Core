@@ -15505,8 +15505,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         return okReply(command.id, "\"mode_ladder\":" + camera_.modeLadderJson());
 
     if (command.name == "set_mode_ladder") {
-        // T34: any of resolutions (WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], comma-separated), enabled, ramp_ready
-        // (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
+        // Dynamic resolution: any of modes (WIDTHxHEIGHT:BITS:hdr|sdr, comma-separated; "resolutions" is the old name),
+        // enable_mode or disable_mode (one mode), enabled (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
         // saved in a take too); dry_run=true only validates and returns the errors and warnings.
         const auto boolField = [&command](const char *name) -> std::optional<bool> {
             const auto value = command.string(name);
@@ -15516,7 +15516,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         };
         const bool dryRun = boolField("dry_run").value_or(false);
         std::string json, error;
-        if (!camera_.setModeLadder(command.string("resolutions"), boolField("enabled"), boolField("ramp_ready"),
+        const auto modes = command.string("modes") ? command.string("modes") : command.string("resolutions");
+        if (!camera_.setModeLadder(modes, boolField("enabled"), command.string("enable_mode"), command.string("disable_mode"),
                                    command.string("aspects"), dryRun, &json, &error))
             return errorReply(command.id, error);
         return okReply(command.id, "\"mode_ladder\":" + json + (dryRun ? "" : "," + settingsBody(camera_.settings())));

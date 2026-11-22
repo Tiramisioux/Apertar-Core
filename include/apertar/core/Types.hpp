@@ -204,12 +204,12 @@ struct CaptureSettings {
     ProresColorProfile cdngPreviewColorProfile = ProresColorProfile::Standard;
     std::shared_ptr<const PreviewExposureReference> previewExposureReference; // Active ISP, not saved settings.
     std::string tuningFile;
-    // The mode ladder, one for the camera as a whole like the tuning file, as text. CameraController keeps
-    // modeLadder_ parsed from it and is the only one that writes these.
-    bool modeLadderEnabled = false;
-    bool modeLadderRampReady = false;
-    std::string modeLadderResolutions;
-    std::string modeLadderAspects;
+    // Dynamic resolution, one for the camera as a whole like the tuning file, as text: the switch, the enabled modes
+    // ("WIDTHxHEIGHT:BITS:hdr|sdr" joined by commas, empty = all the full-frame modes of the sensor) and the WebUI's
+    // aspect filter. CameraController keeps modeLadder_ parsed from it and is the only one that writes these.
+    bool dynresEnabled = true;
+    std::string dynresModes;
+    std::string dynresAspects;
     uint32_t rawBitDepth = 12;
     bool clearHdr = false;
     // Clear HDR merge knobs (IMX585). Blend 5 and gain adder 1 are Cinemate's measured operating point;

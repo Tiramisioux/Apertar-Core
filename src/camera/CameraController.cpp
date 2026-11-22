@@ -806,7 +806,8 @@ struct PersistedCaptureSettings {
     std::optional<CaptureSettings> still;
 };
 
-// A mode_ladder.conf from before the ladder moved here is taken over while none of its keys is saved yet.
+// A mode_ladder.conf from before the ladder moved here is taken over while none of its keys is saved yet: its
+// enabled line is the Dynamic resolution switch, its resolutions the enabled list (thresholds, compression and Log are dropped).
 // The file is never written or deleted; a file that cannot be read whole is tried again at the next start.
 void takeOverModeLadderFile(CaptureSettings &current, std::map<RecordingFormat, CaptureSettings> &formats,
                             std::optional<CaptureSettings> &still)
@@ -816,10 +817,9 @@ void takeOverModeLadderFile(CaptureSettings &current, std::map<RecordingFormat, 
         return;
     const ladder::Ladder old = ladder::parseFile(text);
     const auto takeOver = [&old](CaptureSettings &settings) {
-        settings.modeLadderEnabled = old.enabled;
-        settings.modeLadderRampReady = old.rampReady;
-        settings.modeLadderResolutions = ladder::rungsText(old.rungs);
-        settings.modeLadderAspects = ladder::aspectsText(old.aspects);
+        settings.dynresEnabled = old.enabled;
+        settings.dynresModes = ladder::modesText(old.rungs);
+        settings.dynresAspects = ladder::aspectsText(old.aspects);
     };
     takeOver(current);
     for (auto &entry : formats)
@@ -865,7 +865,7 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
             key = key.substr(separator + 1);
         }
         CaptureSettings &settings = *target;
-        if (key.starts_with("mode_ladder_"))
+        if (key.starts_with("dynres_") || key.starts_with("mode_ladder_"))
             modeLadderKeys = true;
         try {
             if (key == "resolution_width")
@@ -924,14 +924,12 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                     : value == "proxy" ? ProresProfile::Proxy : ProresProfile::Standard;
             else if (key == "tuning_file")
                 settings.tuningFile = normalizeTuningFilePath(value);
-            else if (key == "mode_ladder_enabled")
-                settings.modeLadderEnabled = (value == "true" || value == "1");
-            else if (key == "mode_ladder_ramp_ready")
-                settings.modeLadderRampReady = (value == "true" || value == "1");
-            else if (key == "mode_ladder_resolutions")
-                settings.modeLadderResolutions = value;
-            else if (key == "mode_ladder_aspects")
-                settings.modeLadderAspects = value;
+            else if (key == "dynres_enabled" || key == "mode_ladder_enabled")   // mode_ladder_*: the retired names
+                settings.dynresEnabled = (value == "true" || value == "1");
+            else if (key == "dynres_modes" || key == "mode_ladder_resolutions")
+                settings.dynresModes = value;
+            else if (key == "dynres_aspects" || key == "mode_ladder_aspects")
+                settings.dynresAspects = value;
             else if (key == "raw_bit_depth")
                 settings.rawBitDepth = normalizeRawBitDepth(static_cast<uint32_t>(std::stoul(value)));
             else if (key == "clear_hdr")
@@ -1042,10 +1040,9 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "h264_width=" << s.h264Resolution.width << '\n';
     output << prefix << "h264_height=" << s.h264Resolution.height << '\n';
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
-    output << prefix << "mode_ladder_enabled=" << s.modeLadderEnabled << '\n';
-    output << prefix << "mode_ladder_ramp_ready=" << s.modeLadderRampReady << '\n';
-    output << prefix << "mode_ladder_resolutions=" << s.modeLadderResolutions << '\n';
-    output << prefix << "mode_ladder_aspects=" << s.modeLadderAspects << '\n';
+    output << prefix << "dynres_enabled=" << s.dynresEnabled << '\n';
+    output << prefix << "dynres_modes=" << s.dynresModes << '\n';
+    output << prefix << "dynres_aspects=" << s.dynresAspects << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
     output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
     output << prefix << "preview_tdn=" << s.previewTdn << '\n';
@@ -3193,7 +3190,7 @@ void applyClearHdrCompression(CaptureSettings &next, bool wasClearHdr)
 // the default: Clear HDR uncompressed, SDR lossless. MLV has no compression to choose.
 void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
 {
-    if (settings.recordingFormat != RecordingFormat::Cdng && settings.recordingFormat != RecordingFormat::LossyDng)
+    if (settings.recordingFormat != RecordingFormat::Cdng)   // lossy DNG and MLV keep the operator's setting
         return;
     const std::string compression = ladder::effectiveCompression(rung);
     if (compression == "lossy_3to1" || compression == "lossy_5to1") {
@@ -11432,8 +11429,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
           }, recordingDropWarning_, eventCallback_))
 {
     settings_ = loadPersistedCaptureSettings(formatSettings_, stillSettings_);
-    modeLadder_ = ladder::fromText(settings_.modeLadderEnabled, settings_.modeLadderRampReady,
-                                   settings_.modeLadderResolutions, settings_.modeLadderAspects);
+    modeLadder_ = ladder::fromText(settings_.dynresEnabled, settings_.dynresModes, settings_.dynresAspects);
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
     settings_ = supportedRecordingSettings(settings_);
@@ -11486,7 +11482,7 @@ bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
         settings_ = sanitizeSettingsForSensor(settings_, SensorFamily::Unknown);
     followDriverCropSizes(modeLadder_.rungs);   // after the startup probe, which the session start ran
     if (!modeLadder_.rungs.empty())
-        settings_.modeLadderResolutions = ladder::rungsText(modeLadder_.rungs);
+        settings_.dynresModes = ladder::modesText(modeLadder_.rungs);
 
     if (simulateCamera_)
         constrainExposureMetering(settings_, std::getenv("LIBCAMERA_RPI_TUNING_FILE")
@@ -11786,86 +11782,162 @@ std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder
     return states;
 }
 
-// Active: switched on, a raw video format, and at least one rung this sensor and format can run.
+// The binning of a mode: the probe's, else the IMX585 table's, else 1.
+uint32_t CameraController::modeBinningLocked(const ladder::Rung &rung) const
+{
+    SensorMode probed;
+    if (probedModeLocked(rung, &probed))
+        return std::max<uint32_t>(probed.binning, 1);
+    if (const auto *row = apertar::imx585::find(apertar::imx585::classFor(rung.bits, rung.clearHdr), rung.width, rung.height))
+        return row->binned ? 2 : 1;
+    return 1;
+}
+
+sustained::Mode CameraController::limitModeLocked(const ladder::Rung &rung) const
+{
+    sustained::Mode mode;
+    mode.width = rung.width;
+    mode.height = rung.height;
+    mode.hdr = rung.clearHdr;
+    mode.bits = rung.bits;
+    mode.binned = modeBinningLocked(rung) > 1;
+    return mode;
+}
+
+sustained::Context CameraController::limitContextLocked(const CaptureSettings &settings) const
+{
+    sustained::Context context = ladderContext_;
+    // BCM2712 (Pi 5, CM5) is the one board measured; a simulated camera stands for it.
+    context.board = simulateCamera_ || recordingCapabilities().rawCompression ? sustained::Board::Pi5 : sustained::Board::Other;
+    context.tdn = settings.previewTdn;
+    context.lock = settings.fpsPhaseLock;
+    context.log = settings.cdngLog != CdngLog::Off;
+    return context;
+}
+
+// The modes Dynamic resolution may use: the enabled list, or every full-frame mode of the sensor while it is empty.
+std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Ladder &list) const
+{
+    if (!list.rungs.empty())
+        return list.rungs;
+    const std::vector<ladder::Rung> pool = poolModesLocked();
+    const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
+    double full = 0.0;
+    for (const auto &rung : pool)
+        full = std::max(full, window(rung));
+    std::vector<ladder::Rung> modes;
+    for (const auto &rung : pool)
+        if (window(rung) >= full)
+            modes.push_back(rung);
+    return modes;
+}
+
+// Each enabled mode of the running frame shape with what the sanitiser keeps and what the table lets it serve.
+std::vector<ladder::Candidate> CameraController::candidatesLocked(const ladder::Ladder &list, const CaptureSettings &base) const
+{
+    const std::vector<ladder::Rung> modes = enabledModesLocked(list);
+    const sustained::Context context = limitContextLocked(base);
+    const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
+    double full = 0.0;
+    for (const auto &rung : poolModesLocked())
+        full = std::max(full, window(rung));
+    for (const auto &rung : modes)
+        full = std::max(full, window(rung));
+    const double aspect = base.resolution.height ? double(base.resolution.width) / base.resolution.height : 0.0;
+    std::vector<ladder::Candidate> out;
+    for (const ladder::Rung &rung : modes) {
+        // A step never changes the frame shape.
+        if (aspect > 0.0 && std::abs(double(rung.width) / rung.height / aspect - 1.0) > 0.02)
+            continue;
+        const sustained::Mode mode = limitModeLocked(rung);
+        const sustained::Limit row = sustained::limitFor(context, mode);
+        ladder::Candidate c;
+        c.mode = rung;
+        c.mode.compression = !recordingCapabilities().rawCompression ? "none" : row.found ? row.compression : "";   // no lossless on this board
+        ladder::Ladder single;
+        single.rungs.push_back(c.mode);
+        const ladder::RungState state = ladderStatesLocked(single, base).front();
+        c.usable = state.usable;
+        c.crop = window(rung) < full;
+        if (state.usable)
+            c.cap = sustained::capFor(context, mode, state.modeCeiling).fps;
+        out.push_back(c);
+    }
+    return out;
+}
+
+// Active: switched on, a raw video format, and at least one mode this sensor and format can run.
 bool CameraController::ladderActiveForLocked(const CaptureSettings &base) const
 {
     return modeLadder_.enabled && !ladderOverride_ && !base.photoModeEnabled && !isProcessedVideoFormat(base.recordingFormat) &&
-           ladder::chooseRung(modeLadder_, ladderStatesLocked(modeLadder_, base), 0.0) >= 0;
+           ladder::chooseMode(candidatesLocked(modeLadder_, base), 0.0) >= 0;
 }
 
-// Puts the rung for next's FPS (the top rung when Ramp-ready and Speed Ramp are on) into next,
-// before the caller's one apply. True when that changes next's mode. Never in a take.
+// Puts the mode for next's FPS into next, before the caller's one apply: the first of the table's order that
+// holds it, else the one that holds the most (fps is then clamped). True when that changes next's mode. Never in a take.
 bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
 {
     if (recording_ || !ladderActiveForLocked(next))
         return false;
-    const auto states = ladderStatesLocked(modeLadder_, next);
-    const bool rampReady = modeLadder_.rampReady && next.fpsSpeedRamp;
-    const double target = rampReady ? ladder::ladderCeiling(modeLadder_, states) : next.fps;
-    const int index = ladder::chooseRung(modeLadder_, states, target);
+    const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, next);
+    const int index = ladder::chooseMode(candidates, next.fps);
     if (index < 0)
         return false;
-    const ladder::Rung &rung = modeLadder_.rungs[static_cast<size_t>(index)];
+    const ladder::Candidate &pick = candidates[static_cast<size_t>(index)];
+    const ladder::Rung &rung = pick.mode;
     const bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
         next.rawBitDepth != rung.bits || next.clearHdr != rung.clearHdr;
     next.resolution = Resolution{ rung.width, rung.height };
     next.rawBitDepth = rung.bits;
     next.clearHdr = rung.clearHdr;
     applyRungFormat(next, rung);
-    next.fps = std::min(next.fps, ladder::rungCeiling(rung, states[static_cast<size_t>(index)]));
+    next.fps = std::min(next.fps, pick.cap);
     return changed;
 }
 
-// The derived state fields (never persisted): the ladder's ceiling as fps_max, the running
-// rung's as fps_take_max. fpsMax must already hold the mode's own ceiling.
+// The derived state fields (never persisted): the caps in the table's order as ladder_tops, the highest as
+// fps_max, the running mode's as fps_take_max. fpsMax must already hold the mode's own ceiling.
 void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
 {
     out.fpsTakeMax = out.fpsMax;
-    out.ladderActive = ladderActiveForLocked(out);
     out.ladderRung = 0;
     out.ladderRampReady = false;
     out.ladderEnabled = modeLadder_.enabled;
     out.ladderOverride = ladderOverride_ && modeLadder_.enabled;
-    out.ladderCount = static_cast<uint32_t>(modeLadder_.rungs.size());
     out.ladderTops.clear();
     out.ladderText.clear();
-    // The running line: what the camera records now, in the words of the editor (decision 9).
-    const auto runningText = [&out]() {
-        if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat))
-            return std::string();
-        std::string line = std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
-            (out.clearHdr ? "Clear HDR " : "") + std::to_string(out.rawBitDepth) + "-bit";
-        return line;
-    };
-    const std::string base = runningText();
+    const bool covered = !out.photoModeEnabled && !isProcessedVideoFormat(out.recordingFormat);
+    std::vector<ladder::Candidate> candidates;
+    if (covered)
+        candidates = candidatesLocked(modeLadder_, out);
+    out.ladderCount = static_cast<uint32_t>(covered ? candidates.size() : modeLadder_.rungs.size());
+    out.ladderActive = modeLadder_.enabled && !ladderOverride_ && covered && ladder::chooseMode(candidates, 0.0) >= 0;
+    const std::string base = !covered ? std::string()
+        : std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
+          (out.clearHdr ? "Clear HDR " : "") + std::to_string(out.rawBitDepth) + "-bit";
     if (!out.ladderActive) {
         if (!base.empty())
             out.ladderText = base + " \u00b7 " + compressionLabel(out) +
                              (modeLadder_.enabled ? (ladderOverride_ ? " (ladder overridden)" : "") : " (ladder off)");
         return;
     }
-    const auto states = ladderStatesLocked(modeLadder_, out);
-    for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i)
-        out.ladderTops.push_back(ladder::rungCeiling(modeLadder_.rungs[i], states[i]));
-    out.fpsMax = ladder::ladderCeiling(modeLadder_, states);
-    for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i) {
-        const ladder::Rung &rung = modeLadder_.rungs[i];
-        if (states[i].usable && rung.width == out.resolution.width && rung.height == out.resolution.height &&
-            rung.bits == out.rawBitDepth && rung.clearHdr == out.clearHdr) {
-            out.ladderRung = static_cast<uint32_t>(i + 1);
-            out.fpsTakeMax = ladder::rungCeiling(rung, states[i]);
-            break;
+    const std::vector<size_t> order = ladder::tryOrder(candidates);
+    double top = 0.0;
+    for (size_t k = 0; k < order.size(); ++k) {
+        const ladder::Candidate &c = candidates[order[k]];
+        out.ladderTops.push_back(c.cap);
+        top = std::max(top, c.cap);
+        if (!out.ladderRung && c.usable && c.mode.width == out.resolution.width && c.mode.height == out.resolution.height &&
+            c.mode.bits == out.rawBitDepth && c.mode.clearHdr == out.clearHdr) {
+            out.ladderRung = static_cast<uint32_t>(k + 1);
+            out.fpsTakeMax = c.cap;
         }
     }
-    out.ladderRampReady = modeLadder_.rampReady && out.fpsSpeedRamp;
-    if (out.ladderRung > 0 && !base.empty()) {
-        std::ostringstream top;
-        top << out.fpsTakeMax;
-        out.ladderText = "Resolution " + std::to_string(out.ladderRung) + " \u00b7 " + base + " \u00b7 \u2264" + top.str() +
-                         " \u00b7 " + compressionLabel(out);
-    } else if (!base.empty()) {
-        out.ladderText = base + " \u00b7 " + compressionLabel(out);
-    }
+    out.fpsMax = top;
+    std::ostringstream cap;
+    cap << out.fpsTakeMax;
+    out.ladderText = out.ladderRung ? base + " \u00b7 " + compressionLabel(out) + " \u00b7 up to " + cap.str() + " fps"
+                                    : base + " \u00b7 " + compressionLabel(out);
 }
 
 // The derived limit fields (never persisted): what the table says the running mode holds for a 30-minute take at
@@ -11882,28 +11954,13 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
         return;
     }
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
-    sustained::Context context = ladderContext_;
-    // BCM2712 (Pi 5, CM5) is the one board measured; a simulated camera stands for it.
-    context.board = simulateCamera_ || recordingCapabilities().rawCompression ? sustained::Board::Pi5 : sustained::Board::Other;
-    context.tdn = out.previewTdn;
-    context.lock = out.fpsPhaseLock;
-    context.log = out.cdngLog != CdngLog::Off;
-    context.splitOn = bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire) > 0;
-    sustained::Mode mode;
-    mode.width = out.resolution.width;
-    mode.height = out.resolution.height;
-    mode.hdr = out.clearHdr;
-    mode.bits = out.rawBitDepth;
+    const sustained::Context context = limitContextLocked(out);
     ladder::Rung rung;
-    rung.width = mode.width;
-    rung.height = mode.height;
-    rung.bits = mode.bits;
-    rung.clearHdr = mode.hdr;
-    SensorMode probed;
-    if (probedModeLocked(rung, &probed))
-        mode.binned = probed.binning > 1;
-    else if (const auto *row = apertar::imx585::find(apertar::imx585::classFor(mode.bits, mode.hdr), mode.width, mode.height))
-        mode.binned = row->binned;
+    rung.width = out.resolution.width;
+    rung.height = out.resolution.height;
+    rung.bits = out.rawBitDepth;
+    rung.clearHdr = out.clearHdr;
+    const sustained::Mode mode = limitModeLocked(rung);
     const double ceiling = maximumFpsForSettings(out, family);
     const sustained::Cap cap = sustained::capFor(context, mode, ceiling);
     if (cap.row.found) {
@@ -11964,36 +12021,23 @@ bool CameraController::probedModeLocked(const ladder::Rung &rung, SensorMode *fo
     return false;
 }
 
-std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
-                                                   const std::vector<std::string> &warnings) const
+// The probe's modes in Core's identity (the IMX585 16-bit frame is the active picture plus optical-black rows; the
+// mode is the picture), each once.
+std::vector<ladder::Rung> CameraController::poolModesLocked() const
 {
-    auto states = ladderStatesLocked(draft, settings_);
-    for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i)
-        fillRungExtrasLocked(states[i], draft.rungs[i]);
-    int running = -1;
-    for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i) {
-        const ladder::Rung &rung = draft.rungs[i];
-        if (states[i].usable && rung.width == settings_.resolution.width && rung.height == settings_.resolution.height &&
-            rung.bits == settings_.rawBitDepth && rung.clearHdr == settings_.clearHdr) {
-            running = static_cast<int>(i);
-            break;
-        }
-    }
-    // The pool: the probe's modes in Core's identity (the IMX585 16-bit frame is the active picture plus
-    // optical-black rows; the rung is the picture, the entry carries the frame as raw_width/raw_height).
-    const SensorFamily poolFamily = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
-    std::vector<ladder::PoolEntry> pool;
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    std::vector<ladder::Rung> pool;
     for (const SensorMode &mode : sensorModes()) {
         ladder::Rung rung;
         rung.width = mode.size.width;
         rung.height = mode.size.height;
-        if (poolFamily == SensorFamily::Imx585) {
+        if (family == SensorFamily::Imx585) {
             const auto active = apertar::imx585::activeFor({ mode.size.width, mode.size.height }, mode.bitDepth);
             if (!active)
                 continue;
             rung.width = active->width;
             rung.height = active->height;
-        } else if (poolFamily == SensorFamily::Imx283) {
+        } else if (family == SensorFamily::Imx283) {
             const Resolution active = imx283ActiveForTransport(mode.size, mode.bitDepth);   // the probe lists transport sizes
             rung.width = active.width;
             rung.height = active.height;
@@ -12002,23 +12046,53 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
         rung.clearHdr = mode.clearHdr;
         bool known = false;
         for (const auto &entry : pool)
-            known = known || ladder::sameMode(entry.mode, rung);
-        if (known || (rung.bits != 10 && rung.bits != 12 && rung.bits != 16))
-            continue;
+            known = known || ladder::sameMode(entry, rung);
+        if (!known && (rung.bits == 10 || rung.bits == 12 || rung.bits == 16))
+            pool.push_back(rung);
+    }
+    return pool;
+}
+
+std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
+                                                   const std::vector<std::string> &warnings) const
+{
+    // The enabled modes in the order the table tries them, with the step each serves.
+    const std::vector<ladder::Candidate> candidates = candidatesLocked(draft, settings_);
+    ladder::Ladder shown = draft;
+    shown.rungs.clear();
+    std::vector<ladder::RungState> states;
+    int running = -1;
+    for (const size_t index : ladder::tryOrder(candidates)) {
+        const ladder::Candidate &c = candidates[index];
+        ladder::Ladder single;
+        single.rungs.push_back(c.mode);
+        ladder::RungState state = ladderStatesLocked(single, settings_).front();
+        state.modeCeiling = c.cap;
+        state.usable = c.usable && c.cap > 0.0;
+        fillRungExtrasLocked(state, c.mode);
+        if (running < 0 && state.usable && c.mode.width == settings_.resolution.width &&
+            c.mode.height == settings_.resolution.height && c.mode.bits == settings_.rawBitDepth &&
+            c.mode.clearHdr == settings_.clearHdr)
+            running = static_cast<int>(states.size());
+        shown.rungs.push_back(c.mode);
+        states.push_back(state);
+    }
+    std::vector<ladder::PoolEntry> pool;
+    for (const ladder::Rung &rung : poolModesLocked()) {
         ladder::Ladder single;
         single.rungs.push_back(rung);
         ladder::RungState poolState = ladderStatesLocked(single, settings_).front();
         fillRungExtrasLocked(poolState, rung);
         pool.push_back({ rung, poolState });
     }
-    return ladder::toJson(draft, states, running, pool, errors, warnings);
+    return ladder::toJson(shown, states, running, pool, errors, warnings);
 }
 
 std::string CameraController::modeLadderJson() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> errors, warnings;
-    ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
     return modeLadderJsonLocked(modeLadder_, errors, warnings);
 }
 
@@ -12035,8 +12109,8 @@ void CameraController::setLadderContext(const sustained::Context &context)
 }
 
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                                     std::optional<bool> rampReady, const std::optional<std::string> &aspects,
-                                     bool dryRun, std::string *json, std::string *error)
+                                     const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
+                                     const std::optional<std::string> &aspects, bool dryRun, std::string *json, std::string *error)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> aspectList;
@@ -12049,40 +12123,66 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     }
     // The aspect filter alone changes only what the WebUI lists, never the mode: no take refusal, no check
     // that could refuse it, no apply, no settings event. The reply shows the errors as get_mode_ladder does.
-    if (aspects && !rungs && !enabled && !rampReady) {
+    if (aspects && !rungs && !enabled && !enableMode && !disableMode) {
         ladder::Ladder shown = modeLadder_;
         shown.aspects = aspectList;
         if (!dryRun && aspectList != modeLadder_.aspects) {
             modeLadder_.aspects = aspectList;
-            settings_.modeLadderAspects = ladder::aspectsText(aspectList);
+            settings_.dynresAspects = ladder::aspectsText(aspectList);
             persistSettingsLocked();
         }
         std::vector<std::string> shownErrors, shownWarnings;
-        ladder::validate(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
+        ladder::validateModes(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
         *json = modeLadderJsonLocked(shown, shownErrors, shownWarnings);
         return true;
     }
     if (recording_ && !dryRun) {
-        *error = "Stop recording before changing the mode ladder.";
+        *error = "Stop recording before changing Dynamic resolution.";
         return false;
     }
     ladder::Ladder draft = modeLadder_;   // keeps the aspect filter unless aspects is given
-    if (rungs) {
+    bool listGiven = false;
+    const auto parseList = [&](const std::string &text, std::vector<ladder::Rung> &out) {
         std::string parseError;
-        if (!ladder::parseRungs(*rungs, draft.rungs, parseError)) {
+        if (!ladder::parseModes(text, out, parseError)) {
             *error = parseError;
             return false;
         }
-        followDriverCropSizes(draft.rungs);
+        followDriverCropSizes(out);
+        return true;
+    };
+    if (rungs) {
+        if (!parseList(*rungs, draft.rungs))
+            return false;
+        listGiven = true;
+    }
+    // One mode in or out of the enabled list, at any time outside a take: no order, no threshold, nothing else to
+    // check. An empty list stands for the default list, so the first edit starts from it.
+    if (enableMode || disableMode) {
+        std::vector<ladder::Rung> edit;
+        if (!parseList(enableMode ? *enableMode : *disableMode, edit))
+            return false;
+        std::vector<ladder::Rung> list = enabledModesLocked(draft);
+        for (const ladder::Rung &mode : edit) {
+            const auto at = std::find_if(list.begin(), list.end(), [&](const ladder::Rung &r) { return ladder::sameMode(r, mode); });
+            if (enableMode && at == list.end())
+                list.push_back(mode);
+            else if (disableMode && at != list.end())
+                list.erase(at);
+        }
+        if (list.empty()) {
+            *error = "Enable at least one resolution.";
+            return false;
+        }
+        draft.rungs = list;
+        listGiven = true;
     }
     if (enabled)
         draft.enabled = *enabled;
-    if (rampReady)
-        draft.rampReady = *rampReady;
     if (aspects)
         draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
-    ladder::validate(draft, ladderStatesLocked(draft, settings_), errors, warnings);
+    ladder::validateModes(draft, ladderStatesLocked(draft, settings_), errors, warnings);
     if (dryRun) {
         *json = modeLadderJsonLocked(draft, errors, warnings);
         return true;
@@ -12091,21 +12191,16 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         *error = errors.front();
         return false;
     }
-    if (draft.enabled && ladder::chooseRung(draft, ladderStatesLocked(draft, settings_), 0.0) < 0) {
-        *error = "No resolution of this ladder can run in the current format.";
-        return false;
-    }
 
     const ladder::Ladder previous = modeLadder_;
     const bool previousOverride = ladderOverride_;
     modeLadder_ = draft;
     ladderOverride_ = false;      // a changed ladder ends a Clear HDR override
     const auto store = [&](CaptureSettings &target) {
-        target.modeLadderEnabled = draft.enabled;
-        target.modeLadderRampReady = draft.rampReady;
-        if (rungs)
-            target.modeLadderResolutions = ladder::rungsText(draft.rungs);
-        target.modeLadderAspects = ladder::aspectsText(draft.aspects);
+        target.dynresEnabled = draft.enabled;
+        if (listGiven)
+            target.dynresModes = ladder::modesText(draft.rungs);
+        target.dynresAspects = ladder::aspectsText(draft.aspects);
     };
     // Switching the ladder on (or changing it) may put the camera in another rung: one apply.
     CaptureSettings next = settings_;
@@ -12126,7 +12221,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         emitSettingsEventLocked();
     }
     std::vector<std::string> shownErrors, shownWarnings;
-    ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
     *json = modeLadderJsonLocked(modeLadder_, shownErrors, shownWarnings);
     return true;
 }
@@ -12384,10 +12479,9 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool fpsSpeedRampReturn = next.fpsSpeedRampReturn;
             const double conformFps = next.conformFps;
             const std::string clipNameTemplate = next.clipNameTemplate;   // one naming scheme for the camera
-            const bool modeLadderEnabled = next.modeLadderEnabled;   // one mode ladder for the camera
-            const bool modeLadderRampReady = next.modeLadderRampReady;
-            const std::string modeLadderResolutions = next.modeLadderResolutions;
-            const std::string modeLadderAspects = next.modeLadderAspects;
+            const bool dynresEnabled = next.dynresEnabled;   // one Dynamic resolution for the camera
+            const std::string dynresModes = next.dynresModes;
+            const std::string dynresAspects = next.dynresAspects;
             next = saved->second;
             next.tuningFile = tuningFile;
             next.timecodeMode = timecodeMode;
@@ -12403,10 +12497,9 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.mediaTrimEnabled = mediaTrimEnabled;
             next.stopOnDroppedFrame = stopOnDroppedFrame;
             next.cdngLog = cdngLog;
-            next.modeLadderEnabled = modeLadderEnabled;
-            next.modeLadderRampReady = modeLadderRampReady;
-            next.modeLadderResolutions = modeLadderResolutions;
-            next.modeLadderAspects = modeLadderAspects;
+            next.dynresEnabled = dynresEnabled;
+            next.dynresModes = dynresModes;
+            next.dynresAspects = dynresAspects;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
@@ -13801,11 +13894,10 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
     next.resolution = presetResolution;
     next.tuningFile = normalizeTuningFilePath(next.tuningFile);
     if (!validateTuningFilePath(next.tuningFile, &lastError_)) return false;
-    // A preset never carries the mode ladder; a snapshot taken before a ladder edit must not bring the old one back.
-    next.modeLadderEnabled = settings_.modeLadderEnabled;
-    next.modeLadderRampReady = settings_.modeLadderRampReady;
-    next.modeLadderResolutions = settings_.modeLadderResolutions;
-    next.modeLadderAspects = settings_.modeLadderAspects;
+    // A preset never carries Dynamic resolution; a snapshot taken before an edit must not bring the old one back.
+    next.dynresEnabled = settings_.dynresEnabled;
+    next.dynresModes = settings_.dynresModes;
+    next.dynresAspects = settings_.dynresAspects;
     const CaptureSettings previous = settings_;
     const bool tuningChanged = next.tuningFile != previous.tuningFile;
     const bool reconfigure = tuningChanged || next.photoModeEnabled != previous.photoModeEnabled || next.recordingFormat != previous.recordingFormat ||

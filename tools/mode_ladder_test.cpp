@@ -2,6 +2,7 @@
 // get/set_mode_ladder JSON): the aspect filter.
 //   g++ -std=c++20 -O2 -Wall -Wextra -I src -I include tools/mode_ladder_test.cpp -o /tmp/mlt && /tmp/mlt
 #include "camera/ModeLadder.hpp"
+#include "camera/SustainedFps.hpp"
 
 #include <cstdio>
 #include <string>
@@ -24,6 +25,7 @@ static bool contains(const std::string &text, const std::string &part)
 
 // A mode_ladder.conf as Core wrote it before the aspect filter: no aspects= line.
 static const std::string kRungs = "3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::lossless_jpeg,1920x1080:12:sdr";
+static const std::string kModes = "3840x2160:16:hdr,3840x2160:12:sdr,1920x1080:12:sdr";   // the same list as Dynamic resolution keeps it
 static const std::string kOldFile =
     "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Record > Mode Ladder).\n"
     "enabled=true\n"
@@ -34,23 +36,23 @@ int main()
 {
     // ---- the ladder from the text of its settings ----
     {
-        const Ladder l = fromText(true, true, kRungs, "16:9,2.39:1");
+        const Ladder l = fromText(true, kModes, "16:9,2.39:1");
         check(l.aspects == std::vector<std::string>{ "16:9", "2.39:1" }, "fromText: the aspects, in their order");
-        check(l.enabled && l.rampReady && rungsText(l.rungs) == kRungs, "fromText: enabled, ramp_ready and the rungs");
-        const Ladder all = fromText(true, false, kRungs, "");
-        check(all.aspects.empty() && all.enabled && !all.rampReady && rungsText(all.rungs) == kRungs,
+        check(l.enabled && modesText(l.rungs) == kModes, "fromText: enabled and the modes");
+        const Ladder all = fromText(true, kModes, "");
+        check(all.aspects.empty() && all.enabled && !all.rampReady && modesText(all.rungs) == kModes,
               "fromText: an empty filter is All");
         const std::vector<std::string> other = { "1:1", "1.33:1", "1.85:1", "2.55:1", "4:3", "3:2", "1.37:1" };   // IMX585 decimals and the Record pane's IMX283 names
-        check(fromText(true, false, kRungs, aspectsText(other)).aspects == other, "round trip: 1:1, 1.33:1, 1.85:1, 2.55:1, 4:3, 3:2, 1.37:1");
-        const Ladder none = fromText(true, true, "", "");
-        check(none.rungs.empty() && !none.enabled, "fromText: no resolutions text, the ladder is off");
+        check(fromText(true, kModes, aspectsText(other)).aspects == other, "round trip: 1:1, 1.33:1, 1.85:1, 2.55:1, 4:3, 3:2, 1.37:1");
+        const Ladder none = fromText(true, "", "");
+        check(none.rungs.empty() && none.enabled, "fromText: no modes text is the default list, still on");
     }
 
     // ---- a file without the line ----
     {
         const Ladder l = parseFile(kOldFile);
         check(l.aspects.empty(), "old file (no aspects= line): All");
-        check(l.enabled && !l.rampReady && rungsText(l.rungs) == kRungs, "old file: enabled and the rungs as before");
+        check(l.enabled && !l.rampReady && modesText(l.rungs) == kModes, "old file: enabled and the rungs as before");
         check(parseFile("").aspects.empty() && !parseFile("").enabled, "no file: All, ladder off");
     }
 
@@ -78,7 +80,7 @@ int main()
             const Ladder first = parseFile("aspects=" + value + "\n" + kOldFile);
             const Ladder last = parseFile(kOldFile + "aspects=" + value + "\n");
             const bool ok = first.aspects.empty() && last.aspects.empty() && first.enabled && last.enabled &&
-                            !first.rampReady && rungsText(first.rungs) == kRungs && rungsText(last.rungs) == kRungs;
+                            !first.rampReady && modesText(first.rungs) == kModes && modesText(last.rungs) == kModes;
             check(ok, ("bad aspects (" + why + "): All, rungs and enabled intact").c_str());
         }
         std::string most;   // exactly 32 is fine
@@ -88,17 +90,17 @@ int main()
         check((parseFile(kOldFile + "aspects=16:9,2.39:1,16:9\n").aspects == std::vector<std::string>{ "16:9", "2.39:1" }),
               "a repeated ratio is dropped, the order kept");
         const Ladder brokenRungs = parseFile("enabled=true\nresolutions=3840x2160:99:sdr\naspects=2.39:1\n");
-        check(brokenRungs.rungs.empty() && !brokenRungs.enabled && brokenRungs.aspects == std::vector<std::string>{ "2.39:1" },
-              "a broken resolutions line (ladder off) keeps the aspects");
+        check(brokenRungs.rungs.empty() && brokenRungs.enabled && brokenRungs.aspects == std::vector<std::string>{ "2.39:1" },
+              "a broken resolutions line (the default list) keeps the aspects");
     }
 
     // ---- fromText: a text this Core cannot read leaves the rest alone ----
     {
-        const Ladder broken = fromText(true, true, "3840x2160:99:sdr", "2.39:1");
-        check(broken.rungs.empty() && !broken.enabled && broken.rampReady && broken.aspects == std::vector<std::string>{ "2.39:1" },
-              "fromText: a broken resolutions text (ladder off) keeps ramp_ready and the aspects");
-        const Ladder badFilter = fromText(true, false, kRungs, "16:9,<script>");
-        check(badFilter.aspects.empty() && badFilter.enabled && rungsText(badFilter.rungs) == kRungs,
+        const Ladder broken = fromText(true, "3840x2160:99:sdr", "2.39:1");
+        check(broken.rungs.empty() && broken.enabled && broken.aspects == std::vector<std::string>{ "2.39:1" },
+              "fromText: a broken modes text is the default list and keeps the aspects");
+        const Ladder badFilter = fromText(true, kModes, "16:9,<script>");
+        check(badFilter.aspects.empty() && badFilter.enabled && modesText(badFilter.rungs) == kModes,
               "fromText: a bad filter is All, the ladder stays on");
     }
 
@@ -106,10 +108,10 @@ int main()
     {
         Ladder l = parseFile(kOldFile);
         l.aspects = { "16:9" };
-        const Ladder back = fromText(l.enabled, l.rampReady, rungsText(l.rungs), aspectsText(l.aspects));
-        check(back.enabled && !back.rampReady && rungsText(back.rungs) == kRungs && back.aspects == l.aspects,
+        const Ladder back = fromText(l.enabled, modesText(l.rungs), aspectsText(l.aspects));
+        check(back.enabled && !back.rampReady && modesText(back.rungs) == kModes && back.aspects == l.aspects,
               "take-over: the old file's values come back from their text");
-        check(rungsText(parseFile("rungs=" + kRungs + "\n").rungs) == kRungs, "parseFile: \"rungs\", the first name of resolutions");
+        check(modesText(parseFile("rungs=" + kRungs + "\n").rungs) == kModes, "parseFile: \"rungs\", the first name of resolutions");
         check(parseFile("enabled=true\nresolutions=1920x1080:12:sdr\nresolutions=3840x2160:99:sdr\n").rungs.empty(),
               "parseFile: the last resolutions line counts");
     }
@@ -132,9 +134,59 @@ int main()
         const std::vector<RungState> states(l.rungs.size());
         const std::string json = toJson(l, states, -1, {}, {}, {});
         check(contains(json, ",\"aspects\":[\"16:9\",\"2.39:1\"],"), "toJson: \"aspects\":[\"16:9\",\"2.39:1\"]");
-        check(contains(json, "\"resolutions_text\":\"" + kRungs + "\""), "toJson: resolutions_text as before");
+        check(contains(json, "\"resolutions_text\":\"" + kModes + "\""), "toJson: resolutions_text as before");
         l.aspects.clear();
         check(contains(toJson(l, states, -1, {}, {}, {}), ",\"aspects\":[],"), "toJson: All is \"aspects\":[]");
+    }
+
+    // ---- Dynamic resolution: the order and the choice (table C), default list, no crops, TDN off, Log off ----
+    {
+        using namespace apertar::sustained;
+        struct M { Rung mode; double ceiling; };
+        const auto rung = [](unsigned w, unsigned h, unsigned bits, bool hdr) { Rung r; r.width = w; r.height = h; r.bits = bits; r.clearHdr = hdr; return r; };
+        const M list[] = { { rung(3840, 2160, 16, true), 30 }, { rung(1920, 1080, 16, true), 30 }, { rung(3840, 2160, 12, true), 30 },
+                           { rung(3840, 2160, 12, false), 60 }, { rung(1920, 1080, 12, false), 60 }, { rung(3840, 2160, 10, false), 60 },
+                           { rung(1920, 1080, 10, false), 60 } };
+        for (const Kind kind : { Kind::Nvme, Kind::UsbSsd }) {
+            Context context;
+            context.storage = kind;
+            std::vector<Candidate> candidates;
+            for (const M &m : list) {
+                Candidate c;
+                c.mode = m.mode;
+                const Mode mode{ m.mode.width, m.mode.height, m.mode.clearHdr, m.mode.bits, m.mode.width <= 1920 };
+                c.usable = true;
+                c.cap = capFor(context, mode, m.ceiling).fps;
+                candidates.push_back(c);
+            }
+            const auto pick = [&](double fps) { const int i = chooseMode(candidates, fps); return i < 0 ? std::string("none") : label(candidates[static_cast<size_t>(i)].mode); };
+            if (kind == Kind::Nvme) {
+                check(pick(20) == "4K Clear HDR 16-bit" && pick(21) == "1920x1080 Clear HDR 16-bit" && pick(30) == "1920x1080 Clear HDR 16-bit",
+                      "table C NVMe: up to 20 fps 4K Clear HDR 16-bit, 21 to 30 the 2K one");
+                check(pick(33) == "4K SDR 12-bit" && pick(34) == "1920x1080 SDR 12-bit" && pick(60) == "1920x1080 SDR 12-bit",
+                      "table C NVMe: 33 fps 4K SDR 12-bit, 34 to 60 2K SDR 12-bit");
+                check(pick(80) == "1920x1080 SDR 12-bit", "table C NVMe: above 60 nothing holds it, the highest cap is used");
+            } else {
+                check(pick(9) == "4K Clear HDR 16-bit" && pick(25) == "1920x1080 Clear HDR 16-bit" && pick(26) == "1920x1080 SDR 12-bit" &&
+                          pick(33) == "1920x1080 SDR 12-bit" && pick(60) == "1920x1080 SDR 12-bit",
+                      "table C USB SSD: 9 fps 4K Clear HDR 16-bit, 25 the 2K one, 26 to 33 2K SDR 12-bit, above that clamped");
+            }
+        }
+        std::vector<Candidate> order(3);
+        order[0].mode = rung(3840, 1744, 12, false); order[0].crop = true;
+        order[1].mode = rung(1920, 1080, 12, false);
+        order[2].mode = rung(3840, 2160, 12, false);
+        const std::vector<size_t> by = tryOrder(order);
+        check(by[0] == 2 && by[1] == 1 && by[2] == 0, "tryOrder: a crop-in after the full-frame modes of its class");
+        order[1].usable = order[2].usable = false;
+        order[0].usable = true;
+        order[0].cap = 33;
+        check(chooseMode(order, 50) == 0 && chooseMode(order, 25) == 0, "chooseMode: a lone usable mode is the answer, clamped or not");
+        order[0].usable = false;
+        check(chooseMode(order, 25) == -1, "chooseMode: no usable mode is -1");
+        const Ladder owner = parseFile("enabled=true\nresolutions=3840x2160:16:hdr:25:lossless_jpeg,3840x2160:12:sdr:30:lossless_jpeg\naspects=\n");
+        check(owner.enabled && modesText(owner.rungs) == "3840x2160:16:hdr,3840x2160:12:sdr" && owner.rungs[0].compression.empty() && owner.rungs[0].threshold == 0.0,
+              "take-over: the owner's ladder becomes the enabled list, thresholds and compression dropped");
     }
 
     std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
