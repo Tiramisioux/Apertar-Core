@@ -1655,6 +1655,10 @@ std::string_view webControlPageHtml()
       overflow-wrap: anywhere;
     }
 
+    .dynres-off .ladder-dim {
+      opacity: 0.55;
+    }
+
     .crop-frame {
       position: relative;
       flex: 0 0 auto;
@@ -5340,14 +5344,14 @@ std::string_view webControlPageHtml()
                 <img class="icon-image" src="/icons/settings.png" alt="">
               </div>
               <h2 class="section-title">Camera settings</h2>
-              <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
+              <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open Dynamic resolution">Dynamic resolution</div>
             </div>
 
             <div class="stack" id="cameraStack">
               <section class="select-block" data-dual-tie="fps">
                 <div class="select-topline">
                   <span>Frame rate</span>
-                  <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder"></span>
+                  <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open Dynamic resolution"></span>
                 </div>
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
@@ -6002,19 +6006,19 @@ std::string_view webControlPageHtml()
             <div class="settings-card" id="settingsModeLadderCard">
               <div class="settings-card-head">
                 <div>
-                  <h3 class="settings-card-title">Mode Ladder</h3>
-                  <p class="settings-card-copy">Switches resolution automatically when you change FPS. Each resolution runs to its max FPS, then the next one takes over.</p>
+                  <h3 class="settings-card-title">Dynamic resolution</h3>
+                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera holds for 30-minute takes on a hot drive. When the FPS goes up, the resolution goes down first, then the bit depth, then Clear HDR to SDR.</p>
                 </div>
                 <div class="online-pill off" id="settingsModeLadderValue">Off</div>
               </div>
               <div class="ladder-box">
                 <div class="ladder-box-text">
-                  <div class="ladder-box-title">Activate ladder</div>
+                  <div class="ladder-box-title">Dynamic resolution</div>
                   <div class="subtle-note" id="settingsModeLadderSwitchNote">Off: changing FPS never switches resolution.</div>
                 </div>
                 <div class="pill-grid ladder-pair" id="settingsModeLadderOptions"></div>
               </div>
-              <div class="ladder-box">
+              <div class="ladder-box ladder-dim">
                 <div class="ladder-box-text">
                   <span class="input-label">Running now</span>
                   <div class="ladder-now" id="settingsModeLadderNow">--</div>
@@ -6022,15 +6026,15 @@ std::string_view webControlPageHtml()
                 </div>
                 <div class="crop-frame large" id="settingsModeLadderNowCrop" role="img"></div>
               </div>
-              <div class="field-stack">
+              <div class="field-stack ladder-dim">
                 <span class="input-label">During a take</span>
-                <span class="ladder-row-range">FPS stops at the running resolution's ceiling. Resolutions change between takes only, with a short preview blink.</span>
-                <span class="subtle-note">While the ladder is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
+                <span class="ladder-row-range">FPS stops at the running resolution's limit. Resolutions change between takes only, with a short preview blink.</span>
+                <span class="subtle-note">While Dynamic resolution is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
               </div>
-              <div class="field-stack">
+              <div class="field-stack ladder-dim">
                 <div class="ladder-list-head">
-                  <span class="input-label">Resolutions array</span>
-                  <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
+                  <span class="input-label">Steps</span>
+                  <span class="ladder-note">Best picture first. 30-minute takes, hot drive.</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
@@ -7589,7 +7593,7 @@ std::string_view webControlPageHtml()
       },
       modes: {
         title: "Modes",
-        copy: "The sensor modes the camera offers, and the mode ladder that picks one by FPS.",
+        copy: "The sensor modes the camera offers, and Dynamic resolution, which picks one by FPS.",
       },
       favorites: {
         title: "Favorites",
@@ -7645,7 +7649,7 @@ std::string_view webControlPageHtml()
       ladderToggling: false,
       ladderFetching: false,
       ladderFetchedMs: -10000,
-      ladderSeenActive: null,
+      ladderSeenKey: null,     // what the limits looked like at the last snapshot: a change fetches the steps again
       ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (mode_ladder.conf) when Core keeps it; empty = All
       ladderAspectsPending: false,   // a filter click not saved yet: Core's replies leave ladderAspects alone
       ladderAspectsTimer: 0,
@@ -8659,20 +8663,19 @@ std::string_view webControlPageHtml()
     }
 
     function ladderBlankBank() {
-      return { server: null, draft: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
+      return { server: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
     }
 
     function switchModesCamera(cam) {
       const target = cam === "cam1" ? "cam1" : "cam0";
       if (target === state.modesCam)
         return;
-      if (state.ladderSaving || state.ladderAspectsSaving || ladderDirty()) {
+      if (state.ladderSaving || state.ladderAspectsSaving) {
         showToast("Wait for the modes to be saved.", true);
         return;
       }
-      clearTimeout(state.ladderCheckTimer);
       clearTimeout(state.ladderAspectsTimer);
-      const out = { server: state.ladderServer, draft: state.ladderDraft, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
+      const out = { server: state.ladderServer, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
         error: state.ladderError, fetchedMs: state.ladderFetchedMs, open: state.ladderOpen };
       const incoming = state.ladderStash || ladderBlankBank();
       state.ladderStash = out;
@@ -8683,11 +8686,10 @@ std::string_view webControlPageHtml()
       state.ladderError = incoming.error;
       state.ladderFetchedMs = incoming.fetchedMs;
       state.ladderOpen = incoming.open;
-      state.ladderDraft = incoming.draft || (incoming.server ? ladderDraftFromServer(incoming.server) : []);
       renderLadderEditor();
       renderModesSwitch();
       if (!state.ladderServer && !state.ladderFetching)
-        void fetchModeLadder(true);
+        void fetchModeLadder();
     }
 
     // CAM0 | CAM1 on the Activated sensor modes card: shown when the sensors are of different kinds, or CAM1's resolution is untied.
@@ -8724,7 +8726,7 @@ std::string_view webControlPageHtml()
         state.modesCam, switchModesCamera, 2);
     }
 
-    // The Mode Ladder card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
+    // The Dynamic resolution card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
     function renderLadderCardGrey() {
       const card = document.getElementById("settingsModeLadderCard");
       if (!card)
@@ -8738,7 +8740,7 @@ std::string_view webControlPageHtml()
         card.insertBefore(note, card.firstChild);
       }
       if (note)
-        note.textContent = "CAM1's ladder is off: the Mode Ladder runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
+        note.textContent = "CAM1 has no Dynamic resolution of its own: it runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
     }
     const ladderIcons = {
       handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
@@ -9100,11 +9102,11 @@ std::string_view webControlPageHtml()
       return where + " stops at " + accepted + " fps" + (snapshot.recording ? " in a take." : ".");
     }
 
-    // The red warning when someone tries a control the ladder has greyed: "Mode Ladder" links to the card.
+    // The red warning when someone tries a control the ladder has greyed: "Dynamic resolution" links to the card.
     function showLadderLockWarning(withCompression) {
       const toast = document.getElementById("toast");
       toast.textContent = "";
-      const link = createDomElement("a", "ladder-link", "Mode Ladder");
+      const link = createDomElement("a", "ladder-link", "Dynamic resolution");
       link.href = "#settingsModeLadderCard";
       link.dataset.ladderLink = "1";
       toast.appendChild(link);
@@ -9137,7 +9139,7 @@ std::string_view webControlPageHtml()
       return result;
     }
 
-    async function fetchModeLadder(resetDraft) {
+    async function fetchModeLadder() {
       if (state.ladderFetching)
         return;
       state.ladderFetching = true;
@@ -9145,10 +9147,10 @@ std::string_view webControlPageHtml()
       const cam = state.modesCam;
       try {
         const result = await ladderRequest(Object.assign({ cmd: "get_mode_ladder" }, ladderCameraFields()));
-        applyModeLadder(result.mode_ladder, resetDraft, cam);
+        applyModeLadder(result.mode_ladder, cam);
       } catch (error) {
         if (cam === state.modesCam) {
-          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Mode Ladder unavailable: ") + error.message;
+          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Dynamic resolution unavailable: ") + error.message;
           renderLadderEditor();
         }
       } finally {
@@ -9161,24 +9163,20 @@ std::string_view webControlPageHtml()
       return server && Array.isArray(server.aspects) ? server.aspects.map(String) : [];
     }
 
-    // A draft not yet saved survives a refetch; a refetch after a failed save replaces it. The aspect
-    // filter follows Core, except while a click on it waits to be saved, and only from a reply that has it:
-    // an older Core's reply has no aspects field and leaves the screen-only filter as it is.
-    function applyModeLadder(modeLadder, resetDraft, cam) {
+    // Core's answer is the whole truth: the enabled modes, their steps and the TDN option. The aspect filter
+    // follows Core, except while a click on it waits to be saved, and only from a reply that has it: an older
+    // Core's reply has no aspects field and leaves the screen-only filter as it is.
+    function applyModeLadder(modeLadder, cam) {
       if (!modeLadder || typeof modeLadder !== "object")
         return;
       if (cam && cam !== state.modesCam) {
-        // A reply for the camera whose ladder is stashed: keep its server copy; its draft is rebuilt when it comes back.
+        // A reply for the camera whose ladder is stashed: keep its server copy.
         if (state.ladderStash)
-          Object.assign(state.ladderStash, { server: modeLadder, draft: null, error: "" });
+          Object.assign(state.ladderStash, { server: modeLadder, error: "" });
         return;
       }
-      const keepDraft = !resetDraft && ladderDirty();
       state.ladderServer = modeLadder;
       state.ladderError = "";
-      if (!keepDraft) {
-        state.ladderDraft = ladderDraftFromServer(modeLadder);
-      }
       if (!state.ladderAspectsPending && Array.isArray(modeLadder.aspects))
         state.ladderAspects = ladderAspectsFromServer(modeLadder);
       renderLadderEditor();
@@ -9386,23 +9384,54 @@ std::string_view webControlPageHtml()
       return item;
     }
 
-    // Rows are rebuilt only here: after Core's ladder arrives or a local edit. The 1 s poll never
-    // rebuilds them, so typing a max keeps its focus.
+    // One step: a mode Dynamic resolution may pick, with the FPS it serves and why, as Core says it.
+    function createLadderStep(mode, step, index) {
+      const item = createDomElement("div", "ladder-row");
+      const main = createDomElement("div", "ladder-row-main");
+      main.appendChild(createDomElement("span", "ladder-badge", String(index + 1)));
+      const frame = fillCropFrame(createDomElement("div", "crop-frame"), ladderCrop(mode));
+      frame.setAttribute("aria-hidden", "true");
+      main.appendChild(frame);
+      const text = createDomElement("div", "ladder-row-text");
+      text.appendChild(createDomElement("div", "ladder-row-name", ladderModeName(mode)));
+      text.appendChild(createDomElement("div", "ladder-row-meta",
+        ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · " + mode.bits + "-bit" + (ladderClassName(mode) ? " · " + ladderClassName(mode) : "")));
+      const cap = Number(step.cap) || 0;
+      const from = Number(step.from) || 0;
+      text.appendChild(createDomElement("div", "ladder-row-range", step.never_used === true ? "Never used here"
+        : (from > 0 ? "Above " + from + " fps, up to " + cap + " fps" : "Up to " + cap + " fps")));
+      text.appendChild(createDomElement("div", "ladder-row-meta", Number(step.fps30) > 0
+        ? "30-minute limit " + Number(step.fps30) + " fps (" + step.basis + "), limited by " + step.wall + "."
+        : "Not measured: the sensor's limit."));
+      if (step.why)
+        text.appendChild(createDomElement("div", "ladder-row-desc", step.why));
+      main.appendChild(text);
+      item.appendChild(main);
+      return item;
+    }
+
+    // Rebuilt only here: after Core's answer arrives. The 1 s poll never rebuilds them.
     function renderLadderRows() {
       const list = document.getElementById("settingsModeLadderList");
       if (!list)
         return;
       list.innerHTML = "";
-      if (!state.ladderServer) {
-        list.appendChild(createDomElement("div", "preset-empty", state.ladderError || "Loading the Mode Ladder…"));
+      const server = state.ladderServer;
+      if (!server) {
+        list.appendChild(createDomElement("div", "preset-empty", state.ladderError || "Loading Dynamic resolution…"));
         return;
       }
-      if (state.ladderDraft.length === 0) {
+      const steps = Array.isArray(server.steps) ? server.steps : [];
+      const modes = Array.isArray(server.resolutions) ? server.resolutions : [];
+      if (steps.length === 0 || modes.length === 0) {
         list.appendChild(createDomElement("div", "preset-empty", "No resolutions yet. Activate a mode in Activated sensor modes below."));
         return;
       }
-      const rowStates = ladderRowStates(state.ladderDraft);
-      state.ladderDraft.forEach((rung, index) => list.appendChild(createLadderRow(rung, index, rowStates[index])));
+      steps.forEach((step, index) => {
+        const entry = modes[index] || {};
+        list.appendChild(createLadderStep({ width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits),
+          clear_hdr: entry.clear_hdr === true }, step, index));
+      });
     }
 
     // Activated sensor modes: the probe's pool in collapsible groups, one column; Add puts a mode
@@ -9410,16 +9439,16 @@ std::string_view webControlPageHtml()
     function renderSensorModes() {
       const server = state.ladderServer;
       const pool = server && Array.isArray(server.pool) ? server.pool : [];
-      const draft = state.ladderDraft;
+      const enabled = server && Array.isArray(server.resolutions) ? server.resolutions : [];
       const shown = modesSnapshot();
       const sensor = (sensorNameLower(shown) || "sensor").toUpperCase();
       setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
-        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…).")
+        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder modes=…).")
           : (modesIsCam1()
             ? "From CAM1's sensor probe at start: " + pool.length + " modes on CAM1's " + sensor
               + ". CAM1 takes the activated mode closest to CAM0's. Ceilings are Core's."
             : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
-              + ". Activate the ones you want on the ladder. Ceilings are Core's.")));
+              + ". Dynamic resolution uses the ones you activate. Ceilings are Core's.")));
       // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
       const aspects = [];
       pool.forEach((entry) => {
@@ -9459,7 +9488,7 @@ std::string_view webControlPageHtml()
           .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
-        const onLadder = entries.filter((entry) => draft.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
+        const onLadder = entries.filter((entry) => enabled.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
         const open = state.ladderOpen[groupKey] === true;
         const wrapper = createDomElement("div", "field-stack");
         const head = createDomElement("button", "ladder-group-head");
@@ -9468,7 +9497,7 @@ std::string_view webControlPageHtml()
         head.innerHTML = ladderIcons.chevron;
         head.appendChild(createDomElement("span", "", title));
         head.appendChild(createDomElement("span", "ladder-group-count",
-          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + (modesIsCam1() ? " activated" : " on the ladder")));
+          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + " activated"));
         head.addEventListener("click", () => {
           state.ladderOpen[groupKey] = !open;
           renderSensorModes();
@@ -9476,36 +9505,25 @@ std::string_view webControlPageHtml()
         wrapper.appendChild(head);
         if (open) {
           const list = createDomElement("div", "ladder-pool");
-          entries.forEach((entry) => list.appendChild(createSensorModeTile(entry, draft)));
+          entries.forEach((entry) => list.appendChild(createSensorModeTile(entry, enabled)));
           wrapper.appendChild(list);
         }
         groups.appendChild(wrapper);
       });
     }
 
-    // A new mode takes its place by quality. {list} when the ladder stays legal, else {problem}.
-    function ladderWithMode(draft, candidate) {
-      if (draft.length >= ladderMaxResolutions)
-        return { problem: "At most " + ladderMaxResolutions + " resolutions." };
-      if (modesIsCam1())
-        return { list: draft.concat([candidate]) };
-      const arranged = ladderArranged(draft.concat([candidate]));
-      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalizeLadderDraft(arranged));
-      return problem ? { problem: problem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") } : { list: arranged };
-    }
-
-    function createSensorModeTile(entry, draft) {
+    // A tile: Active (white) when Dynamic resolution may use the mode, else Activate (grey). A press sends one
+    // enable_mode or disable_mode; Core rebuilds the steps and the running mode follows between takes.
+    function createSensorModeTile(entry, enabled) {
       const mode = { width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits), clear_hdr: entry.clear_hdr === true };
       const name = ladderModeName(mode);
-      const index = draft.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
+      const index = enabled.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
       const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
       const crop = ladderCrop(mode);
-      const candidate = Object.assign({}, mode, { comp: "none", thr: "", auto: true });
-      const locked = !!(state.snapshot && state.snapshot.recording);
-      const placed = index >= 0 || ceiling <= 0 ? null : ladderWithMode(draft, candidate);
+      const locked = !!(state.snapshot && state.snapshot.recording) || state.ladderSaving;
       const why = index >= 0 ? ""
-        : (locked ? "Stop recording to change the ladder." : ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
-          : (placed.problem || ""));
+        : (state.snapshot && state.snapshot.recording ? "Stop recording to change the enabled resolutions."
+          : ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.") : "");
       const item = createDomElement("div", "ladder-pool-item" + (index >= 0 ? "" : " inactive"));
       const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
       frame.setAttribute("aria-hidden", "true");
@@ -9513,29 +9531,29 @@ std::string_view webControlPageHtml()
       const text = createDomElement("div", "ladder-pool-text");
       text.appendChild(createDomElement("div", "ladder-pool-name", name));
       text.appendChild(createDomElement("div", "ladder-pool-meta", ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · "
-        + (ladderClassName(mode) ? ladderClassName(mode) + " · " : "") + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
+        + (ladderClassName(mode) ? ladderClassName(mode) + " · " : "") + (ceiling > 0 ? "sensor max " + ceiling + " fps" : "cannot record")
         + (crop.cropIn ? " · crop in" : "") + " · " + ladderFrameMB(mode, "none").toFixed(1) + " MB/frame"));
       if (why)
         text.appendChild(createDomElement("div", "ladder-pool-why", why));
       item.appendChild(text);
       if (index >= 0) {
-        // On the ladder: a white Active button; pressing it removes the mode (same list, same rules as the × on its row).
+        // Enabled: a white Active button; pressing it takes the mode out of the steps.
         const actions = createDomElement("div", "ladder-pool-actions");
         const remove = createDomElement("button", "ladder-add active", "Active");
         remove.type = "button";
         remove.disabled = locked;
         remove.setAttribute("aria-label", "Deactivate " + name);
-        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), "", true));
+        remove.addEventListener("click", () => void setModeLadder({ disable_mode: ladderKey(mode) }));
         actions.appendChild(remove);
         item.appendChild(actions);
         return item;
       }
       const add = createDomElement("button", "ladder-add", "Activate");
       add.type = "button";
-      add.disabled = why !== "";
+      add.disabled = why !== "" || locked;
       add.title = why;
       add.setAttribute("aria-label", "Activate " + name + (why ? ": " + why : ""));
-      add.addEventListener("click", () => commitLadderDraft(placed.list, ""));
+      add.addEventListener("click", () => void setModeLadder({ enable_mode: ladderKey(mode) }));
       item.appendChild(add);
       return item;
     }
@@ -9549,29 +9567,29 @@ std::string_view webControlPageHtml()
         renderModeLadder(state.snapshot);
     }
 
-    // Every snapshot (the 1 s poll too): the buttons, Running now, the draft line and the coverage.
+    // Every snapshot (the 1 s poll too): the buttons, Running now and the limit sentence.
     function renderModeLadder(snapshot) {
       if (modesIsCam1()) {
-        // CAM1's modes: only the first fetch; the ladder card is CAM0's and greyed.
+        // CAM1's modes: only the first fetch; the Dynamic resolution card is CAM0's and greyed.
         if (!state.ladderServer && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
-          void fetchModeLadder(false);
+          void fetchModeLadder();
         return;
       }
       const server = state.ladderServer;
       const enabled = typeof snapshot.ladder_enabled === "boolean" ? snapshot.ladder_enabled : !!(server && server.enabled);
       const active = snapshot.ladder_active === true;
-      const count = isFiniteNumber(snapshot.ladder_count) ? snapshot.ladder_count : (server && server.resolutions ? server.resolutions.length : 0);
       const recording = !!snapshot.recording;
 
-      // The first fetch, a retry five seconds after a failure, and a refetch when the ladder
-      // starts or stops running (Core's list of resolutions or their ceilings may have changed).
+      // The first fetch, a retry five seconds after a failure, and a refetch when the limits move (the switch,
+      // a lever, the card, the mode): Core works the steps out on every read.
+      const seen = [enabled, active, snapshot.limit_fps, snapshot.limit_why, snapshot.fps_max].join("|");
       if (!server && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
-        void fetchModeLadder(false);
-      else if (server && state.ladderSeenActive !== null && state.ladderSeenActive !== active && !ladderDirty())
-        void fetchModeLadder(false);
-      state.ladderSeenActive = active;
+        void fetchModeLadder();
+      else if (server && state.ladderSeenKey !== null && state.ladderSeenKey !== seen && !state.ladderFetching)
+        void fetchModeLadder();
+      state.ladderSeenKey = seen;
       if (state.ladderRecordingSeen !== recording) {
-        // Recording starts or stops: the editor locks or unlocks (Core refuses a save in a take).
+        // Recording starts or stops: the tiles lock or unlock (Core refuses a change in a take).
         state.ladderRecordingSeen = recording;
         renderLadderEditor();
         return;
@@ -9579,21 +9597,22 @@ std::string_view webControlPageHtml()
 
       setText("settingsModeLadderValue", enabled ? "On" : "Off");
       document.getElementById("settingsModeLadderValue").classList.toggle("off", !enabled);
+      document.getElementById("settingsModeLadderCard").classList.toggle("dynres-off", !enabled);
       const busy = recording || state.ladderToggling;
       buildOptionButtons("settingsModeLadderOptions", [
         { label: "Off", value: "Off", enabled: !busy },
-        { label: "On", value: "On", enabled: !busy && (enabled || count > 0) },
+        { label: "On", value: "On", enabled: !busy },
       ], enabled ? "On" : "Off", (value) => setModeLadderEnabled(value === "On"), 2);
-      setText("settingsModeLadderSwitchNote", recording ? "Stop recording to turn the ladder on or off."
-        : (!enabled && count === 0 ? "Save at least one resolution first."
-          : (!enabled ? "Off: changing FPS never switches resolution."
-            : (active ? "On: changing FPS switches resolution." : "On, but not in use: the ladder works in CinemaDNG and MLV video."))));
+      setText("settingsModeLadderSwitchNote", recording ? "Stop recording to turn Dynamic resolution on or off."
+        : (!enabled ? "Off: changing FPS never switches resolution."
+          : (active ? "On: changing FPS switches resolution."
+            : "On, but not in use now: it works in CinemaDNG and MLV video, and waits for the next FPS change after you pick a mode by hand.")));
 
       const ladderLine = active ? String(snapshot.ladder_text || "") : "";
-      setText("settingsModeLadderNow", ladderLine || ladderSnapshotLine(snapshot) + (enabled ? " (ladder not in use)" : " (ladder off)"));
-      setText("settingsModeLadderNowNote", active
-        ? "Same line on the camera screen (FORMAT) and next to Frame rate in Camera settings."
-        : "FPS stays inside the current mode.");
+      setText("settingsModeLadderNow", ladderLine || ladderSnapshotLine(snapshot) + (enabled ? " (Dynamic resolution not in use)" : " (Dynamic resolution off)"));
+      const limitWhy = String(snapshot.limit_why || "");
+      setText("settingsModeLadderNowNote", (enabled ? limitWhy : ("Off: the camera keeps your mode. " + limitWhy).trim())
+        || "FPS stays inside the current mode.");
       const running = active && server && Array.isArray(server.resolutions) ? server.resolutions[Number(snapshot.ladder_resolution) - 1] : null;
       const nowMode = running
         ? { width: Number(running.width), height: Number(running.height), bits: Number(running.bits), clear_hdr: running.clear_hdr === true }
@@ -9604,27 +9623,29 @@ std::string_view webControlPageHtml()
         fillCropFrame(nowFrame, nowCrop);
         nowFrame.setAttribute("aria-label", nowCrop.title);
       }
-
-      document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
     }
 
-    // Core applied the ladder but could not write mode_ladder.conf: its reply warns that the ladder is lost
-    // when Core restarts. That warning is shown as an error; the ladder's other warnings are left as they are.
-    function showLadderWriteWarning(modeLadder) {
-      const warnings = modeLadder && Array.isArray(modeLadder.warnings) ? modeLadder.warnings.map(String) : [];
-      const lost = warnings.find((warning) => warning.startsWith("Could not write mode_ladder.conf"));
-      if (lost)
-        showToast(lost, true);
+    // One edit of Dynamic resolution (the switch, one mode in or out): Core applies it between takes at once and
+    // answers with the enabled modes and their steps, which the card draws.
+    async function setModeLadder(fields) {
+      state.ladderSaving = true;
+      renderSensorModes();
+      try {
+        const cam = state.modesCam;
+        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder" }, fields, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, cam);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.ladderSaving = false;
+        renderSensorModes();
+      }
     }
 
     async function setModeLadderEnabled(enabled) {
       state.ladderToggling = true;
       try {
-        const result = await sendCommand({ cmd: "set_mode_ladder", enabled: enabled ? "true" : "false" });
-        applyModeLadder(result.mode_ladder, false);
-        showLadderWriteWarning(result.mode_ladder);
-      } catch (error) {
-        showToast(error.message, true);
+        await setModeLadder({ enabled: enabled ? "true" : "false" });
       } finally {
         state.ladderToggling = false;
         if (state.snapshot)
@@ -9632,33 +9653,8 @@ std::string_view webControlPageHtml()
       }
     }
 
-    async function saveModeLadder() {
-      if (!ladderDirty())
-        return;
-      if (state.ladderSaving) {
-        state.ladderSaveAgain = true;
-        return;
-      }
-      state.ladderSaving = true;
-      try {
-        const cam = state.modesCam;
-        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder", resolutions: ladderDraftTextFor(state.ladderDraft) }, ladderCameraFields()));
-        applyModeLadder(result.mode_ladder, false, cam);
-        showLadderWriteWarning(result.mode_ladder);
-      } catch (error) {
-        showToast(error.message, true);
-        await fetchModeLadder(true);
-      } finally {
-        state.ladderSaving = false;
-        if (state.ladderSaveAgain) {
-          state.ladderSaveAgain = false;
-          void saveModeLadder();
-        }
-      }
-    }
-
-    // The aspect filter is saved on the camera (set_mode_ladder aspects, its own line in mode_ladder.conf):
-    // a click shows at once and is sent 200 ms after the last one, as a ladder edit is. Core takes the
+    // The aspect filter is saved on the camera (set_mode_ladder aspects, dynres_aspects in camera_settings.conf):
+    // a click shows at once and is sent 200 ms after the last one. Core takes the
     // filter alone in a take too, and leaves the resolutions as they are. Only a Core whose ladder has an
     // aspects field keeps it: an older one (a tab left open while Core restarted on another branch) would
     // run the click as a ladder save, so there the filter only changes the screen.
@@ -9689,7 +9685,7 @@ std::string_view webControlPageHtml()
         if (!state.ladderAspectsSaveAgain && state.ladderAspects.join(",") === sent)
           state.ladderAspectsPending = false;   // no newer click: Core's filter is the one on screen
         // Core changed only the filter: take just that from its reply and redraw only this card, so the
-        // Mode Ladder draft is left as it is and a row being typed in is not rebuilt.
+        // steps are left as they are.
         if (result.mode_ladder && Array.isArray(result.mode_ladder.aspects)) {
           state.ladderServer = Object.assign({}, state.ladderServer, { aspects: result.mode_ladder.aspects });
           if (!state.ladderAspectsPending)
@@ -9711,7 +9707,7 @@ std::string_view webControlPageHtml()
         state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
         renderSensorModes();
         showToast(error.message, true);
-        await fetchModeLadder(false);
+        await fetchModeLadder();
       } finally {
         state.ladderAspectsSaving = false;
         if (state.ladderAspectsSaveAgain) {
@@ -15641,14 +15637,14 @@ std::string_view webControlPageHtml()
         snapshot.ladder_resolution = Number(source.ladder_resolution);
       if (typeof source.ladder_enabled === "boolean")
         snapshot.ladder_enabled = source.ladder_enabled;
-      if (isFiniteNumber(source.ladder_count))
-        snapshot.ladder_count = Number(source.ladder_count);
       if (typeof source.ladder_text === "string")
         snapshot.ladder_text = source.ladder_text;
       if (Array.isArray(source.ladder_tops))
         snapshot.ladder_tops = source.ladder_tops.map(Number);
-      if (typeof source.ladder_ramp_ready === "boolean")
-        snapshot.ladder_ramp_ready = source.ladder_ramp_ready;
+      if (isFiniteNumber(source.limit_fps))
+        snapshot.limit_fps = Number(source.limit_fps);
+      if (typeof source.limit_why === "string")
+        snapshot.limit_why = source.limit_why;
       if (isFiniteNumber(source.fps_take_max))
         snapshot.fps_take_max = Number(source.fps_take_max);
       if (isFiniteNumber(source.fps_max))
@@ -17892,7 +17888,7 @@ std::string_view webControlPageHtml()
       markPrerollFps(frameBufferBar.preroll === true);
       const fpsLadderLine = document.getElementById("fpsLadderLine");
       setText("fpsLadderLine", state.fpsSwitchingTo > 0
-        ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : (ladderActive ? String(snapshot.ladder_text || "") : ""));
+        ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : String(snapshot.limit_why || ""));
       fpsLadderLine.classList.toggle("switching", state.fpsSwitchingTo > 0);
       document.getElementById("quickLadderPill").classList.toggle("hidden", !ladderActive);
       // Greyed selects ignore clicks: the fields say why when someone tries.
