@@ -44,8 +44,9 @@ inline constexpr Cell kCells[] = {
       "takes at 25, 26 and 27 stopped after 7-13 minutes, when the warm drive paused writes at 414-447 MB/s" },
     { Kind::Nvme, Board::Pi5, 1920, 1080, true, 16, false, "none", 30, 1, 0, Label::Measured, Group::Sensor,
       "60 s clean at 30 fps (the mode's top), 125 MB/s; longer takes not run" },
-    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 12, false, "none", 20, 30, 0, Label::Unconfirmed, Group::BackEnd,
-      "capture gaps at every fps from 25 to 30; nothing held clean, 20 is a placeholder" },
+    { Kind::Nvme, Board::Pi5, 3840, 2160, true, 12, false, "none", 30, 30, 0, Label::Unconfirmed, Group::BackEnd,
+      "the owner's choice: the step above 4K Clear HDR 16-bit (25 fps). Not measured clean: 60-s probes dropped "
+      "frames at every fps from 25 to 30 (capture gaps, 200-230 a minute at 30); 22-24 not run" },
     { Kind::Nvme, Board::Pi5, 3840, 2160, false, 12, false, "lossless_jpeg", 40, 15, 0, Label::Measured, Group::Encoder,
       "lossless 40 and 39 fps held 15 minutes, about 250 MB/s, drive up to 68 C, no write pause" },
     { Kind::Nvme, Board::Pi5, 1920, 1080, false, 12, false, "lossless_jpeg", 60, 1, 0, Label::Measured, Group::Sensor,

@@ -55,7 +55,7 @@ int main()
     const Row rows[] = {
         { "4K Clear HDR 16-bit", k4kHdr16, false, 25, 25, 9, 9 },
         { "2K Clear HDR 16-bit", k2kHdr16, false, 30, 30, 27, 25 },
-        { "4K Clear HDR 12-bit", k4kHdr12, false, 20, 20, 12, 12 },
+        { "4K Clear HDR 12-bit", k4kHdr12, false, 30, 30, 12, 12 },
         { "4K SDR 12-bit", k4kSdr12, false, 40, 33, 18, 18 },
         { "2K SDR 12-bit", k2kSdr12, false, 60, 60, 48, 33 },
         { "4K SDR 10-bit", k4kSdr10, false, 45, 33, 20, 20 },
@@ -120,7 +120,7 @@ int main()
                   small.label == Label::Derived,
               "1920x1016 Clear HDR 16-bit takes the 2K cell, not the 4K one: nearest larger, derived at best");
         const Limit hdr12 = limitFor(nvme(), Mode{ 1920, 1080, true, 12, false });
-        check(hdr12.found && same(hdr12.fps30, 20.0), "Clear HDR 12-bit 2K has no cell: the 4K one (20 fps) stands in");
+        check(hdr12.found && same(hdr12.fps30, 30.0), "Clear HDR 12-bit 2K has no cell: the 4K one (30 fps) stands in");
         const Limit rate = limitFor(nvme(), Mode{ 3840, 1744, false, 12, false });
         check(rate.found && rate.pixelRate && !rate.exact && same(rate.fps30, 330.0e6 / (3840.0 * 1744.0)) &&
                   rate.label == Label::Derived && rate.group == Group::Encoder && !std::strcmp(rate.compression, "lossless_jpeg"),
