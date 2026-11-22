@@ -3219,8 +3219,8 @@ std::string compressionLabel(const CaptureSettings &settings)
 }
 
 constexpr const char *kLadderOwnsCompression =
-    "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
-    "(Settings > Modes > Mode Ladder) to choose it by hand.";
+    "Dynamic resolution sets the compression for each resolution. Pick a resolution by hand, or turn "
+    "Dynamic resolution off (Settings > Modes > Dynamic resolution), to choose it.";
 
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
@@ -12367,8 +12367,8 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return true;
     }
     *error = "This preset records " + text(settings) + " at " + std::to_string(static_cast<int>(settings.fps)) +
-             " fps; the Mode Ladder runs that rate in " + text(wanted) +
-             ". Turn the ladder off to load it, or save the preset again.";
+             " fps; Dynamic resolution runs that rate in " + text(wanted) +
+             ". Turn Dynamic resolution off to load it, or save the preset again.";
     return false;
 }
 
