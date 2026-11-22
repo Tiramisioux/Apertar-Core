@@ -331,6 +331,7 @@ private:
     uint64_t mediaSpeedCurrentBytes_ = 0;
     uint64_t mediaSpeedLastBytes_ = 0;
     double mediaSpeedLastWriteSpeedMBps_ = 0.0;
+    double ladderSpeedMBps_ = 0.0;   // the last good speed test of the medium now mounted, for the known limits; 0 = none
     std::string mediaSpeedError_;
     std::thread mediaSpeedThread_;
 

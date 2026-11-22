@@ -255,6 +255,48 @@ int main()
               "modeName: sizes other than 4K and 2K are written out; a Context compares by value");
     }
 
+    // ---- the write speed test only lowers a drive-limited cell ----
+    {
+        Context c = t7();
+        check(same(capFor(c, k4kSdr12, 60.0).fps, 18.0), "speed test: none, the cell's 18 fps");
+        c.speedMBps = 80.0;
+        const Cap slow = capFor(c, k4kSdr12, 60.0);
+        check(same(slow.limit, 0.75 * 80.0 * 18.0 / 105.0) && same(slow.fps, 10.0) && !std::strcmp(slow.lever, "speed test") &&
+                  !std::strcmp(slow.by, "drive"),
+              "speed test: 80 MB/s on the USB SSD column lowers 4K SDR 12-bit from 18 to 10, by the drive");
+        c.speedMBps = 140.0;
+        check(same(capFor(c, k4kSdr12, 60.0).fps, 18.0) && !*capFor(c, k4kSdr12, 60.0).lever, "speed test: 140 MB/s (0.75 of it is the T7's 105) lowers nothing");
+        c.speedMBps = 900.0;
+        check(same(capFor(c, k4kSdr12, 60.0).fps, 18.0), "speed test: a faster drive never raises a limit");
+        Context n = nvme();
+        n.speedMBps = 20.0;
+        check(same(capFor(n, k4kHdr16, 30.0).fps, 20.0) && same(capFor(n, k2kSdr12, 60.0).fps, 60.0),
+              "speed test: the NVMe column's cells are not drive-limited, no guard");
+        Context sd = t7();
+        sd.storageMeasured = false;
+        sd.speedMBps = 40.0;
+        check(same(capFor(sd, k2kSdr12, 60.0).fps, 13.0), "speed test: an SD card at 40 MB/s on the USB SSD column: 2K SDR 12-bit 48 fps becomes 13.7, below 25 the whole number");
+        const auto why = [](const Context &ctx, const Mode &m, double ceiling) { return whyText(ctx, m, capFor(ctx, m, ceiling), ceiling); };
+        check(why(t7(), k4kSdr12, 60.0).find("write speed test") == std::string::npos, "why: no test, no sentence");
+        Context slowCtx = t7();
+        slowCtx.speedMBps = 80.0;
+        Context stepCtx = t7();
+        stepCtx.speedMBps = 80.0;
+        check(steppedDownText(stepCtx, 20.0, k2kSdr12, k2kHdr16, capFor(stepCtx, k2kHdr16, 30.0)) ==
+                  "This USB SSD writes about 80 MB/s: 2K Clear HDR 16-bit holds 15 fps (measured). At 20 fps the camera records 2K SDR 12-bit.",
+              "stepped down: a measured drive speed replaces the T7's 105 MB/s");
+        Context sdStep = t7();
+        sdStep.storageMeasured = false;
+        sdStep.speedMBps = 80.0;
+        check(steppedDownText(sdStep, 20.0, k2kSdr12, k2kHdr16, capFor(sdStep, k2kHdr16, 30.0)) ==
+                  "At 20 fps the camera records 2K SDR 12-bit: 2K Clear HDR 16-bit holds 15 fps (unconfirmed). "
+                  "The write speed test measured 80 MB/s on this card. Storage type not measured: limits are the USB SSD's. Run the speed test.",
+              "stepped down: the speed test is named when it lowered the better mode of an unmeasured drive");
+        check(why(slowCtx, k4kSdr12, 60.0) == "4K SDR 12-bit holds 10 fps for 30-minute takes on this USB SSD (derived). "
+                                              "The write speed test measured 80 MB/s on this card.",
+              "why: the sentence names the measured speed");
+    }
+
     // ---- the sentences when a mode below the best one runs ----
     {
         const auto stepped = [](const Context &c, double fps, const Mode &chosen, const Mode &best, double bestCeiling) {

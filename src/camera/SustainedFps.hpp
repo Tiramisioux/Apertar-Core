@@ -119,6 +119,7 @@ struct Context {
     bool splitAuto = false;         // the split is automatic; the table does not read it, the line does
     bool fatLike = false;           // exFAT or FAT: a flat folder slows file creation
     double fillFraction = 0.0;      // how full the medium is, 0 to 1
+    double speedMBps = 0.0;         // the last write speed test of this medium, 0 = none (run_media_speed_test)
 
     bool operator==(const Context &) const = default;
 };
@@ -227,6 +228,22 @@ inline Limit limitFor(const Context &context, const Mode &mode)
     return out;
 }
 
+// The USB SSD column's drive: about 105 MB/s in takes (a Samsung T7, the drive the numbers come from).
+inline constexpr unsigned kUsbSsdMegabytesPerSecond = 105;
+
+// A write speed test is cold and sequential; a take runs about 0.75 of it once the drive is warm (465 over 620 MB/s
+// on the NVMe card, derived).
+inline constexpr double kSpeedTestWarmFactor = 0.75;
+
+// What the measured drive holds for a drive-limited cell: the cell's frame is the T7's speed over the cell's fps,
+// and it must fit the warm share of the measured speed. 0 = no guard (no test, no row, or a limit that is not the drive's).
+inline double driveGuardFps(const Context &context, const Limit &row)
+{
+    if (context.speedMBps <= 0.0 || !row.found || row.group != Group::Drive || row.fps30 <= 0.0)
+        return 0.0;
+    return kSpeedTestWarmFactor * context.speedMBps * row.fps30 / kUsbSsdMegabytesPerSecond;
+}
+
 // What a mode serves after the levers: cap is the step its limit rounds down to (0 = the mode is not used).
 // limit is the number before rounding, 0 when the table has no row. by names the wall: back end, encoder, drive,
 // sensor (the sensor's own ceiling is the lower one, or there is no row) or TDN.
@@ -235,7 +252,7 @@ struct Cap {
     double limit = 0.0;
     Limit row;
     const char *by = "sensor";
-    const char *lever = "";         // the lever that moved the number: TDN, phase lock, aids or split
+    const char *lever = "";         // the lever that moved the number: TDN, phase lock, aids, split or speed test
 };
 
 // The levers (table B). TDN on with an unbinned mode: not used (0 of 24 4K takes were clean). Phase lock and aids
@@ -257,6 +274,10 @@ inline Cap capFor(const Context &context, const Mode &mode, double sensorCeiling
                 limit -= 1.0;
                 cap.lever = "aids";
             }
+        }
+        if (const double guard = driveGuardFps(context, cap.row); guard > 0.0 && guard < limit) {
+            limit = guard;
+            cap.lever = "speed test";
         }
         cap.limit = std::max(limit, 0.0);
         if (cap.limit < fps) {
@@ -308,6 +329,13 @@ inline std::string contextNotes(const Context &context)
     return text;
 }
 
+// The sentence that names a write speed test when it is what lowered a limit.
+inline std::string speedTestNote(const Context &context, const Cap &cap)
+{
+    return cap.lever == std::string("speed test")
+        ? " The write speed test measured " + wholeFps(context.speedMBps) + " MB/s on this card." : std::string();
+}
+
 // The one sentence under the fps picker for the running mode (limit_why): what it holds, then what the levers
 // and the storage change.
 inline std::string whyText(const Context &context, const Mode &mode, const Cap &cap, double sensorCeiling)
@@ -336,12 +364,10 @@ inline std::string whyText(const Context &context, const Mode &mode, const Cap &
         }
         if (!context.splitOn && context.fatLike && cap.lever == std::string("split"))
             text += " Split long takes is off: takes over 30 minutes slow down above 32 fps. Turn it on.";
+        text += speedTestNote(context, cap);
     }
     return text + contextNotes(context);
 }
-
-// The USB SSD column's drive: about 105 MB/s in takes (a Samsung T7, the drive the numbers come from).
-inline constexpr unsigned kUsbSsdMegabytesPerSecond = 105;
 
 // The sentence for a mode the table chose below a better one: `best` is the mode ranked before the chosen one that
 // came closest to the fps (the highest cap, the first of equals), bestCap what it holds. Says what held it back.
@@ -360,14 +386,15 @@ inline std::string steppedDownText(const Context &context, double fps, const Mod
     else if (!bestCap.row.found)
         text = at + ": " + name + " is limited to " + wholeFps(bestCap.fps) + " fps by the sensor.";
     else if (bestCap.row.group == Group::Drive && context.storage == Kind::UsbSsd && context.storageMeasured)
-        text = "This USB SSD writes about " + std::to_string(kUsbSsdMegabytesPerSecond) + " MB/s: " + holds + " (" +
-               labelName(bestCap.row.label) + "). " + at + ".";
+        text = "This USB SSD writes about " + (context.speedMBps > 0.0 ? wholeFps(context.speedMBps) : std::to_string(kUsbSsdMegabytesPerSecond)) +
+               " MB/s: " + holds + " (" + labelName(bestCap.row.label) + "). " + at + ".";
     else if (best.hdr && !chosen.hdr)
         text = at + ": " + holds + " (" + labelName(bestCap.row.label) + ").";
     else
         text = at + ": " + holds + " for 30 minutes on this " + storageName(context.storage) + " (" +
                labelName(bestCap.row.label) + ").";
-    return text + contextNotes(context);
+    const bool drive = context.storageMeasured && context.storage == Kind::UsbSsd && bestCap.row.group == Group::Drive;
+    return text + (drive ? std::string() : speedTestNote(context, bestCap)) + contextNotes(context);
 }
 
 // The sentence when the fps is the most any enabled mode holds: nothing better was left to try.

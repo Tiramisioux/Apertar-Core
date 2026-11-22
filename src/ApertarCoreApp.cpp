@@ -11534,13 +11534,17 @@ void ApertarCoreApp::runMediaSpeedTest(uint64_t testMiB, std::string mountPath)
     std::filesystem::remove(tempPath, rmEc);
     runShellCommand("sync", nullptr);
 
-    std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
-    mediaSpeedTestRunning_ = false;
-    mediaSpeedCurrentUsedFio_ = false;
-    mediaSpeedLastUsedFio_ = usedFio;
-    mediaSpeedLastBytes_ = mediaSpeedCurrentBytes_;
-    mediaSpeedLastWriteSpeedMBps_ = result.exitCode == 0 ? measuredMBps : 0.0;
-    mediaSpeedError_ = errorMessage;
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        mediaSpeedTestRunning_ = false;
+        mediaSpeedCurrentUsedFio_ = false;
+        mediaSpeedLastUsedFio_ = usedFio;
+        mediaSpeedLastBytes_ = mediaSpeedCurrentBytes_;
+        mediaSpeedLastWriteSpeedMBps_ = result.exitCode == 0 ? measuredMBps : 0.0;
+        ladderSpeedMBps_ = mediaSpeedLastWriteSpeedMBps_;
+        mediaSpeedError_ = errorMessage;
+    }
+    refreshLadderContext();   // a drive-limited mode may hold less on this card than the table says
 }
 
 void ApertarCoreApp::joinMediaSpeedTest()
@@ -11680,6 +11684,10 @@ void ApertarCoreApp::runMediaWatcher()
                 std::lock_guard<std::mutex> lock(mediaStateMutex_);
                 previousProfile = mediaProfile_;
                 mediaProfile_ = profile;
+            }
+            {
+                std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+                ladderSpeedMBps_ = 0.0;   // a speed test belongs to the card it ran on
             }
             refreshLadderContext();
             if (current.mounted()) {
@@ -12186,6 +12194,10 @@ void ApertarCoreApp::refreshLadderContext()
     }
     context.fatLike = profile.filesystem == MediaFilesystem::Exfat || profile.filesystem == MediaFilesystem::Vfat;
     context.fillFraction = total > 0 ? 1.0 - double(free) / double(total) : 0.0;
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        context.speedMBps = ladderSpeedMBps_;
+    }
     context.aidsOn = ui.focusPeakingEnabled || ui.zebraEnabled;
     context.audioOn = ui.recordAudioEnabled;
     const bufferbudget::SplitMode split = bufferbudget::splitModeRequest().load(std::memory_order_acquire);
