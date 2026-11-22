@@ -2024,12 +2024,18 @@ std::string_view webControlPageHtml()
       min-height: 44px;
       padding: 0 12px;
       border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.9);
-      background: #ffffff;
-      color: #09090b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #202024;
+      color: #e4e4e7;
       font-size: 14px;
       font-weight: 600;
       white-space: nowrap;
+    }
+
+    .ladder-add.active {
+      border-color: rgba(255, 255, 255, 0.9);
+      background: #ffffff;
+      color: #09090b;
     }
 
     .ladder-add:disabled {
@@ -2049,12 +2055,6 @@ std::string_view webControlPageHtml()
       font-size: 14px;
       font-weight: 600;
       white-space: nowrap;
-    }
-
-    .ladder-add.remove {
-      background: transparent;
-      border-color: rgba(252, 165, 165, 0.5);
-      color: #fca5a5;
     }
 
     .ladder-add.on-ladder {
@@ -9519,9 +9519,9 @@ std::string_view webControlPageHtml()
         text.appendChild(createDomElement("div", "ladder-pool-why", why));
       item.appendChild(text);
       if (index >= 0) {
-        // On the ladder: its number, and Remove (same list, same rules as the × on its row).
+        // On the ladder: a white Active button; pressing it removes the mode (same list, same rules as the × on its row).
         const actions = createDomElement("div", "ladder-pool-actions");
-        const remove = createDomElement("button", "ladder-add remove", "Deactivate");
+        const remove = createDomElement("button", "ladder-add active", "Active");
         remove.type = "button";
         remove.disabled = locked;
         remove.setAttribute("aria-label", "Deactivate " + name);
