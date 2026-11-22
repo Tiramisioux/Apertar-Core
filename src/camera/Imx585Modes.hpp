@@ -3,6 +3,10 @@
 // The IMX585 modes the cinemate-port driver advertises, per class, and the size rules around them.
 // std-only: tools/imx585_modes_test.cpp includes it without libcamera.
 //
+// The original Apertar driver has 1.85:1 at 3840x2076 and binned 1920x1038 (12-bit and 10-bit), where the
+// cinemate-port driver has 3840x2072 and 1920x1036. The tables list both; the startup probe keeps the rows
+// the installed driver accepts.
+//
 // Sizes are the ACTIVE picture, the size Core records and shows. What the driver delivers (the
 // transport size) is the same for the three classes below; only 16-bit Clear HDR prepends
 // optical-black rows: +40 rows at 1x1, +20 rows binned, split evenly top and bottom, so the
@@ -54,6 +58,7 @@ inline constexpr Mode kS12Modes[] = {
     { 1024, 576, true }, { 1024, 552, true }, { 1024, 540, true }, { 1024, 512, true },
     { 1024, 464, true }, { 1024, 460, true }, { 1024, 436, true }, { 1024, 428, true },
     { 1024, 408, true }, { 1024, 400, true },
+    { 3840, 2076, false }, { 1920, 1038, true },     // 1.85:1 of the original Apertar driver
 };
 
 inline constexpr Mode kS10Modes[] = {
@@ -73,10 +78,14 @@ inline constexpr Mode kS10Modes[] = {
     { 1024, 576, true }, { 1024, 552, true }, { 1024, 540, true }, { 1024, 512, true },
     { 1024, 464, true }, { 1024, 460, true }, { 1024, 436, true }, { 1024, 428, true },
     { 1024, 408, true }, { 1024, 400, true },
+    { 3840, 2076, false }, { 1920, 1038, true },     // 1.85:1 of the original Apertar driver
 };
 
+// The driver also lists 1920x1080 binned here. Core holds it back until a capture shows that the 12-bit
+// companding curve, the full-resolution one, holds for the binned readout too. To offer it again, put
+// { 1920, 1080, true } back first, and "1920x1080b" in the WebUI's h12 list.
 inline constexpr Mode kH12Modes[] = {
-    { 1920, 1080, true }, { 3840, 2160, false }, { 2880, 2160, false }, { 2160, 2160, false },
+    { 3840, 2160, false }, { 2880, 2160, false }, { 2160, 2160, false },
     { 2976, 2160, false }, { 3840, 2072, false }, { 3840, 2032, false }, { 3840, 2024, false },
     { 3840, 1920, false }, { 3840, 1744, false }, { 3840, 1728, false }, { 3840, 1632, false },
     { 3840, 1608, false }, { 3840, 1536, false }, { 3840, 1504, false }, { 1920, 1040, false },
@@ -84,6 +93,7 @@ inline constexpr Mode kH12Modes[] = {
     { 2048, 1080, false }, { 2048, 1024, false }, { 2048, 928, false }, { 2048, 920, false },
     { 2048, 872, false }, { 2048, 856, false }, { 2048, 816, false }, { 2048, 800, false },
     { 1440, 1080, false },
+    { 3840, 2076, false },          // a driver with 3840x2076 in SDR has it here too (the original: 4K only)
 };
 
 inline constexpr Mode kH16Modes[] = {
@@ -133,7 +143,7 @@ constexpr uint32_t bitDepthOf(Class cls)
     return 12;
 }
 
-// Every row of the class as the driver lists it (62, 62, 29, 34), hidden and shadowed rows included.
+// Every row of the class (64, 64, 29, 34: see kH12Modes), hidden and shadowed rows included.
 struct Rows {
     const Mode *first;
     const Mode *last;
@@ -229,6 +239,36 @@ inline std::optional<Size> activeFor(Size transport, uint32_t bitDepth)
     if (!found)
         return std::nullopt;
     return Size{ found->width, found->height };
+}
+
+// The 1.85:1 size of the installed driver: 3840x2072 / 1920x1036 (cinemate-port driver) or 3840x2076 /
+// 1920x1038 (original Apertar driver). `probed` holds the transport sizes the startup probe found in the
+// class: the size of the pair it holds comes back. With nothing probed, the request if the class has it,
+// else its partner. Any other size comes back as it is.
+inline Size driverCropSize(Class cls, Size requested, const std::vector<Size> &probed)
+{
+    Size partner = requested;
+    if (requested == Size{ 3840, 2072 })
+        partner = { 3840, 2076 };
+    else if (requested == Size{ 3840, 2076 })
+        partner = { 3840, 2072 };
+    else if (requested == Size{ 1920, 1036 })
+        partner = { 1920, 1038 };
+    else if (requested == Size{ 1920, 1038 })
+        partner = { 1920, 1036 };
+    else
+        return requested;
+
+    for (const Size candidate : { requested, partner }) {
+        const auto transport = transportFor(cls, candidate.width, candidate.height, 0);
+        for (const Size &size : probed) {
+            if (transport && *transport == size)
+                return candidate;
+        }
+    }
+    if (find(cls, requested.width, requested.height, 0) || !find(cls, partner.width, partner.height, 0))
+        return requested;
+    return partner;
 }
 
 // The offered row closest to a size (Manhattan distance on the active picture; the driver's order

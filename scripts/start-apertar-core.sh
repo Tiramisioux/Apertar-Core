@@ -17,12 +17,11 @@ if [[ -n "${APERTAR_TUNING_FILE:-}" ]]; then
     export LIBCAMERA_RPI_TUNING_FILE="$APERTAR_TUNING_FILE"
 fi
 
-# The pipeline config the live Core runs with (FE queue depth 4, drop-frames recipe row 8), when the rig has it; an
-# env of the same name wins. libcamera opens this as a path: a bare file name is not found and it falls back to its
-# defaults (depth 2) with only a warning.
-PIPELINE_CONFIG=/home/pi/Tuning-Files/pipeline/pisp-depth4.yaml
-if [[ -z "${LIBCAMERA_RPI_CONFIG_FILE:-}" && -f "$PIPELINE_CONFIG" ]]; then
-    export LIBCAMERA_RPI_CONFIG_FILE="$PIPELINE_CONFIG"
+# APERTAR_PIPELINE_CONFIG names a libcamera pipeline-handler config YAML (for example one that sets the front-end
+# queue depth); libcamera opens it as a path, so give the full path. Unset = libcamera's own defaults. An exported
+# LIBCAMERA_RPI_CONFIG_FILE wins.
+if [[ -n "${APERTAR_PIPELINE_CONFIG:-}" && -z "${LIBCAMERA_RPI_CONFIG_FILE:-}" ]]; then
+    export LIBCAMERA_RPI_CONFIG_FILE="$APERTAR_PIPELINE_CONFIG"
 fi
 
 # Dual sensor: APERTAR_CAMERA picks the camera by port (cam0, cam1, or an I2C node such as i2c@88000), and

@@ -3,7 +3,10 @@
 #include "hardware/HardwareConfigText.hpp"
 #include "util/BufferBudget.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <tuple>
+#include <vector>
 
 using namespace apertar;
 static int g_failed = 0;
@@ -74,19 +77,56 @@ int main()
         check(!bufferbudget::parseBufferConf(text).ram, "trailing comment: ignored (as Core's Python reader keeps it in the value)");
     }
     {
-        // frames_per_folder (split a take into part_NNN folders) and its precedence
+        // frames_per_folder (the part size) and split= (off, on, auto) and their precedence; the default is on, 5000 frames
         const auto conf = bufferbudget::parseBufferConf(head + "frames_per_folder=5000\n");
         check(conf.framesPerFolder && *conf.framesPerFolder == 5000, "frames_per_folder=5000");
         check(bufferbudget::requestedFramesPerFolder(nullptr, conf) == 5000, "frames_per_folder: the file when the env is unset");
         check(bufferbudget::requestedFramesPerFolder("500", conf) == 500, "frames_per_folder: APERTAR_CDNG_FRAMES_PER_FOLDER wins");
         check(bufferbudget::requestedFramesPerFolder("50", conf) == 0, "frames_per_folder: a bad env value is 0 (one folder)");
-        check(bufferbudget::requestedFramesPerFolder(nullptr, bufferbudget::parseBufferConf(head)) == 0, "frames_per_folder: default 0");
+        const auto none = bufferbudget::parseBufferConf(head);
+        check(bufferbudget::requestedSplitMode(nullptr, none) == bufferbudget::SplitMode::On &&
+                  bufferbudget::requestedFramesPerFolder(nullptr, none) == 5000, "split: no key, no number: on, 5000 frames");
+        check(bufferbudget::requestedSplitMode(nullptr, bufferbudget::parseBufferConf(head + "frames_per_folder=0\n")) == bufferbudget::SplitMode::Off &&
+                  bufferbudget::requestedFramesPerFolder(nullptr, bufferbudget::parseBufferConf(head + "frames_per_folder=0\n")) == 0,
+              "split: an old file with frames_per_folder=0 is off");
+        check(bufferbudget::requestedSplitMode(nullptr, conf) == bufferbudget::SplitMode::On, "split: an old file with a number is on");
+        for (const auto &[text, mode, size] : std::vector<std::tuple<const char *, bufferbudget::SplitMode, unsigned>>{
+                 { "split=off\n", bufferbudget::SplitMode::Off, 0 }, { "split=on\n", bufferbudget::SplitMode::On, 5000 },
+                 { "split=auto\n", bufferbudget::SplitMode::Auto, 5000 }, { "split=auto\nframes_per_folder=2000\n", bufferbudget::SplitMode::Auto, 2000 },
+                 { "split=off\nframes_per_folder=2000\n", bufferbudget::SplitMode::Off, 0 }, { "split=on\nframes_per_folder=0\n", bufferbudget::SplitMode::On, 5000 } }) {
+            const auto c = bufferbudget::parseBufferConf(head + text);
+            std::string name = std::string("split: ") + text;
+            std::replace(name.begin(), name.end(), '\n', ' ');
+            check(bufferbudget::requestedSplitMode(nullptr, c) == mode && bufferbudget::requestedFramesPerFolder(nullptr, c) == size, name);
+        }
+        check(bufferbudget::requestedSplitMode("0", bufferbudget::parseBufferConf(head + "split=auto\n")) == bufferbudget::SplitMode::Off &&
+                  bufferbudget::requestedSplitMode("1000", bufferbudget::parseBufferConf(head + "split=off\n")) == bufferbudget::SplitMode::On,
+              "split: APERTAR_CDNG_FRAMES_PER_FOLDER wins over split= (0 off, a size on)");
         const std::string bad = head + "frames_per_folder=99\n";
         const auto issues = bufferIssues(bad);
         check(!bufferbudget::parseBufferConf(bad).framesPerFolder && issues.size() == 1 && issues[0].line == 4 && issues[0].error,
               "frames_per_folder=99: unset, one error on line 4");
         if (!issues.empty()) std::printf("      %s\n", issues[0].message.c_str());
         check(bufferIssues(head + "frames_per_folder=0\n").empty(), "frames_per_folder=0 is valid");
+        const auto splitBad = bufferIssues(head + "split=yes\n");
+        check(splitBad.size() == 1 && splitBad[0].error && !bufferbudget::parseBufferConf(head + "split=yes\n").split, "split=yes: unset, one error");
+        if (!splitBad.empty()) std::printf("      %s\n", splitBad[0].message.c_str());
+        check(bufferIssues(head + "split=auto\n").empty() && bufferIssues(head + "split=off\n").empty() && bufferIssues(head + "split=on\n").empty(),
+              "split=off, on, auto are valid");
+    }
+    {
+        // What one take does: cDNG and lossy DNG per frame; MLV never; auto only on exFAT or FAT above 32 fps
+        using bufferbudget::SplitMode;
+        using bufferbudget::framesPerFolderForTake;
+        check(framesPerFolderForTake(SplitMode::Off, 5000, true, true, 60, false) == 0, "take: off never splits");
+        check(framesPerFolderForTake(SplitMode::On, 5000, true, false, 24, false) == 5000, "take: on splits cDNG on any filesystem at any fps");
+        check(framesPerFolderForTake(SplitMode::On, 5000, false, true, 60, false) == 0, "take: on does not split an MLV take");
+        check(framesPerFolderForTake(SplitMode::Auto, 5000, true, true, 33, false) == 5000, "take: auto splits cDNG on exFAT at 33 fps");
+        check(framesPerFolderForTake(SplitMode::Auto, 5000, true, true, 32, false) == 0 &&
+                  framesPerFolderForTake(SplitMode::Auto, 5000, true, true, 25, false) == 0, "take: auto does not split at 32 or 25 fps");
+        check(framesPerFolderForTake(SplitMode::Auto, 5000, true, false, 60, false) == 0, "take: auto does not split off exFAT and FAT (ext4)");
+        check(framesPerFolderForTake(SplitMode::Auto, 5000, false, true, 60, false) == 0, "take: auto does not split an MLV take");
+        check(framesPerFolderForTake(SplitMode::Auto, 5000, true, true, 25, true) == 5000, "take: auto splits a take that ramps its fps on exFAT");
     }
     {
         // clip_merge (the merge worker's switch): default on, off in the file, APERTAR_CLIP_MERGE=0 forces off

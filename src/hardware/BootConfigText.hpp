@@ -77,22 +77,26 @@ struct Board {
     std::string family;          // "pi5" (BCM2712), "pi4" (BCM2711), "pi3" (BCM2837/BCM2710)
     std::string model;           // /proc/device-tree/model, shown on the page
     bool computeModule = false;
-    bool detected = false;       // false: no device tree (a dev machine). Read as a Pi 5, Apertar's main board.
+    bool detected = false;       // false: a SoC this card does not know (or no device tree); family is empty and the card is read-only
 };
 
-// compatible and model as read from /proc/device-tree (NUL-separated, NUL-terminated).
-inline Board boardFromDeviceTree(std::string compatible, std::string model)
+// compatible and model as read from the device tree (NUL-separated, NUL-terminated). Each compatible entry is compared
+// whole with the SoC strings, as recordingCapabilitiesFromCompatible does.
+inline Board boardFromDeviceTree(std::string_view compatible, std::string model)
 {
-    std::replace(compatible.begin(), compatible.end(), '\0', ',');
     model.erase(std::remove(model.begin(), model.end(), '\0'), model.end());
     Board board;
     board.model = trimmed(model);
-    const std::string c = lower(compatible);
-    if (contains(c, "bcm2712")) board.family = "pi5";
-    else if (contains(c, "bcm2711")) board.family = "pi4";
-    else if (contains(c, "bcm2837") || contains(c, "bcm2710")) board.family = "pi3";
+    while (!compatible.empty()) {
+        const auto end = compatible.find('\0');
+        const auto soc = compatible.substr(0, end);
+        if (soc == "brcm,bcm2712") board.family = "pi5";
+        else if (soc == "brcm,bcm2711") board.family = "pi4";
+        else if (soc == "brcm,bcm2837" || soc == "brcm,bcm2710") board.family = "pi3";
+        if (end == std::string_view::npos) break;
+        compatible.remove_prefix(end + 1);
+    }
     board.detected = !board.family.empty();
-    if (!board.detected) board.family = "pi5";
     board.computeModule = contains(lower(board.model), "compute module");
     return board;
 }
@@ -144,7 +148,7 @@ struct Sensor {
     std::string_view label;
     bool mono;
     uint64_t defaultHz;            // the overlay's own link frequency; 0 = no link-frequency menu
-    uint64_t pi4MaxHz;             // options above this are left off on a Pi 4; 0 = no limit
+    uint64_t slowBoardMaxHz;       // options above this are left off on every board that is not a Pi 5; 0 = no limit
     std::vector<LinkOption> options;
 };
 
@@ -187,7 +191,7 @@ inline std::vector<LinkOption> linkOptionsFor(const Sensor &sensor, const Board 
 {
     std::vector<LinkOption> out;
     for (const auto &option : sensor.options)
-        if (board.family != "pi4" || !sensor.pi4MaxHz || option.hz <= sensor.pi4MaxHz) out.push_back(option);
+        if (board.family == "pi5" || !sensor.slowBoardMaxHz || option.hz <= sensor.slowBoardMaxHz) out.push_back(option);
     return out;
 }
 
@@ -293,12 +297,19 @@ inline Line lineFrom(std::string raw)
         while (pos < end && s[pos] == '#') ++pos;
         while (pos < end && (s[pos] == ' ' || s[pos] == '\t')) ++pos;
     }
-    const size_t eq = s.find('=', pos);
-    if (eq == std::string::npos || eq >= end) return line;
-    const std::string key = lower(trimmed(std::string_view(s).substr(pos, eq - pos)));
-    if (key.empty() || !std::all_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '_'; }))
-        return line;
-    size_t vb = eq + 1;
+    std::string key;
+    size_t vb = 0;
+    if (s.compare(pos, 7, "include") == 0 && pos + 7 < end && blank(s[pos + 7])) {   // include <file>: no '=', the file name is the value
+        key = "include";
+        vb = pos + 7;
+    } else {
+        const size_t eq = s.find('=', pos);
+        if (eq == std::string::npos || eq >= end) return line;
+        key = lower(trimmed(std::string_view(s).substr(pos, eq - pos)));
+        if (key.empty() || !std::all_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '_'; }))
+            return line;
+        vb = eq + 1;
+    }
     while (vb < end && (s[vb] == ' ' || s[vb] == '\t')) ++vb;
     size_t ve = s.find('#', vb);
     if (ve == std::string::npos || ve > end) ve = end;
@@ -492,6 +503,7 @@ struct State {
     Board board;
     bool editable = false;
     std::string problem;                      // why it is not editable
+    std::string cameraProblem;                // an include line loads the sensor: the sensor and link rows are read-only
     std::map<std::string, CameraPort> cameras;
     std::map<std::string, Switch> toggles;    // i2c, i2s, spi, audio
     Switch rp1;
@@ -569,6 +581,8 @@ inline State readState(const Document &doc, const Board &board)
                 state.cameraAutoDetect = static_cast<int>(*value);
                 state.cameraAutoDetectLine = number;
             }
+        } else if (line.key == "include" && state.cameraProblem.empty()) {
+            state.cameraProblem = "config.txt includes " + line.value + ": the sensor comes from that file.";
         }
     }
     for (auto &[port, camera] : state.cameras)
@@ -618,7 +632,9 @@ inline State readState(const Document &doc, const Board &board)
     }
 
     const std::string section = boardSection(board);
-    if (sectionExists(doc, section) || sectionExists(doc, "all")) {
+    if (!board.detected) {
+        state.problem = "This board is not one the Boot Config card knows. Edit config.txt by hand.";
+    } else if (sectionExists(doc, section) || sectionExists(doc, "all")) {
         state.editable = true;
     } else {
         state.problem = "config.txt has neither a [" + section + "] nor an [all] section, so it is not the Apertar layout. "
@@ -848,6 +864,7 @@ inline ApplyResult applyRequest(const std::string &text, const Request &request,
         if (std::find(ports.begin(), ports.end(), port) == ports.end())
             return fail("This board has no " + port + " camera connector.");
         const CameraPort &current = result.before.cameras.at(port);
+        if (!result.before.cameraProblem.empty() && key != current.sensor) return fail(result.before.cameraProblem);
         if (key != "none") anySensor = true;
         const Sensor *sensor = findSensor(key);
         if (key != "none" && !sensor) {
@@ -862,6 +879,7 @@ inline ApplyResult applyRequest(const std::string &text, const Request &request,
         if (sensor && sensor->defaultHz) {
             const auto it = request.linkFrequencies.find(port);
             if (it != request.linkFrequencies.end()) {
+                if (!result.before.cameraProblem.empty() && it->second != current.linkFrequency) return fail(result.before.cameraProblem);
                 std::optional<uint64_t> hz = it->second;
                 if (hz) {
                     std::set<uint64_t> kept;
@@ -1261,6 +1279,7 @@ inline std::string stateJson(const State &state, const Facts &facts)
     for (size_t i = 0; i < ports.size(); ++i) out += (i ? "," : "") + jsonString(ports[i]);
     out += "]}";
     out += ",\"editable\":" + std::string(state.editable ? "true" : "false") + ",\"problem\":" + jsonString(state.problem);
+    out += ",\"camera_problem\":" + jsonString(state.cameraProblem);
     out += ",\"cameras\":{";
     bool first = true;
     for (const auto &[port, camera] : state.cameras) {

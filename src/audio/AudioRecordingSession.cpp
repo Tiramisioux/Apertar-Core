@@ -25,6 +25,21 @@ namespace {
 
 constexpr uint32_t kBextChunkSize = 602;
 
+size_t configuredWriterByteCap()
+{
+    static const size_t value = [] {
+        const char *env = std::getenv("APERTAR_AUDIO_WRITER_BYTES");
+        if (!env || !*env)
+            return size_t(64) * 1024u * 1024u;
+        char *end = nullptr;
+        const unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (end == env || parsed < 1024ull * 1024ull)
+            return size_t(64) * 1024u * 1024u;
+        return static_cast<size_t>(parsed);
+    }();
+    return value;
+}
+
 void ignoreSigpipeProcessWide()
 {
     static std::once_flag once;
@@ -483,7 +498,6 @@ void AudioRecordingSession::readerLoop()
                 if (audioEndBootUs_ && sampleBootUs > int64_t(audioEndBootUs_) + 10000) {
                     const uint64_t gapBytes = framesForDurationUs(sampleBootUs - audioEndBootUs_, options_.sampleRate) * blockAlign;
                     enqueueWrite(nullptr, static_cast<size_t>(gapBytes));
-                    capturedBytes_ += gapBytes;
                     fitFrames_ += gapBytes / blockAlign;
                     std::cerr << "ApertarCore audio discontinuity: padded_us=" << sampleBootUs - audioEndBootUs_ << "\n";
                 }
@@ -533,7 +547,6 @@ void AudioRecordingSession::readerLoop()
             }
             enqueueWrite(buffer.data(), static_cast<size_t>(bytesRead));
             if (writeFailed_.load(std::memory_order_acquire)) break;
-            capturedBytes_ += static_cast<uint64_t>(bytesRead);
             if (shouldMeasureLevel)
                 emitLevel(meterLevel);
             continue;
@@ -739,6 +752,16 @@ void AudioRecordingSession::enqueueWrite(const char *data, size_t size)
     if (data)
         std::memcpy(block.data(), data, size);
     std::lock_guard<std::mutex> lock(writeMutex_);
+    if (queuedWriteBytes_ + size > configuredWriterByteCap()) {
+        // The medium has stopped taking data: end the take instead of growing
+        // the queue until the memory runs out.
+        if (!writeFailed_.exchange(true, std::memory_order_acq_rel)) {
+            failure_.set("Audio capture write stalled.");
+            std::cerr << "ApertarCore audio writer: backlog above " << configuredWriterByteCap() / (1024u * 1024u)
+                      << " MB, capture stopped\n";
+        }
+        return;
+    }
     writeQueue_.push_back(std::move(block));
     queuedWriteBytes_ += size;
     peakQueuedWriteBytes_ = std::max(peakQueuedWriteBytes_, queuedWriteBytes_);
@@ -777,6 +800,7 @@ void AudioRecordingSession::writerLoop()
             std::cerr << "ApertarCore audio capture write failed.\n";
             continue;
         }
+        capturedBytes_ += static_cast<uint64_t>(block.size());
         if (const auto now = std::chrono::steady_clock::now(); now - lastSync >= syncEvery) {
             lastSync = now;
             rawStream_.flush();

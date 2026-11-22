@@ -18,6 +18,6 @@ inline std::optional<std::string> linkDownRefusal(std::string_view word, bool li
 
 inline constexpr const char *kCam1DidNotAnswer = "CAM1 did not answer.";
 inline constexpr const char *kCam0RecordingRefusal = "CAM0 is recording.";
-inline constexpr const char *kLadderCam0Only = "The Mode Ladder runs on CAM0 only.";
+inline constexpr const char *kLadderCam0Only = "Dynamic resolution runs on CAM0 only.";
 
 } // namespace apertar::cam1state

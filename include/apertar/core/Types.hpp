@@ -136,8 +136,9 @@ struct CaptureSettings {
     // camera as a whole, like the timecode mode; nothing derives from it yet.
     double conformFps = 25.0;
     bool fpsPhaseLock = false; // Closed-loop cadence lock to the Pi clock (FramePhaseLock).
-    bool previewTdn = false; // Temporal denoise in the preview ISP. Off (default) is much faster; the raw DNGs never change.
+    bool previewTdn = true; // Temporal denoise in the preview ISP of raw takes. Off is much faster; H.264 and ProRes always keep it.
     bool mediaTrimEnabled = true; // Trim the recording drive after big deletes and when it is mounted (APERTAR_MEDIA_TRIM=0 overrides).
+    bool stopOnDroppedFrame = false; // End a take at its first dropped frame (a storage pre-roll is never stopped).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
     // numbered by count and the clip keeps the FPS it started with as its timeline rate.
     bool fpsSpeedRamp = false;
@@ -183,11 +184,16 @@ struct CaptureSettings {
     double fpsTakeMax = 0.0;  // Runtime (T34): the highest FPS a take in the current mode reaches (its rung's ceiling).
     bool ladderActive = false;     // Runtime (T34): the mode ladder picks the sensor mode from the FPS.
     uint32_t ladderRung = 0;       // Runtime (T34): the running rung, 1-based, 0 = the mode is not a rung.
-    bool ladderRampReady = false;  // Runtime (T34): Ramp-ready is choosing (with Speed Ramp on).
     bool ladderEnabled = false;    // Runtime (T34): the ladder is switched on (it may be idle, e.g. in H.264).
     bool ladderOverride = false;   // Runtime: an explicit Clear HDR choice holds the mode; the ladder waits for the next fps/mode change.
     uint32_t ladderCount = 0;      // Runtime (T34): resolutions in the ladder.
     std::vector<double> ladderTops; // Runtime (T34): each resolution's top FPS, in order (for the FPS pill labels).
+    double limitFps = 0.0;         // Runtime: the known limit of the current mode for 30-minute takes at the storage and levers in use, a step; 0 = none known.
+    double limitShortFps = 0.0;    // Runtime: what that mode holds for takes up to about 8 minutes; 0 = none known.
+    std::string limitBasis;        // Runtime: measured, derived, probable, unconfirmed, or sensor (no measurement).
+    std::string limitBy;           // Runtime: the wall that sets it: back end, encoder, drive, sensor or TDN.
+    std::string limitWhy;          // Runtime: one sentence for the limit line under the FPS picker.
+    bool splitEffective = false;   // Runtime: the next take is split into part folders, at this fps and format and on this storage.
     std::string ladderText;        // Runtime (T34): the running line, e.g. "Resolution 1 · 3840×2160 · ClearHDR16 · ≤25 · Uncompressed".
     RecordingFormat recordingFormat = RecordingFormat::Cdng;
     CdngCompression cdngCompression = CdngCompression::Uncompressed;
@@ -198,6 +204,14 @@ struct CaptureSettings {
     ProresColorProfile cdngPreviewColorProfile = ProresColorProfile::Standard;
     std::shared_ptr<const PreviewExposureReference> previewExposureReference; // Active ISP, not saved settings.
     std::string tuningFile;
+    // Dynamic resolution, one for the camera as a whole like the tuning file, as text: the switch, the enabled modes
+    // ("WIDTHxHEIGHT:BITS:hdr|sdr" joined by commas, empty = all the full-frame modes of the sensor) and the WebUI's
+    // aspect filter. CameraController keeps modeLadder_ parsed from it and is the only one that writes these.
+    bool dynresEnabled = true;
+    std::string dynresModes;
+    std::string dynresAspects;
+    bool dynresTdnOff = false;       // dynres_tdn=off_in_4k: Dynamic resolution turns preview temporal denoise off for an unbinned mode (4K, crops)
+    bool dynresTdnRestore = false;   // it did, so it turns it back on for a binned mode; the operator's own switch ends this
     uint32_t rawBitDepth = 12;
     bool clearHdr = false;
     // Clear HDR merge knobs (IMX585). Blend 5 and gain adder 1 are Cinemate's measured operating point;
@@ -335,8 +349,7 @@ inline const char *toString(CdngLog log)
 }
 
 // False for an unknown value (out is then left alone). "off" is Off; "auto", "on" and the legacy explicit
-// targets "12", "10", "8" (old settings, presets, scripts) all mean Auto. The ladder words log, log10, log8
-// are mapped by the ladder parser.
+// targets "12", "10", "8" (old settings, presets, scripts) all mean Auto.
 inline bool cdngLogFromString(const std::string &value, CdngLog &out)
 {
     if (value == "off") out = CdngLog::Off;

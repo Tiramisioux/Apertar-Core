@@ -1,21 +1,27 @@
-# /etc/systemd/system/apertar-core-cam1.service: the live unit (T56 0.1) without the wait-ui ExecStartPre
-# No PartOf=: a primary restart leaves cam1 and its take alone (start order below)
+# /etc/systemd/system/apertar-core-cam1.service: the second Core, for the sensor on cam1 (README "Two sensors").
+# Enabled once, it starts with apertar-core.service at every boot, and runs only when a sensor is on cam0 and on cam1:
+# with one sensor or none, ExecCondition skips it (no failure, no restart).
+# No PartOf=: a primary restart leaves cam1 and its take alone (design 3.4)
 [Unit]
+Description=Apertar Core for the second sensor (cam1)
 After=apertar-core.service
 [Service]
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/ApertarCore/
-ExecStart=/home/pi/start-apertar-core-ds.sh
+# The binary start-apertar-core.sh runs; sysfs and config.txt only, no camera opened
+ExecCondition=/home/pi/ApertarCore-build/apertar-core --camera cam1 --check-dual
+ExecStart=/home/pi/start-apertar-core.sh
 Restart=on-failure
 RestartSec=5
+# 2 = a launch error (no hardware file of its own, a bad option): fix the install, do not loop
+RestartPreventExitStatus=2
 LimitNICE=-5
 LimitRTPRIO=80
 Environment=LIBCAMERA_LOG_LEVELS=IPARPI:ERROR
 Environment=APERTAR_CAMERA=cam1 APERTAR_SOCKET_PATH=/tmp/apertar-core-cam1.sock APERTAR_WEB_PORT=8001
 Environment=XDG_CONFIG_HOME=/home/pi/.config-cam1 APERTAR_HARDWARE_CONFIG=/home/pi/apertar-hardware-cam1.conf
 Environment=APERTAR_STORAGE_PREROLL=0 APERTAR_MEDIA_TRIM=0 APERTAR_MEDIA_TUNE=0 APERTAR_CLIP_MERGE=0
-Environment=APERTAR_CORE_BIN=/home/pi/ApertarCore-ds-build/apertar-core
 SyslogIdentifier=apertar-core-cam1
 [Install]
 WantedBy=apertar-core.service

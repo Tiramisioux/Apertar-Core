@@ -345,10 +345,11 @@ inline std::string canonicalTriggerEvent(std::string_view text)
     return {};
 }
 
+// The members of the list_actions reply, without the braces.
 inline std::string catalogJson()
 {
     std::ostringstream out;
-    out << "{\"actions\":[";
+    out << "\"actions\":[";
     bool first = true;
     for (const auto &spec : kSpecs) {
         out << (first ? "" : ",") << "{\"id\":\"" << spec.id << "\",\"group\":\"" << spec.group << "\",\"label\":\""
@@ -365,7 +366,7 @@ inline std::string catalogJson()
     out << "],\"trigger_events\":[";
     for (size_t i = 0; i < std::size(kTriggerEvents); ++i)
         out << (i ? "," : "") << "{\"id\":\"" << kTriggerEvents[i].id << "\",\"label\":\"" << kTriggerEvents[i].label << "\"}";
-    out << "],\"max_per_mapping\":" << maxButtonActions << "}";
+    out << "],\"max_per_mapping\":" << maxButtonActions;
     return out.str();
 }
 

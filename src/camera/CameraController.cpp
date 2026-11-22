@@ -181,12 +181,17 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << ladderTopsJson(settings.ladderTops)
+        << ",\"limit_fps\":" << settings.limitFps
+        << ",\"limit_short_fps\":" << settings.limitShortFps
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -231,6 +236,7 @@ std::string settingsEvent(const CaptureSettings &settings)
         << ",\"timecode_mode\":\"" << toString(settings.timecodeMode) << "\""
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"preview_tdn\":" << (settings.previewTdn ? "true" : "false")
+        << ",\"stop_on_dropped_frame\":" << (settings.stopOnDroppedFrame ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
@@ -405,20 +411,6 @@ AutofocusSpeed autofocusSpeedFromString(const std::string &value)
     return AutofocusSpeed::Normal;
 }
 
-// T34: the mode ladder lives beside camera_settings.conf (same XDG rule), one ladder per camera.
-std::filesystem::path modeLadderPath()
-{
-    const char *xdgConfig = std::getenv("XDG_CONFIG_HOME");
-    if (xdgConfig && *xdgConfig)
-        return std::filesystem::path(xdgConfig) / "apertar-core" / "mode_ladder.conf";
-
-    const char *home = std::getenv("HOME");
-    if (home && *home)
-        return std::filesystem::path(home) / ".config" / "apertar-core" / "mode_ladder.conf";
-
-    return std::filesystem::temp_directory_path() / "apertar-core-mode_ladder.conf";
-}
-
 // mode_ladder.conf as text, true only when the whole file was read. A read can fail after the open (an I/O
 // error; a directory opens but cannot be read) and leave a short or empty text while the ifstream still reads as
 // good (libstdc++ catches the error inside operator<<), so the text's size is compared with file_size, which
@@ -449,6 +441,12 @@ std::filesystem::path persistedSettingsPath()
     return std::filesystem::temp_directory_path() / "apertar-core-camera_settings.conf";
 }
 
+// The mode ladder lived in this file beside camera_settings.conf; it is read only to take it over.
+std::filesystem::path modeLadderPath()
+{
+    return persistedSettingsPath().parent_path() / "mode_ladder.conf";
+}
+
 bool resolutionMatches(const Resolution &resolution, uint32_t width, uint32_t height)
 {
     return resolution.width == width && resolution.height == height;
@@ -458,29 +456,6 @@ bool isImx585LowResolutionAlias(const Resolution &resolution)
 {
     return resolutionMatches(resolution, 1920, 1080) ||
            resolutionMatches(resolution, 1928, 1090);
-}
-
-// The imx585 driver's 1.85:1 crops are 3840x2072 and the binned 1920x1036 (cinemate-modes, the
-// cinemate-port driver branch). The Apertar-Beta 1.6.0 driver had 3840x2076 and 1920x1038, windows
-// that started at PIX_VST 54 against the sensor's multiple-of-4 rule; the new driver has neither.
-// Settings, presets, ladder rungs and clients (the touch UI) that still say the old sizes are
-// moved to the new ones here, before any lookup.
-Resolution migratedImx585CropResolution(Resolution resolution)
-{
-    if (resolutionMatches(resolution, 3840, 2076))
-        return Resolution{ 3840, 2072 };
-    if (resolutionMatches(resolution, 1920, 1038))
-        return Resolution{ 1920, 1036 };
-    return resolution;
-}
-
-void migrateImx585LadderRungs(std::vector<ladder::Rung> &rungs)
-{
-    for (ladder::Rung &rung : rungs) {
-        const Resolution moved = migratedImx585CropResolution(Resolution{ rung.width, rung.height });
-        rung.width = moved.width;
-        rung.height = moved.height;
-    }
 }
 
 bool isImx585HighResolutionAlias(const Resolution &resolution)
@@ -518,22 +493,59 @@ bool isImx585KnownResolution(const Resolution &resolution)
 // mode): the Full HD and 3840-wide crops. The other table sizes are IMX585 only.
 bool isImx585LegacyCropResolution(const Resolution &resolution)
 {
-    for (const uint32_t height : { 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
+    for (const uint32_t height : { 1038u, 1036u, 1012u, 960u, 872u, 864u, 816u, 804u, 768u, 752u }) {
         if (resolutionMatches(resolution, 1920, height))
             return true;
     }
-    for (const uint32_t height : { 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
+    for (const uint32_t height : { 2076u, 2072u, 2024u, 1920u, 1744u, 1728u, 1632u, 1608u, 1536u, 1504u }) {
         if (resolutionMatches(resolution, 3840, height))
             return true;
     }
     return false;
 }
 
+// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
+std::mutex probedSensorModesMutex;
+std::vector<CameraController::SensorMode> probedSensorModes;
+#if APERTARCORE_HAS_LIBCAMERA
+bool sensorModesProbed = false;
+#endif
+
+// The sizes the probe found in a class (bit depth, Clear HDR), as the driver delivers them.
+std::vector<apertar::imx585::Size> probedImx585Sizes(apertar::imx585::Class cls)
+{
+    std::vector<apertar::imx585::Size> sizes;
+    std::lock_guard<std::mutex> lock(probedSensorModesMutex);
+    for (const auto &mode : probedSensorModes) {
+        if (mode.bitDepth == apertar::imx585::bitDepthOf(cls) && mode.clearHdr == apertar::imx585::clearHdrClass(cls))
+            sizes.push_back({ mode.size.width, mode.size.height });
+    }
+    return sizes;
+}
+
+// A 1.85:1 request in the height the installed driver has (2072 or 2076, 1036 or 1038).
+Resolution driverCropResolution(apertar::imx585::Class cls, const Resolution &requested)
+{
+    const auto size = apertar::imx585::driverCropSize(cls, { requested.width, requested.height }, probedImx585Sizes(cls));
+    return Resolution{ size.width, size.height };
+}
+
+// Ladder rungs saved with the other driver's 1.85:1 height take this driver's.
+void followDriverCropSizes(std::vector<ladder::Rung> &rungs)
+{
+    for (ladder::Rung &rung : rungs) {
+        const Resolution followed = driverCropResolution(apertar::imx585::classFor(rung.bits, rung.clearHdr),
+                                                         Resolution{ rung.width, rung.height });
+        rung.width = followed.width;
+        rung.height = followed.height;
+    }
+}
+
 // The row of a class that an active size stands for: the size itself, else (a size from another class
 // or sensor) the nearest row. Never null while the width policy leaves the class a row.
 const apertar::imx585::Mode *imx585ModeForResolution(apertar::imx585::Class cls, const Resolution &requested)
 {
-    const Resolution wanted = imx585AliasResolution(requested);
+    const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(requested));
     if (const auto *mode = apertar::imx585::find(cls, wanted.width, wanted.height))
         return mode;
     return apertar::imx585::nearest(cls, wanted.width, wanted.height);
@@ -722,7 +734,6 @@ CaptureSettings clampCaptureSettings(CaptureSettings settings)
         const auto parsed = apertar::clipname::parse(settings.clipNameTemplate);
         settings.clipNameTemplate = parsed.ok ? parsed.normalized : std::string(apertar::clipname::kDefaultTemplate);
     }
-    settings.resolution = migratedImx585CropResolution(settings.resolution);
     const bool supportedResolution =
         (settings.resolution.width == 1332 && settings.resolution.height == 990) ||
         (settings.resolution.width == 2028 && settings.resolution.height == 1080) ||
@@ -795,16 +806,41 @@ struct PersistedCaptureSettings {
     std::optional<CaptureSettings> still;
 };
 
+// A mode_ladder.conf from before the ladder moved here is taken over while none of its keys is saved yet: its
+// enabled line is the Dynamic resolution switch, its resolutions the enabled list (thresholds, compression and Log are dropped).
+// The file is never written or deleted; a file that cannot be read whole is tried again at the next start.
+void takeOverModeLadderFile(CaptureSettings &current, std::map<RecordingFormat, CaptureSettings> &formats,
+                            std::optional<CaptureSettings> &still)
+{
+    std::string text;
+    if (!readModeLadderFile(modeLadderPath(), text))
+        return;
+    const ladder::Ladder old = ladder::parseFile(text);
+    const auto takeOver = [&old](CaptureSettings &settings) {
+        settings.dynresEnabled = old.enabled;
+        settings.dynresModes = ladder::modesText(old.rungs);
+        settings.dynresAspects = ladder::aspectsText(old.aspects);
+    };
+    takeOver(current);
+    for (auto &entry : formats)
+        takeOver(entry.second);
+    if (still)
+        takeOver(*still);
+}
+
 CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSettings> &formats,
                                            std::optional<CaptureSettings> &still)
 {
     CaptureSettings current = CaptureSettings{};
     const std::filesystem::path path = persistedSettingsPath();
     std::ifstream input(path);
-    if (!input.is_open())
+    if (!input.is_open()) {
+        takeOverModeLadderFile(current, formats, still);
         return current;
+    }
 
     bool legacyWhiteBalanceLock = false;
+    bool modeLadderKeys = false;
     std::string line;
     while (std::getline(input, line)) {
         const std::size_t eq = line.find('=');
@@ -829,6 +865,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
             key = key.substr(separator + 1);
         }
         CaptureSettings &settings = *target;
+        if (key.starts_with("dynres_") || key.starts_with("mode_ladder_"))
+            modeLadderKeys = true;
         try {
             if (key == "resolution_width")
                 settings.resolution.width = static_cast<uint32_t>(std::stoul(value));
@@ -886,6 +924,16 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                     : value == "proxy" ? ProresProfile::Proxy : ProresProfile::Standard;
             else if (key == "tuning_file")
                 settings.tuningFile = normalizeTuningFilePath(value);
+            else if (key == "dynres_enabled" || key == "mode_ladder_enabled")   // mode_ladder_*: the retired names
+                settings.dynresEnabled = (value == "true" || value == "1");
+            else if (key == "dynres_modes" || key == "mode_ladder_resolutions")
+                settings.dynresModes = value;
+            else if (key == "dynres_aspects" || key == "mode_ladder_aspects")
+                settings.dynresAspects = value;
+            else if (key == "dynres_tdn")
+                settings.dynresTdnOff = value == "off_in_4k";
+            else if (key == "dynres_tdn_restore")
+                settings.dynresTdnRestore = (value == "true" || value == "1");
             else if (key == "raw_bit_depth")
                 settings.rawBitDepth = normalizeRawBitDepth(static_cast<uint32_t>(std::stoul(value)));
             else if (key == "clear_hdr")
@@ -910,6 +958,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.previewTdn = (value == "true" || value == "1");
             else if (key == "media_trim")
                 settings.mediaTrimEnabled = !(value == "false" || value == "0");
+            else if (key == "stop_on_dropped_frame")
+                settings.stopOnDroppedFrame = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp")
                 settings.fpsSpeedRamp = (value == "true" || value == "1");
             else if (key == "fps_speed_ramp_keep_exposure")
@@ -942,6 +992,8 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
     // Retired locked gains must not survive as an invisible manual mode.
     if (legacyWhiteBalanceLock)
         current.whiteBalanceAuto = true;
+    if (!modeLadderKeys)
+        takeOverModeLadderFile(current, formats, still);
     for (auto &[format, profile] : formats) {
         profile.photoModeEnabled = false;
         profile = clampCaptureSettings(profile);
@@ -982,7 +1034,7 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "lossy_dng_ratio=" << toWireValue(s.lossyDngRatio) << '\n';
     output << prefix << "prores_profile=" << toString(s.proresProfile) << '\n';
     output << prefix << "prores_color_profile=" << toString(s.proresColorProfile) << '\n';
-    output << prefix << "clear_hdr=" << (s.clearHdr ? "true" : "false") << '\n';
+    output << prefix << "clear_hdr=" << s.clearHdr << '\n';
     output << prefix << "hdr_threshold_high=" << s.hdrThresholdHigh << '\n';
     output << prefix << "hdr_threshold_low=" << s.hdrThresholdLow << '\n';
     output << prefix << "hdr_blend=" << s.hdrBlend << '\n';
@@ -992,13 +1044,19 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "h264_width=" << s.h264Resolution.width << '\n';
     output << prefix << "h264_height=" << s.h264Resolution.height << '\n';
     output << prefix << "tuning_file=" << s.tuningFile << '\n';
+    output << prefix << "dynres_enabled=" << s.dynresEnabled << '\n';
+    output << prefix << "dynres_modes=" << s.dynresModes << '\n';
+    output << prefix << "dynres_aspects=" << s.dynresAspects << '\n';
+    output << prefix << "dynres_tdn=" << (s.dynresTdnOff ? "off_in_4k" : "keep") << '\n';
+    output << prefix << "dynres_tdn_restore=" << s.dynresTdnRestore << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
-    output << prefix << "fps_phase_lock=" << (s.fpsPhaseLock ? "true" : "false") << '\n';
-    output << prefix << "preview_tdn=" << (s.previewTdn ? "true" : "false") << '\n';
-    output << prefix << "media_trim=" << (s.mediaTrimEnabled ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp=" << (s.fpsSpeedRamp ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_keep_exposure=" << (s.fpsSpeedRampKeepExposure ? "true" : "false") << '\n';
-    output << prefix << "fps_speed_ramp_stretch_audio=" << (s.fpsSpeedRampStretchAudio ? "true" : "false") << '\n';
+    output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
+    output << prefix << "preview_tdn=" << s.previewTdn << '\n';
+    output << prefix << "media_trim=" << s.mediaTrimEnabled << '\n';
+    output << prefix << "stop_on_dropped_frame=" << s.stopOnDroppedFrame << '\n';
+    output << prefix << "fps_speed_ramp=" << s.fpsSpeedRamp << '\n';
+    output << prefix << "fps_speed_ramp_keep_exposure=" << s.fpsSpeedRampKeepExposure << '\n';
+    output << prefix << "fps_speed_ramp_stretch_audio=" << s.fpsSpeedRampStretchAudio << '\n';
     output << prefix << "fps_speed_ramp_after=" << (s.fpsSpeedRampReturn ? "return" : "stay") << '\n';
     output << prefix << "clip_name_template=" << s.clipNameTemplate << '\n';
     output << prefix << "af_mode=" << toString(s.autofocusMode) << '\n';
@@ -1268,29 +1326,38 @@ apertar::clipname::Values clipNameValues(const CaptureSettings &settings, const 
     return v;
 }
 
-// The folder name for the next take of these settings; no side effects (nothing is created).
-std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
-                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+// The folder name for the next take of these settings; `exists` says whether a name is taken, `existingNames` lists the
+// names there for a template with a time token. Nothing is created.
+std::string nextClipFolderName(const std::function<bool(const std::string &)> &exists, const std::vector<std::string> &existingNames,
+                               const CaptureSettings &settings, const std::string &sensor,
+                               const std::chrono::system_clock::time_point &now)
 {
     using namespace apertar::clipname;
     Parsed parsed = parse(settings.clipNameTemplate);
     if (!parsed.ok)
         parsed = parse(kDefaultTemplate);
     const Values values = clipNameValues(settings, sensor, now);
+    const int clip = nextClipNumber(parsed, values, exists, existingNames);
+    if (clip == 0)
+        throw std::runtime_error("Could not allocate a unique clip folder.");
+    return expand(parsed, values, clip);
+}
+
+// The same, probing the folders under `root` on the medium.
+std::string nextClipFolderName(const std::filesystem::path &root, const CaptureSettings &settings,
+                               const std::string &sensor, const std::chrono::system_clock::time_point &now)
+{
     // A time token makes a new name at every take: the numbering then looks at the folders already there.
     std::vector<std::string> existingNames;
-    if (hasTimeToken(parsed)) {
+    if (apertar::clipname::hasTimeToken(apertar::clipname::parse(settings.clipNameTemplate))) {
         std::error_code ec;
         for (const auto &entry : std::filesystem::directory_iterator(root, ec))
             existingNames.push_back(entry.path().filename().string());
     }
-    const int clip = nextClipNumber(parsed, values, [&](const std::string &name) {
+    return nextClipFolderName([&](const std::string &name) {
         std::error_code ec;
         return std::filesystem::exists(root / name, ec);
-    }, existingNames);
-    if (clip == 0)
-        throw std::runtime_error("Could not allocate a unique clip folder.");
-    return expand(parsed, values, clip);
+    }, existingNames, settings, sensor, now);
 }
 
 std::filesystem::path withPhotoExtension(std::filesystem::path basePath, const char *extension)
@@ -1440,8 +1507,6 @@ unsigned int unsignedEnvValue(const char *name,
     return defaultValue;
 }
 
-#endif // APERTARCORE_HAS_LIBCAMERA
-
 bool boolEnvValue(const char *name, bool defaultValue)
 {
     if (const char *value = std::getenv(name); value && *value) {
@@ -1463,6 +1528,8 @@ bool boolEnvValue(const char *name, bool defaultValue)
     }
     return defaultValue;
 }
+
+#endif // APERTARCORE_HAS_LIBCAMERA
 
 // Pure helpers shared with the build without libcamera (--simulate): the tuning file checks and,
 // further down in the other unguarded spans, the sensor model (families, modes, fps and ISO limits and the
@@ -3124,12 +3191,12 @@ void applyClearHdrCompression(CaptureSettings &next, bool wasClearHdr)
         next.cdngCompression = next.clearHdr ? CdngCompression::Uncompressed : CdngCompression::LosslessJpeg;
 }
 
-// T34: a ladder resolution names its own raw format (Patrik, 2026-10-28): uncompressed or lossless
-// cDNG, or lossy DNG at 3:1 or 5:1 (another recording format in Core, no Clear HDR). Unnamed means
-// the default: Clear HDR uncompressed, SDR lossless. MLV has no compression to choose.
+// The table's cell names the raw format of a mode: uncompressed or lossless cDNG. Unnamed means the default:
+// Clear HDR uncompressed, SDR lossless. The ceilings of the lossy ratios (fillRungExtrasLocked) are asked through
+// here too. Lossy DNG and MLV keep the operator's setting when the ladder picks a mode.
 void applyRungFormat(CaptureSettings &settings, const ladder::Rung &rung)
 {
-    if (settings.recordingFormat != RecordingFormat::Cdng && settings.recordingFormat != RecordingFormat::LossyDng)
+    if (settings.recordingFormat != RecordingFormat::Cdng)   // lossy DNG and MLV keep the operator's setting
         return;
     const std::string compression = ladder::effectiveCompression(rung);
     if (compression == "lossy_3to1" || compression == "lossy_5to1") {
@@ -3151,13 +3218,9 @@ std::string compressionLabel(const CaptureSettings &settings)
     return settings.cdngCompression == CdngCompression::LosslessJpeg ? "Lossless JPEG" : "Uncompressed";
 }
 
-constexpr const char *kLadderOwnsMode =
-    "The Mode Ladder picks the resolution from the FPS. Turn it off (Settings > Modes > Mode Ladder) "
-    "to choose it by hand.";
-
 constexpr const char *kLadderOwnsCompression =
-    "The Mode Ladder sets the compression for each resolution. Turn the ladder off "
-    "(Settings > Modes > Mode Ladder) to choose it by hand.";
+    "Dynamic resolution sets the compression for each resolution. Pick a resolution by hand, or turn "
+    "Dynamic resolution off (Settings > Modes > Dynamic resolution), to choose it.";
 
 // Clear HDR runs without auto ISO and auto WB (the ISP statistics are not valid in the 16-bit mode,
 // and Patrik's rule keeps both depths alike) and with its ISO cap. Whatever turns Clear HDR on keeps
@@ -3396,13 +3459,6 @@ double imx477MaximumUncompressedCdngFpsForResolution(Resolution resolution, uint
     return 1000.0;
 }
 
-// Filled once by the startup probe (probeSensorModesOnce); empty if it did not run.
-std::mutex probedSensorModesMutex;
-std::vector<CameraController::SensorMode> probedSensorModes;
-#if APERTARCORE_HAS_LIBCAMERA
-bool sensorModesProbed = false;
-#endif
-
 std::optional<double> probedMaximumFps(Resolution sensorSize, uint32_t bitDepth, bool clearHdr)
 {
     std::lock_guard<std::mutex> lock(probedSensorModesMutex);
@@ -3468,7 +3524,6 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     case SensorFamily::Imx585:
         // The sensor rows are 2160 tall in every full-height mode (all the 4K-height windows, 4K itself):
         // Clear HDR doubles VMAX, 30 fps at link 891 MHz, 25 at the driver's default 720 MHz.
-        // This is the fallback / APERTAR_FPS_LIMIT=table value; the 16-bit 25 is backendMaximumFps().
         if (normalized.height == 2160)
             return clearHdr && !sensorLimitKnown ? 25.0 : 30.0;
         return 60.0;
@@ -3479,51 +3534,25 @@ double tableMaximumFpsForResolution(SensorFamily sensorFamily, Resolution reques
     return 120.0;
 }
 
-// APERTAR_IMX283_PROBE_FPS=1: the IMX283 fps ceiling is the probe alone; unset, it is min(probe, the driver's
-// crop_vmax=0 floor), because the probe can report more than the sensor delivers.
-bool imx283ProbeFpsOnly()
+// APERTAR_FPS_LIMIT=probe: the fps ceiling is the probe alone. Unset (or "table"), it is min(table, probe).
+bool fpsLimitProbeOnly()
 {
-    static const bool probeOnly = boolEnvValue("APERTAR_IMX283_PROBE_FPS", false);
-    return probeOnly;
+    const char *value = std::getenv("APERTAR_FPS_LIMIT");
+    return value && std::string(value) == "probe";
 }
 
-// APERTAR_FPS_LIMIT=table: the old behaviour, min(table, probed). Default: the probe is the limit.
-bool fpsLimitTableOnly()
-{
-    static const bool tableOnly = [] {
-        const char *value = std::getenv("APERTAR_FPS_LIMIT");
-        const bool table = value && std::string(value) == "table";
-        if (table)
-            std::cerr << "ApertarCore fps limit: APERTAR_FPS_LIMIT=table, using min(table, probed)\n";
-        return table;
-    }();
-    return tableOnly;
-}
-
-// The sensor's maximum fps for the mode: the startup probe when it has a value, else the table.
+// The sensor's maximum fps for the mode: the lower of Core's table and the startup probe, the table alone
+// when the probe has no value.
 double maximumSupportedFpsForResolution(SensorFamily sensorFamily, Resolution requested, uint32_t rawBitDepth = 12,
                                         bool clearHdr = false)
 {
     const SensorModeSelection mode = sensorModeForRequestedResolution(sensorFamily, requested, rawBitDepth);
     const auto probed = probedMaximumFps(mode.rawResolution, mode.bitDepth, clearHdr);
     const double table = tableMaximumFpsForResolution(sensorFamily, requested, rawBitDepth, clearHdr, probed.has_value());
-    // IMX283: min(probe, the driver's floor) unless APERTAR_IMX283_PROBE_FPS=1, which is the probe alone and wins
-    // over APERTAR_FPS_LIMIT=table.
-    const bool minWithTable = sensorFamily == SensorFamily::Imx283
-        ? !imx283ProbeFpsOnly()
-        : fpsLimitTableOnly();
-    return fpsceiling::resolveSensorMaxFps(probed, table, minWithTable);
-}
-
-// Back-end limits that are not the sensor's, applied after the sensor value; nullopt = none.
-std::optional<double> backendMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
-{
-    // IMX585 Clear HDR 16-bit had a 25 fps cap here in every mode. Removed (User, 2026-11-03): the driver's
-    // maximum applies (4K 30, the height crops up to 42). At 30 in 4K the ISP back end is the limit and frames
-    // are lost under load (KB working/research-30fps-answer.md, working/drop-frames/tests-2026-11/findings-2026-11-03.md).
-    (void)settings;
-    (void)sensorFamily;
-    return std::nullopt;
+    if (!probed)
+        return table;
+    // The IMX283 stays at min(probe, the driver's floor): the probe can report more than it delivers.
+    return fpsLimitProbeOnly() && sensorFamily != SensorFamily::Imx283 ? *probed : std::min(table, *probed);
 }
 
 uint32_t supportedRawBitDepthForSensor(SensorFamily sensorFamily, uint32_t requestedBitDepth, bool clearHdr)
@@ -3560,7 +3589,6 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 {
     double maxFps = maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth,
                                                      settings.clearHdr);
-    maxFps = fpsceiling::applyBackendCap(maxFps, backendMaximumFps(settings, sensorFamily));
     if (!settings.photoModeEnabled && sensorFamily == SensorFamily::Imx477 &&
         settings.recordingFormat == RecordingFormat::Cdng &&
         settings.cdngCompression == CdngCompression::Uncompressed) {
@@ -3572,15 +3600,12 @@ double modeMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily
 }
 
 // The storage pre-roll's target: the highest fps the SENSOR delivers for the running mode (resolution, bit depth, Clear
-// HDR: the startup probe, else the table), with only the named back-end cap kept (IMX585 Clear HDR 16-bit at 4K: the
-// back end delivers ~28 at 30 and drops frames, so the pipeline, not a policy, is the limit). Not applied: the
-// lossless-JPEG cap, the mode ladder's rung ceilings and user thresholds, the speed-ramp limits and the IMX477
-// uncompressed-cDNG table (modeMaximumFps has the last one).
+// HDR: the lower of the table and the startup probe). Not applied: the lossless-JPEG cap, the mode ladder's caps
+// from the table of known limits, the speed-ramp limits and the IMX477 uncompressed-cDNG table (modeMaximumFps has the
+// last one).
 double prerollMaximumFps(const CaptureSettings &settings, SensorFamily sensorFamily)
 {
-    return fpsceiling::applyBackendCap(
-        maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth, settings.clearHdr),
-        backendMaximumFps(settings, sensorFamily));
+    return maximumSupportedFpsForResolution(sensorFamily, settings.resolution, settings.rawBitDepth, settings.clearHdr);
 }
 
 // The highest FPS the current mode takes; published as fps_max so the UIs cut their FPS
@@ -4301,6 +4326,15 @@ public:
     ~DngRecordingQueue()
     {
         stop();
+        // Writers left behind by a dead-medium stop still use this queue's members
+        // (exitMutex_, mutex_) when they return; give them the dead-medium time again.
+        {
+            const auto limit = std::chrono::milliseconds(unsignedEnvValue("APERTAR_DEAD_MEDIUM_STOP_MS", 2000, 100, 600000));
+            std::unique_lock<std::mutex> lock(exitMutex_);
+            if (!exitCv_.wait_for(lock, limit, [this] { return liveWorkers_.load(std::memory_order_acquire) == 0; }))
+                std::cerr << "ApertarCore recording: detached writers still running ("
+                          << liveWorkers_.load(std::memory_order_acquire) << ") as the queue is destroyed\n";
+        }
         unregisterFlushAbort();
     }
 
@@ -4384,12 +4418,17 @@ public:
             std::lock_guard<std::mutex> partLock(partMutex_);
             partsCreated_.clear();
         }
+        splitMode_ = bufferbudget::SplitMode::Off;
         if (recordingFormat_ != RecordingFormat::Mlv && !prerollTake_.load(std::memory_order_acquire)) {
             const char *const env = std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER");
             if (env && *env && !framepath::parseFramesPerFolder(env))
                 std::cerr << "ApertarCore recording: APERTAR_CDNG_FRAMES_PER_FOLDER=" << env
                           << " is not 0 or a whole number from 100 to 100000: one folder\n";
-            framesPerFolder_ = bufferbudget::requestedFramesPerFolder(env, loadBufferConf());
+            const bufferbudget::BufferConf conf = loadBufferConf();
+            splitMode_ = bufferbudget::requestedSplitMode(env, conf);
+            const bool fatLike = mediaProfile_.filesystem == MediaFilesystem::Exfat || mediaProfile_.filesystem == MediaFilesystem::Vfat;
+            framesPerFolder_ = bufferbudget::framesPerFolderForTake(splitMode_, bufferbudget::requestedFramesPerFolder(env, conf),
+                                                                    true, fatLike, settings.fps, settings.fpsSpeedRamp);
         }
         if (framesPerFolder_ > 0) {
             std::error_code partEc;
@@ -4497,7 +4536,10 @@ public:
                   << " writeback=" << (startWritebackPerFrame() ? "on" : "off")
                   << " sync_ms=" << syncMs
                   << " tune_override=" << (mediaTune.overrideFound ? "yes" : "no")
+                  << " split=" << bufferbudget::splitModeName(splitMode_)
                   << " frames_per_folder=" << framesPerFolder_;
+        if (fpsLimitProbeOnly())
+            std::cerr << " fps_limit=probe";
         if (recordingFormat_ == RecordingFormat::Cdng && settings_.cdngCompression == CdngCompression::LosslessJpeg) {
             std::cerr << " worker_nice=" << unsignedEnvValue("APERTAR_CDNG_WORKER_NICE", 0, 0, 19);
             std::cerr << " workers=" << workerCount_;
@@ -4821,10 +4863,10 @@ public:
                 DngRecordingQueue *queue;
                 ~Exit()
                 {
-                    {
-                        std::lock_guard<std::mutex> lock(queue->exitMutex_);
-                        queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
-                    }
+                    // Notify under the lock: ~DngRecordingQueue may free the cv
+                    // as soon as it sees 0.
+                    std::lock_guard<std::mutex> lock(queue->exitMutex_);
+                    queue->liveWorkers_.fetch_sub(1, std::memory_order_acq_rel);
                     queue->exitCv_.notify_all();
                 }
             } exit{this};
@@ -5124,8 +5166,8 @@ public:
     // writers may arrive here; the set and the mutex make each folder exactly once, and a writer that finds the part
     // already made waits for its mkdir to finish). Not on the copy side: a mkdir that waits behind queued writes on
     // exFAT over USB held the copy worker for >= 6 frame periods and cost 3 copy-slot drops at frame 40,000 (SSD night 2,
-    // 2026-11-09). A writer that waits is absorbed by the queue. A failed mkdir is logged; the open then fails and the
-    // take ends as on any write failure.
+    // 2026-11-09). A writer that waits is absorbed by the queue, and a mkdir stuck on a removed medium is covered by
+    // stop()'s bounded wait. A failed mkdir is logged; the open then fails and the take ends as on any write failure.
     void ensurePartFolder(uint64_t part)
     {
         std::lock_guard<std::mutex> partLock(partMutex_);
@@ -5438,6 +5480,8 @@ private:
             }
 
             job.frame.data = job.rawBytes.data();
+            if (framesPerFolder_ > 0)
+                ensurePartFolder(framepath::partIndex(job.metadata.frameIndex, framesPerFolder_));
             const bool timeLossless = settings_.recordingFormat == RecordingFormat::Cdng &&
                 settings_.cdngCompression == CdngCompression::LosslessJpeg;
             const auto wallStarted = std::chrono::steady_clock::now();
@@ -5754,9 +5798,10 @@ private:
     std::atomic<int64_t> lastWriteProgressNs_{0};
     int mediaDirFd_ = -1;   // the clip folder, for the once-a-second sync
     // [storage] frames_per_folder of this take (0 = every frame in the clip folder). Set in startAtFolder before any
-    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made on the copy side
-    // (ensurePartFolder, before the frame is queued), never by a writer.
+    // copy thread runs; never on a storage pre-roll or an MLV take. The part folders are made by the writers
+    // (ensurePartFolder, before the frame is written), so stop()'s bounded wait covers a mkdir on a dead medium.
     unsigned framesPerFolder_ = 0;
+    bufferbudget::SplitMode splitMode_ = bufferbudget::SplitMode::Off;   // the mode that decided framesPerFolder_ (the clip line)
     std::mutex partMutex_;
     std::unordered_set<uint64_t> partsCreated_;
     std::mutex writtenFilesMutex_;
@@ -7397,11 +7442,7 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                     const libcamera::StreamFormats formats = config->at(0).formats();
                     // An IMX585 is probed by its mode tables (one configure per offered row of the class);
                     // any other sensor by the sizes it advertises.
-                    const auto model = camera->properties().get(libcamera::properties::Model);
-                    std::string modelName = model ? std::string(*model) : std::string();
-                    std::transform(modelName.begin(), modelName.end(), modelName.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    const bool tableProbe = modelName.find("imx585") != std::string::npos;
+                    const bool tableProbe = detectSensorFamily(camera->id()) == SensorFamily::Imx585;
                     for (const auto &pixelFormat : formats.pixelformats()) {
                         RawBitDepth depth;
                         PixelPacking packing;
@@ -7419,6 +7460,16 @@ std::vector<CameraController::SensorMode> probeSensorModes()
                                 const auto transport = apertar::imx585::transportFor(cls, row);
                                 probeSizes.emplace_back(transport.width, transport.height);
                                 probeBinning.push_back(row.binned ? 2u : 1u);
+                            }
+                            for (const auto &advertised : formats.sizes(pixelFormat)) {
+                                bool covered = false;
+                                for (const auto &row : apertar::imx585::all(cls))
+                                    covered = covered || apertar::imx585::transportFor(cls, row) ==
+                                        apertar::imx585::Size{ advertised.width, advertised.height };
+                                if (!covered)
+                                    std::cerr << "ApertarCore sensor probe: " << pixelFormat.toString() << " "
+                                              << advertised.toString() << (clearHdr ? " clear_hdr" : " sdr")
+                                              << " is a driver mode with no IMX585 table row\n";
                             }
                         } else {
                             probeSizes = formats.sizes(pixelFormat);
@@ -7556,12 +7607,14 @@ public:
         const auto automaticTuningPath = [&](std::string path) {
             return settings.clearHdr ? tuning::clearHdrVariant(path, tuningPipeline) : path;
         };
-        // Preview temporal denoise off (the default): libcamera loads a copy of the resolved tuning file without
+        // Preview temporal denoise switched off: libcamera loads a copy of the resolved tuning file without
         // its rpi.denoise tdn blocks. tuningPath stays the resolved file; activePath is what libcamera loads.
+        // H.264 and ProRes record the ISP output, so they always get the tuning file as it is.
+        const bool ispOutputRecorded = !settings.photoModeEnabled && isProcessedVideoFormat(settings.recordingFormat);
         std::string activePath;
         const auto loadablePath = [&](const std::string &path) {
             activePath = path;
-            if (!settings.previewTdn) {
+            if (!settings.previewTdn && !ispOutputRecorded) {
                 std::string note;
                 activePath = tuning::previewTuningPath(path, tuningPipeline, note);
                 if (!note.empty())
@@ -8130,7 +8183,7 @@ public:
     }
 
     // record_stop with a stop_us (design 6.2): returns when the gate has seen a frame at or after stopUs, or when
-    // CLOCK_MONOTONIC has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
+    // CLOCK_BOOTTIME has passed stopUs + max(3 T, 100 ms) (the measured completion latency replaces the 100 ms
     // once T62's journal has it). A stopUs already past arms the stop and returns at once. The caller holds no lock
     // of the controller; the gate's own mutex is released while waiting. The frames after stopUs are requeued by the
     // gate, so the clip ends on slot k1 - 1.
@@ -8838,7 +8891,10 @@ private:
             ? std::array<bool, 2>{ false, true }
             : std::array<bool, 2>{ true, false };
         const bool allowAutoSensorConfigFallback = monochromeSensor_ || sensorFamily_ == SensorFamily::Imx294 ||
-                                                   sensorFamily_ == SensorFamily::Imx577;
+                                                   sensorFamily_ == SensorFamily::Imx577 ||
+                                                   (sensorFamily_ == SensorFamily::Imx585 &&
+                                                    sanitized.resolution.width == 3840 &&
+                                                    isImx585LegacyCropResolution(sanitized.resolution));
         std::ostringstream rejectionLog;
 
         for (const SensorModeSelection &sensorMode : sensorModes) {
@@ -9006,7 +9062,8 @@ private:
 
                 if (includeRawStream &&
                     (sensorFamily_ == SensorFamily::Imx477 || sensorFamily_ == SensorFamily::Imx577 ||
-                     sensorFamily_ == SensorFamily::Imx294)) {
+                     sensorFamily_ == SensorFamily::Imx294 ||
+                     (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && !useExplicitSensorConfig))) {
                     const libcamera::StreamConfiguration &candidateRawConfig =
                         candidateConfig->at(rawStreamIndex);
                     const bool invalidReadout = sensorFamily_ == SensorFamily::Imx294
@@ -9027,10 +9084,10 @@ private:
                     }
                 }
 
-                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_) {
-                    // A colour IMX585 is configured explicitly, so the driver must hand over exactly the
-                    // mode asked for: raw size, bit depth, and a ScalerCropMaximum of active size x binning
-                    // (the window the driver reports in native pixels). A mode it adjusted is refused.
+                if (sensorFamily_ == SensorFamily::Imx585 && !monochromeSensor_ && useExplicitSensorConfig) {
+                    // Configured explicitly, a colour IMX585 driver must hand over exactly the mode asked
+                    // for: raw size, bit depth, and a ScalerCropMaximum of active size x binning (the
+                    // window the driver reports in native pixels). A mode it adjusted is refused.
                     std::string adjusted;
                     if (includeRawStream) {
                         const libcamera::StreamConfiguration &candidateRawConfig =
@@ -9057,7 +9114,8 @@ private:
                     const auto *imx585Row = apertar::imx585::find(imx585Class, sanitized.resolution.width,
                                                                   sanitized.resolution.height, 0);
                     const auto cropMaximum = camera_->properties().get(libcamera::properties::ScalerCropMaximum);
-                    if (adjusted.empty() && imx585Row && cropMaximum) {
+                    // A driver that reports its crop as the output size gives no window to compare.
+                    if (adjusted.empty() && imx585Row && cropMaximum && cropMaximum->size() != rawSize) {
                         const uint32_t binning = imx585Row->binned ? 2u : 1u;
                         if (cropMaximum->width != imx585Row->width * binning ||
                             cropMaximum->height != imx585Row->height * binning)
@@ -9176,12 +9234,10 @@ private:
                     activeRawWidth,
                     activeRawHeight,
                 };
-                const double maxFps = fpsceiling::applyBackendCap(
-                    maximumSupportedFpsForResolution(sensorFamily_,
-                                                     effectiveSettings.resolution,
-                                                     effectiveSettings.rawBitDepth,
-                                                     effectiveSettings.clearHdr),
-                    backendMaximumFps(effectiveSettings, sensorFamily_));
+                const double maxFps = maximumSupportedFpsForResolution(sensorFamily_,
+                                                                       effectiveSettings.resolution,
+                                                                       effectiveSettings.rawBitDepth,
+                                                                       effectiveSettings.clearHdr);
                 if (effectiveSettings.fps > maxFps)
                     effectiveSettings.fps = maxFps;
                 settings_ = effectiveSettings;
@@ -11362,6 +11418,10 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
               eventCallback_(std::string("{\"event\":\"recording_health\",\"recording_has_dropped_frames\":")
                              + (dropped ? "true" : "false") + ",\"recording_dropped_frames\":"
                              + std::to_string(recordingDropWarning_.droppedFrames()) + "}");
+          // The first drop of a take (a pre-roll's drops never get here: muted). Runs on the writer or copy thread:
+          // the hook only flags Core, which stops the take on its own thread.
+          if (dropped && droppedFrameHook_)
+              droppedFrameHook_();
       })
     , session_(std::make_unique<CameraSession>(
           previewCallback_,
@@ -11378,13 +11438,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
           }, recordingDropWarning_, eventCallback_))
 {
     settings_ = loadPersistedCaptureSettings(formatSettings_, stillSettings_);
-    {
-        std::ifstream ladderFile(modeLadderPath());
-        std::stringstream ladderText;
-        ladderText << ladderFile.rdbuf();
-        modeLadder_ = ladder::parseFile(ladderText.str());   // a missing or broken file: ladder off
-        migrateImx585LadderRungs(modeLadder_.rungs);
-    }
+    modeLadder_ = ladder::fromText(settings_.dynresEnabled, settings_.dynresModes, settings_.dynresAspects, settings_.dynresTdnOff);
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
     settings_ = supportedRecordingSettings(settings_);
@@ -11435,6 +11489,9 @@ bool CameraController::start(const std::string &mediaRoot, bool simulateCamera)
         settings_ = session_->currentSettings();
     else if (simulateCamera_)
         settings_ = sanitizeSettingsForSensor(settings_, SensorFamily::Unknown);
+    followDriverCropSizes(modeLadder_.rungs);   // after the startup probe, which the session start ran
+    if (!modeLadder_.rungs.empty())
+        settings_.dynresModes = ladder::modesText(modeLadder_.rungs);
 
     if (simulateCamera_)
         constrainExposureMetering(settings_, std::getenv("LIBCAMERA_RPI_TUNING_FILE")
@@ -11521,12 +11578,8 @@ bool CameraController::setResolution(Resolution resolution)
         setErrorLocked("Resolution changes are blocked while recording.");
         return false;
     }
-    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
-        setErrorLocked(kLadderOwnsMode);
-        return false;
-    }
+    const bool ladderWasActive = ladderActiveForLocked(settings_);   // a manual pick pins the mode (ladderOverride_)
 
-    resolution = migratedImx585CropResolution(resolution);   // a client that still sends 3840x2076 / 1920x1038
     if (!validateResolution(resolution))
         return false;
 
@@ -11536,10 +11589,10 @@ bool CameraController::setResolution(Resolution resolution)
     CaptureSettings current = sanitizeSettingsForSensor(settings_, sensorFamily, (!simulateCamera_ && session_ && session_->monochromeSensor()));
     if (sensorFamily == SensorFamily::Imx585) {
         // An explicit size must be a mode of the current class (bit depth, Clear HDR); derived changes
-        // (bit depth, Clear HDR) take the nearest row instead, in the sanitiser.
-        const Resolution wanted = imx585AliasResolution(resolution);
-        if (!apertar::imx585::find(apertar::imx585::classFor(current.rawBitDepth, current.clearHdr),
-                                   wanted.width, wanted.height)) {
+        // (bit depth, Clear HDR) take the nearest row in the sanitiser, except Clear HDR on: setClearHdr starts at 3840x2160.
+        const auto cls = apertar::imx585::classFor(current.rawBitDepth, current.clearHdr);
+        const Resolution wanted = driverCropResolution(cls, imx585AliasResolution(resolution));
+        if (!apertar::imx585::find(cls, wanted.width, wanted.height)) {
             setErrorLocked(wanted.toString() + " is not a mode of the IMX585 at " + std::to_string(current.rawBitDepth) +
                            "-bit" + (current.clearHdr ? " Clear HDR." : "."));
             return false;
@@ -11557,8 +11610,13 @@ bool CameraController::setResolution(Resolution resolution)
 
     CaptureSettings next = settings_;
     next.resolution = resolution;
-    ladderOverride_ = false;      // a real resolution change ends a Clear HDR override
-    return applySettingsLocked(next, true);
+    const bool overrideBefore = ladderOverride_;
+    ladderOverride_ = ladderWasActive || overrideBefore;   // pinned until the next fps change
+    if (!applySettingsLocked(next, true)) {
+        ladderOverride_ = overrideBefore;
+        return false;
+    }
+    return true;
 }
 
 bool CameraController::setFps(double fps)
@@ -11639,7 +11697,7 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
     next.fps = effectiveFps;
     if (rung) {   // T34: the FPS moved the camera to another rung; one reconfigure applies the whole mode
         std::cerr << "ApertarCore mode ladder: " << ladder::label({rung->resolution.width, rung->resolution.height,
-                                                                    rung->rawBitDepth, rung->clearHdr, 0.0, ""})
+                                                                    rung->rawBitDepth, rung->clearHdr, ""})
                   << " at " << effectiveFps << " fps\n";
         next.resolution = rung->resolution;
         next.rawBitDepth = rung->rawBitDepth;
@@ -11647,6 +11705,8 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
         next.recordingFormat = rung->recordingFormat;   // the resolution's own compression (applyRungFormat)
         next.cdngCompression = rung->cdngCompression;
         next.lossyDngRatio = rung->lossyDngRatio;
+        next.previewTdn = rung->previewTdn;             // the TDN option's choice for the mode
+        next.dynresTdnRestore = rung->dynresTdnRestore;
     }
     if (rampingTake) {
         rampTakeChanged_ = true;
@@ -11702,9 +11762,9 @@ void CameraController::restoreFpsAfterRampLocked()
 }
 
 // ---- Mode ladder (T34) ---------------------------------------------------------------------
-// The FPS picks the sensor mode: rung 1 serves the lowest rates, the next rung takes over above
-// its threshold. Rungs change between takes only; ModeLadder.hpp holds the logic, this is the
-// part that needs the sanitiser and the camera.
+// The FPS picks the sensor mode: the first enabled mode, best first, whose cap in the table of known limits
+// holds it. The mode changes between takes only; ModeLadder.hpp holds the logic, this is the part that needs the
+// sanitiser and the camera.
 
 // What the ladder knows about each rung of `ladder` in base's format and compression.
 std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder::Ladder &ladder,
@@ -11735,125 +11795,264 @@ std::vector<ladder::RungState> CameraController::ladderStatesLocked(const ladder
     return states;
 }
 
-// Active: switched on, a raw video format, and at least one rung this sensor and format can run.
+// The binning of a mode: the probe's, else the IMX585 table's, else 1.
+uint32_t CameraController::modeBinningLocked(const ladder::Rung &rung) const
+{
+    SensorMode probed;
+    if (probedModeLocked(rung, &probed))
+        return std::max<uint32_t>(probed.binning, 1);
+    if (const auto *row = apertar::imx585::find(apertar::imx585::classFor(rung.bits, rung.clearHdr), rung.width, rung.height))
+        return row->binned ? 2 : 1;
+    return 1;
+}
+
+sustained::Mode CameraController::limitModeLocked(const ladder::Rung &rung) const
+{
+    sustained::Mode mode;
+    mode.width = rung.width;
+    mode.height = rung.height;
+    mode.hdr = rung.clearHdr;
+    mode.bits = rung.bits;
+    mode.binned = modeBinningLocked(rung) > 1;
+    return mode;
+}
+
+sustained::Context CameraController::limitContextLocked(const CaptureSettings &settings) const
+{
+    sustained::Context context = ladderContext_;
+    // BCM2712 (Pi 5, CM5) is the one board measured; a simulated camera stands for it.
+    context.board = simulateCamera_ || recordingCapabilities().rawCompression ? sustained::Board::Pi5 : sustained::Board::Other;
+    context.tdn = settings.previewTdn && !(modeLadder_.tdnOff && !recording_);   // with the option on, TDN goes off before a 4K mode runs
+    context.lock = settings.fpsPhaseLock;
+    context.log = settings.cdngLog != CdngLog::Off;
+    return context;
+}
+
+// The modes Dynamic resolution may use: the enabled list, or every full-frame mode of the sensor while it is empty.
+std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Ladder &list) const
+{
+    if (!list.rungs.empty())
+        return list.rungs;
+    const std::vector<ladder::Rung> pool = poolModesLocked();
+    const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
+    double full = 0.0;
+    for (const auto &rung : pool)
+        full = std::max(full, window(rung));
+    std::vector<ladder::Rung> modes;
+    for (const auto &rung : pool)
+        if (window(rung) >= full)
+            modes.push_back(rung);
+    return modes;
+}
+
+// Each enabled mode of the running frame shape with what the sanitiser keeps and what the table lets it serve.
+std::vector<ladder::Candidate> CameraController::candidatesLocked(const ladder::Ladder &list, const CaptureSettings &base) const
+{
+    const std::vector<ladder::Rung> modes = enabledModesLocked(list);
+    const sustained::Context context = limitContextLocked(base);
+    const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
+    double full = 0.0;
+    for (const auto &rung : poolModesLocked())
+        full = std::max(full, window(rung));
+    for (const auto &rung : modes)
+        full = std::max(full, window(rung));
+    const double aspect = base.resolution.height ? double(base.resolution.width) / base.resolution.height : 0.0;
+    std::vector<ladder::Candidate> out;
+    for (const ladder::Rung &rung : modes) {
+        // A step never changes the frame shape.
+        if (aspect > 0.0 && std::abs(double(rung.width) / rung.height / aspect - 1.0) > 0.02)
+            continue;
+        const sustained::Mode mode = limitModeLocked(rung);
+        const sustained::Limit row = sustained::limitFor(context, mode);
+        ladder::Candidate c;
+        c.mode = rung;
+        c.mode.compression = !recordingCapabilities().rawCompression ? "none" : row.found ? row.compression : "";   // no lossless on this board
+        ladder::Ladder single;
+        single.rungs.push_back(c.mode);
+        const ladder::RungState state = ladderStatesLocked(single, base).front();
+        c.usable = state.usable;
+        c.crop = window(rung) < full;
+        if (state.usable)
+            c.cap = sustained::capFor(context, mode, state.modeCeiling).fps;
+        out.push_back(c);
+    }
+    return out;
+}
+
+// Active: switched on, a raw video format, and at least one mode this sensor and format can run.
 bool CameraController::ladderActiveForLocked(const CaptureSettings &base) const
 {
     return modeLadder_.enabled && !ladderOverride_ && !base.photoModeEnabled && !isProcessedVideoFormat(base.recordingFormat) &&
-           ladder::chooseRung(modeLadder_, ladderStatesLocked(modeLadder_, base), 0.0) >= 0;
+           ladder::chooseMode(candidatesLocked(modeLadder_, base), 0.0) >= 0;
 }
 
-// Puts the rung for next's FPS (the top rung when Ramp-ready and Speed Ramp are on) into next,
-// before the caller's one apply. True when that changes next's mode. Never in a take.
+// Puts the mode for next's FPS into next, before the caller's one apply: the first of the table's order that
+// holds it, else the one that holds the most (fps is then clamped). True when that changes next's mode. Never in a take.
 bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
 {
     if (recording_ || !ladderActiveForLocked(next))
         return false;
-    const auto states = ladderStatesLocked(modeLadder_, next);
-    const bool rampReady = modeLadder_.rampReady && next.fpsSpeedRamp;
-    const double target = rampReady ? ladder::ladderCeiling(modeLadder_, states) : next.fps;
-    const int index = ladder::chooseRung(modeLadder_, states, target);
+    const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, next);
+    const int index = ladder::chooseMode(candidates, next.fps);
     if (index < 0)
         return false;
-    const ladder::Rung &rung = modeLadder_.rungs[static_cast<size_t>(index)];
-    const bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
+    const ladder::Candidate &pick = candidates[static_cast<size_t>(index)];
+    const ladder::Rung &rung = pick.mode;
+    bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
         next.rawBitDepth != rung.bits || next.clearHdr != rung.clearHdr;
+    const ladder::TdnChoice tdn = ladder::tdnForMode(modeLadder_.tdnOff, !limitModeLocked(rung).binned, next.previewTdn,
+                                                      next.dynresTdnRestore);
+    changed = changed || tdn.tdn != next.previewTdn;   // the apply then restarts the pipeline on the other tuning file
+    next.previewTdn = tdn.tdn;
+    next.dynresTdnRestore = tdn.restore;
     next.resolution = Resolution{ rung.width, rung.height };
     next.rawBitDepth = rung.bits;
     next.clearHdr = rung.clearHdr;
     applyRungFormat(next, rung);
-    next.fps = std::min(next.fps, ladder::rungCeiling(rung, states[static_cast<size_t>(index)]));
+    next.fps = std::min(next.fps, pick.cap);
     return changed;
 }
 
-// The derived state fields (never persisted): the ladder's ceiling as fps_max, the running
-// rung's as fps_take_max. fpsMax must already hold the mode's own ceiling.
+// Puts the mode back in step with the table when a lever or the storage changed under the fps in use: the rewrite
+// above as one apply, between takes only. A take that is running finishes first; its stop path calls this, and the
+// limit line says so meanwhile. True when it applied (and so sent the settings event).
+bool CameraController::ladderReapplyLocked()
+{
+    if (recording_ || prerollTake_ || state_ != CameraState::Ready)
+        return false;
+    CaptureSettings next = settings_;
+    const bool modeChanged = ladderRewriteLocked(next);
+    if (!modeChanged && next.recordingFormat == settings_.recordingFormat && next.cdngCompression == settings_.cdngCompression &&
+        next.lossyDngRatio == settings_.lossyDngRatio && std::abs(next.fps - settings_.fps) < 0.0001)
+        return false;
+    std::cerr << "ApertarCore mode ladder: " << ladder::label({ next.resolution.width, next.resolution.height, next.rawBitDepth,
+                                                                next.clearHdr, "" })
+              << " at " << next.fps << " fps, the limits changed\n";
+    if (applySettingsLocked(next, modeChanged))
+        return true;
+    std::cerr << "ApertarCore mode ladder: the new mode was not applied: " << lastError_ << "\n";
+    return false;
+}
+
+// The derived state fields (never persisted): the caps in the table's order as ladder_tops, the highest as
+// fps_max, the running mode's as fps_take_max. fpsMax must already hold the mode's own ceiling.
 void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
 {
     out.fpsTakeMax = out.fpsMax;
-    out.ladderActive = ladderActiveForLocked(out);
     out.ladderRung = 0;
-    out.ladderRampReady = false;
     out.ladderEnabled = modeLadder_.enabled;
     out.ladderOverride = ladderOverride_ && modeLadder_.enabled;
-    out.ladderCount = static_cast<uint32_t>(modeLadder_.rungs.size());
     out.ladderTops.clear();
     out.ladderText.clear();
-    // The running line: what the camera records now, in the words of the editor (decision 9).
-    const auto runningText = [&out]() {
-        if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat))
-            return std::string();
-        std::string line = std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
-            (out.clearHdr ? "ClearHDR" : "SDR") + std::to_string(out.rawBitDepth);
-        return line;
-    };
-    const std::string base = runningText();
+    const bool covered = !out.photoModeEnabled && !isProcessedVideoFormat(out.recordingFormat);
+    std::vector<ladder::Candidate> candidates;
+    if (covered)
+        candidates = candidatesLocked(modeLadder_, out);
+    out.ladderCount = static_cast<uint32_t>(covered ? candidates.size() : modeLadder_.rungs.size());
+    out.ladderActive = modeLadder_.enabled && !ladderOverride_ && covered && ladder::chooseMode(candidates, 0.0) >= 0;
+    const std::string base = !covered ? std::string()
+        : std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
+          (out.clearHdr ? "Clear HDR " : "") + std::to_string(out.rawBitDepth) + "-bit";
     if (!out.ladderActive) {
         if (!base.empty())
             out.ladderText = base + " \u00b7 " + compressionLabel(out) +
                              (modeLadder_.enabled ? (ladderOverride_ ? " (ladder overridden)" : "") : " (ladder off)");
         return;
     }
-    const auto states = ladderStatesLocked(modeLadder_, out);
-    for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i)
-        out.ladderTops.push_back(ladder::rungCeiling(modeLadder_.rungs[i], states[i]));
-    out.fpsMax = ladder::ladderCeiling(modeLadder_, states);
-    for (size_t i = 0; i < modeLadder_.rungs.size() && i < states.size(); ++i) {
-        const ladder::Rung &rung = modeLadder_.rungs[i];
-        if (states[i].usable && rung.width == out.resolution.width && rung.height == out.resolution.height &&
-            rung.bits == out.rawBitDepth && rung.clearHdr == out.clearHdr) {
-            out.ladderRung = static_cast<uint32_t>(i + 1);
-            out.fpsTakeMax = ladder::rungCeiling(rung, states[i]);
-            break;
+    const std::vector<size_t> order = ladder::tryOrder(candidates);
+    double top = 0.0;
+    for (size_t k = 0; k < order.size(); ++k) {
+        const ladder::Candidate &c = candidates[order[k]];
+        out.ladderTops.push_back(c.cap);
+        top = std::max(top, c.cap);
+        if (!out.ladderRung && c.usable && c.mode.width == out.resolution.width && c.mode.height == out.resolution.height &&
+            c.mode.bits == out.rawBitDepth && c.mode.clearHdr == out.clearHdr) {
+            out.ladderRung = static_cast<uint32_t>(k + 1);
+            out.fpsTakeMax = c.cap;
         }
     }
-    out.ladderRampReady = modeLadder_.rampReady && out.fpsSpeedRamp;
-    if (out.ladderRung > 0 && !base.empty()) {
-        std::ostringstream top;
-        top << out.fpsTakeMax;
-        out.ladderText = "Resolution " + std::to_string(out.ladderRung) + " \u00b7 " + base + " \u00b7 \u2264" + top.str() +
-                         " \u00b7 " + compressionLabel(out);
-    } else if (!base.empty()) {
-        out.ladderText = base + " \u00b7 " + compressionLabel(out);
-    }
+    out.fpsMax = top;
+    std::ostringstream cap;
+    cap << out.fpsTakeMax;
+    out.ladderText = out.ladderRung ? base + " \u00b7 " + compressionLabel(out) + " \u00b7 up to " + cap.str() + " fps"
+                                    : base + " \u00b7 " + compressionLabel(out);
 }
 
-bool CameraController::saveModeLadderLocked() const
+// The derived limit fields (never persisted): what the table says the running mode holds for a 30-minute take at
+// the storage and switches in use. Information only; nothing here changes a setting.
+void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
 {
-    std::error_code ec;
-    std::filesystem::create_directories(modeLadderPath().parent_path(), ec);
-    if (settingsFile::atomicWrite(modeLadderPath(), ladder::fileText(modeLadder_)))
-        return true;
-    std::cerr << "ApertarCore mode ladder: could not write " << modeLadderPath() << "\n";
-    return false;
-}
-
-// A filter save keeps the rest of mode_ladder.conf as it is on disk: memory can hold less than the file (a
-// resolutions line this Core could not read loads as no ladder), and a filter click must not erase it.
-bool CameraController::saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const
-{
-    const std::filesystem::path path = modeLadderPath();
-    std::error_code ec;
-    std::string text;
-    // Never write over a file that could not be read whole. When exists ends in an error rather than "no such
-    // file", the path is read too, so a lookup error is refused as a read error is.
-    if ((std::filesystem::exists(path, ec) || ec) && !readModeLadderFile(path, text)) {
-        std::cerr << "ApertarCore mode ladder: could not read " << path << "\n";
-        *error = "Could not read mode_ladder.conf: the aspect filter is not saved.";
-        return false;
+    out.limitFps = 0.0;
+    out.limitShortFps = 0.0;
+    out.limitBasis = "sensor";
+    out.limitBy = "sensor";
+    out.limitWhy.clear();
+    out.splitEffective = !out.photoModeEnabled && out.recordingFormat != RecordingFormat::Mlv && !isProcessedVideoFormat(out.recordingFormat) &&
+        bufferbudget::framesPerFolderForTake(bufferbudget::splitModeRequest().load(std::memory_order_acquire),
+                                             bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire), true,
+                                             ladderContext_.fatLike, out.fps, out.fpsSpeedRamp) > 0;
+    if (out.photoModeEnabled || isProcessedVideoFormat(out.recordingFormat)) {
+        out.limitWhy = "Limits are not measured for H.264, ProRes and stills.";
+        return;
     }
-    ladder::Ladder fresh = modeLadder_;
-    fresh.aspects = aspects;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    if (settingsFile::atomicWrite(path, text.empty() ? ladder::fileText(fresh) : ladder::withAspectsLine(text, aspects)))
-        return true;
-    // atomicWrite also fails after its rename, when the directory cannot be synced: the file then holds the
-    // new filter, and the reply must say so. Only a file read back whole is trusted.
-    std::cerr << "ApertarCore mode ladder: could not write " << path << "\n";
-    std::string after;
-    if (readModeLadderFile(path, after) && ladder::parseFile(after).aspects == aspects)
-        return true;
-    *error = "Could not write mode_ladder.conf: the aspect filter is not saved.";
-    return false;
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    const sustained::Context context = limitContextLocked(out);
+    ladder::Rung rung;
+    rung.width = out.resolution.width;
+    rung.height = out.resolution.height;
+    rung.bits = out.rawBitDepth;
+    rung.clearHdr = out.clearHdr;
+    const sustained::Mode mode = limitModeLocked(rung);
+    const double ceiling = maximumFpsForSettings(out, family);
+    const sustained::Cap cap = sustained::capFor(context, mode, ceiling);
+    if (cap.row.found) {
+        out.limitFps = cap.fps;
+        out.limitShortFps = cap.row.fpsShort;
+        out.limitBasis = sustained::labelName(cap.row.label);
+    }
+    out.limitBy = cap.by;
+    out.limitWhy = sustained::whyText(context, mode, cap, ceiling);
+    if (ladderActiveForLocked(out)) {   // Dynamic resolution chose this mode: say what held a better one back
+        const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, out);
+        if (recording_ && cap.fps < out.fps - 0.0005) {   // a lever or the storage changed in this take
+            const int pick = ladder::chooseMode(candidates, out.fps);
+            const ladder::Rung &next = pick >= 0 ? candidates[static_cast<size_t>(pick)].mode : rung;
+            if (next.width != rung.width || next.height != rung.height || next.bits != rung.bits || next.clearHdr != rung.clearHdr)
+                out.limitWhy = "The limits changed: the camera switches to " + sustained::modeName(limitModeLocked(next)) +
+                               " after this take.";
+            else
+                out.limitWhy = "The limits changed: " + sustained::modeName(mode) + " holds " + sustained::wholeFps(cap.fps) +
+                               " fps now. The camera sets that rate after this take.";
+            return;
+        }
+        const ladder::Candidate *best = nullptr;   // the mode ranked before this one that came closest
+        double top = 0.0;
+        bool ranked = false;
+        for (const size_t k : ladder::tryOrder(candidates)) {
+            const ladder::Candidate &c = candidates[k];
+            if (!c.usable)
+                continue;
+            top = std::max(top, c.cap);
+            if (!ranked && c.mode.width == rung.width && c.mode.height == rung.height && c.mode.bits == rung.bits &&
+                c.mode.clearHdr == rung.clearHdr)
+                ranked = true;
+            else if (!ranked && (!best || c.cap > best->cap))
+                best = &c;
+        }
+        if (ranked && cap.fps >= top - 0.0005 && out.fps >= cap.fps - 0.0005) {
+            out.limitWhy = sustained::highestText(context, cap.fps, mode);
+        } else if (ranked && best && best->cap < out.fps - 0.0005) {
+            ladder::Ladder single;
+            single.rungs.push_back(best->mode);
+            const sustained::Mode bestMode = limitModeLocked(best->mode);
+            const sustained::Cap bestCap = sustained::capFor(context, bestMode, ladderStatesLocked(single, out).front().modeCeiling);
+            out.limitWhy = sustained::steppedDownText(context, out.fps, mode, bestMode, bestCap);
+        }
+    }
+    if (out.dynresTdnRestore && ladderActiveForLocked(out))
+        out.limitWhy += " Dynamic resolution turned preview temporal denoise off for this mode; it comes back on in a 2K mode.";
+    if (ladderOverride_ && modeLadder_.enabled)
+        out.limitWhy += " You chose this mode: Dynamic resolution waits for the next fps change.";
 }
 
 // The editor's extras for one mode: the sensor window the probe reports, the binning, and the FPS
@@ -11869,6 +12068,21 @@ void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladd
         const ladder::RungState probe = (lossy && rung.clearHdr) ? ladder::RungState{} : ladderStatesLocked(single, settings_).front();
         state.ceilingBy[i] = probe.usable ? probe.modeCeiling : 0.0;
     }
+    SensorMode mode;
+    if (!probedModeLocked(rung, &mode))
+        return;
+    state.rawWidth = mode.size.width;
+    state.rawHeight = mode.size.height;
+    unsigned windowW = 0, windowH = 0;
+    if (std::sscanf(mode.crop.c_str(), "(%*d, %*d)/%ux%u", &windowW, &windowH) == 2) {
+        state.windowWidth = windowW;
+        state.windowHeight = windowH;
+    }
+    state.binning = mode.binning;
+}
+
+bool CameraController::probedModeLocked(const ladder::Rung &rung, SensorMode *found) const
+{
     const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
     // The probe lists what the sensor delivers; a rung is the active picture (the IMX585 16-bit frame has
     // optical-black rows on top and bottom).
@@ -11884,48 +12098,29 @@ void CameraController::fillRungExtrasLocked(ladder::RungState &state, const ladd
         if (modeSize.width != wire.width || modeSize.height != wire.height ||
             mode.clearHdr != rung.clearHdr || mode.bitDepth != rung.bits)
             continue;
-        state.rawWidth = mode.size.width;
-        state.rawHeight = mode.size.height;
-        unsigned windowW = 0, windowH = 0;
-        if (std::sscanf(mode.crop.c_str(), "(%*d, %*d)/%ux%u", &windowW, &windowH) == 2) {
-            state.windowWidth = windowW;
-            state.windowHeight = windowH;
-        }
-        state.binning = mode.binning;
-        break;
+        *found = mode;
+        return true;
     }
+    return false;
 }
 
-std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
-                                                   const std::vector<std::string> &warnings) const
+// The probe's modes in Core's identity (the IMX585 16-bit frame is the active picture plus optical-black rows; the
+// mode is the picture), each once.
+std::vector<ladder::Rung> CameraController::poolModesLocked() const
 {
-    auto states = ladderStatesLocked(draft, settings_);
-    for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i)
-        fillRungExtrasLocked(states[i], draft.rungs[i]);
-    int running = -1;
-    for (size_t i = 0; i < draft.rungs.size() && i < states.size(); ++i) {
-        const ladder::Rung &rung = draft.rungs[i];
-        if (states[i].usable && rung.width == settings_.resolution.width && rung.height == settings_.resolution.height &&
-            rung.bits == settings_.rawBitDepth && rung.clearHdr == settings_.clearHdr) {
-            running = static_cast<int>(i);
-            break;
-        }
-    }
-    // The pool: the probe's modes in Core's identity (the IMX585 16-bit frame is the active picture plus
-    // optical-black rows; the rung is the picture, the entry carries the frame as raw_width/raw_height).
-    const SensorFamily poolFamily = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
-    std::vector<ladder::PoolEntry> pool;
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    std::vector<ladder::Rung> pool;
     for (const SensorMode &mode : sensorModes()) {
         ladder::Rung rung;
         rung.width = mode.size.width;
         rung.height = mode.size.height;
-        if (poolFamily == SensorFamily::Imx585) {
+        if (family == SensorFamily::Imx585) {
             const auto active = apertar::imx585::activeFor({ mode.size.width, mode.size.height }, mode.bitDepth);
             if (!active)
                 continue;
             rung.width = active->width;
             rung.height = active->height;
-        } else if (poolFamily == SensorFamily::Imx283) {
+        } else if (family == SensorFamily::Imx283) {
             const Resolution active = imx283ActiveForTransport(mode.size, mode.bitDepth);   // the probe lists transport sizes
             rung.width = active.width;
             rung.height = active.height;
@@ -11934,31 +12129,104 @@ std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, 
         rung.clearHdr = mode.clearHdr;
         bool known = false;
         for (const auto &entry : pool)
-            known = known || ladder::sameMode(entry.mode, rung);
-        if (known || (rung.bits != 10 && rung.bits != 12 && rung.bits != 16))
-            continue;
+            known = known || ladder::sameMode(entry, rung);
+        if (!known && (rung.bits == 10 || rung.bits == 12 || rung.bits == 16))
+            pool.push_back(rung);
+    }
+    return pool;
+}
+
+std::string CameraController::modeLadderJsonLocked(const ladder::Ladder &draft, const std::vector<std::string> &errors,
+                                                   const std::vector<std::string> &warnings) const
+{
+    // The enabled modes in the order the table tries them, with the step each serves.
+    const std::vector<ladder::Candidate> candidates = candidatesLocked(draft, settings_);
+    const sustained::Context context = limitContextLocked(settings_);
+    ladder::Ladder shown = draft;
+    shown.rungs.clear();
+    std::vector<ladder::RungState> states;
+    std::vector<ladder::StepInfo> info;
+    double reached = 0.0;                 // the highest cap of the steps before this one
+    sustained::Mode reachedMode;
+    sustained::Cap reachedCap;
+    int running = -1;
+    for (const size_t index : ladder::tryOrder(candidates)) {
+        const ladder::Candidate &c = candidates[index];
+        ladder::Ladder single;
+        single.rungs.push_back(c.mode);
+        ladder::RungState state = ladderStatesLocked(single, settings_).front();
+        const sustained::Mode limitMode = limitModeLocked(c.mode);
+        const sustained::Cap cap = sustained::capFor(context, limitMode, state.modeCeiling);
+        ladder::StepInfo step;
+        step.fps30 = cap.row.found ? cap.row.fps30 : 0.0;
+        step.fpsShort = cap.row.found ? cap.row.fpsShort : 0.0;
+        step.basis = cap.row.found ? sustained::labelName(cap.row.label) : "sensor";
+        step.wall = cap.by;
+        step.neverUsed = !c.usable || c.cap <= 0.0 || c.cap <= reached + 0.0005;
+        step.why = c.usable ? sustained::whyText(context, limitMode, cap, state.modeCeiling)
+                            : sustained::modeName(limitMode) + " cannot run in this format; it is skipped.";
+        if (c.usable && c.cap > 0.0 && step.neverUsed)
+            step.why += sustained::neverUsedText(reachedMode, reachedCap);
+        if (!step.neverUsed) {
+            reached = c.cap;
+            reachedMode = limitMode;
+            reachedCap = cap;
+        }
+        info.push_back(step);
+        state.modeCeiling = c.cap;
+        state.usable = c.usable && c.cap > 0.0;
+        fillRungExtrasLocked(state, c.mode);
+        if (running < 0 && state.usable && c.mode.width == settings_.resolution.width &&
+            c.mode.height == settings_.resolution.height && c.mode.bits == settings_.rawBitDepth &&
+            c.mode.clearHdr == settings_.clearHdr)
+            running = static_cast<int>(states.size());
+        shown.rungs.push_back(c.mode);
+        states.push_back(state);
+    }
+    std::vector<ladder::PoolEntry> pool;
+    for (const ladder::Rung &rung : poolModesLocked()) {
         ladder::Ladder single;
         single.rungs.push_back(rung);
         ladder::RungState poolState = ladderStatesLocked(single, settings_).front();
         fillRungExtrasLocked(poolState, rung);
         pool.push_back({ rung, poolState });
     }
-    return ladder::toJson(draft, states, running, pool, errors, warnings);
+    return ladder::toJson(shown, states, running, info, pool, errors, warnings);
 }
 
 std::string CameraController::modeLadderJson() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> errors, warnings;
-    ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
     return modeLadderJsonLocked(modeLadder_, errors, warnings);
 }
 
+void CameraController::setLadderContext(const sustained::Context &context)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A fuller card alone is not news: an event goes out when a fact changes or the card crosses 94 percent.
+    sustained::Context before = ladderContext_, after = context;
+    const bool crossed = sustained::cardNearlyFull(before) != sustained::cardNearlyFull(after);
+    before.fillFraction = after.fillFraction = 0.0;
+    const bool changed = !(before == after);
+    ladderContext_ = context;
+    if (changed && ladderReapplyLocked())
+        return;   // the apply sent the settings event
+    if (crossed || changed)
+        emitSettingsEventLocked();
+}
+
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                                     std::optional<bool> rampReady, const std::optional<std::string> &aspects,
+                                     const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
+                                     const std::optional<std::string> &aspects, const std::optional<std::string> &tdn,
                                      bool dryRun, std::string *json, std::string *error)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (tdn && *tdn != "keep" && *tdn != "off_in_4k") {
+        *error = "The TDN option must be keep or off_in_4k.";
+        return false;
+    }
     std::vector<std::string> aspectList;
     if (aspects) {
         std::string parseError;
@@ -11968,43 +12236,69 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         }
     }
     // The aspect filter alone changes only what the WebUI lists, never the mode: no take refusal, no check
-    // that could refuse it, no apply, no settings event. Only the file's aspects= line is replaced (a missing
-    // or empty file is written whole), and a filter unchanged from Core's copy writes nothing. The reply shows
-    // the errors as get_mode_ladder does.
-    if (aspects && !rungs && !enabled && !rampReady) {
+    // that could refuse it, no apply, no settings event. The reply shows the errors as get_mode_ladder does.
+    if (aspects && !rungs && !enabled && !enableMode && !disableMode && !tdn) {
         ladder::Ladder shown = modeLadder_;
         shown.aspects = aspectList;
         if (!dryRun && aspectList != modeLadder_.aspects) {
-            if (!saveModeLadderAspectsLocked(aspectList, error))
-                return false;
             modeLadder_.aspects = aspectList;
+            settings_.dynresAspects = ladder::aspectsText(aspectList);
+            persistSettingsLocked();
         }
         std::vector<std::string> shownErrors, shownWarnings;
-        ladder::validate(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
+        ladder::validateModes(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
         *json = modeLadderJsonLocked(shown, shownErrors, shownWarnings);
         return true;
     }
     if (recording_ && !dryRun) {
-        *error = "Stop recording before changing the mode ladder.";
+        *error = "Stop recording before changing Dynamic resolution.";
         return false;
     }
     ladder::Ladder draft = modeLadder_;   // keeps the aspect filter unless aspects is given
-    if (rungs) {
+    bool listGiven = false;
+    const auto parseList = [&](const std::string &text, std::vector<ladder::Rung> &out) {
         std::string parseError;
-        if (!ladder::parseRungs(*rungs, draft.rungs, parseError)) {
+        if (!ladder::parseModes(text, out, parseError)) {
             *error = parseError;
             return false;
         }
-        migrateImx585LadderRungs(draft.rungs);
+        followDriverCropSizes(out);
+        return true;
+    };
+    if (rungs) {
+        if (!parseList(*rungs, draft.rungs))
+            return false;
+        listGiven = true;
+    }
+    // One mode in or out of the enabled list, at any time outside a take: no order, no threshold, nothing else to
+    // check. An empty list stands for the default list, so the first edit starts from it.
+    if (enableMode || disableMode) {
+        std::vector<ladder::Rung> edit;
+        if (!parseList(enableMode ? *enableMode : *disableMode, edit))
+            return false;
+        std::vector<ladder::Rung> list = enabledModesLocked(draft);
+        for (const ladder::Rung &mode : edit) {
+            const auto at = std::find_if(list.begin(), list.end(), [&](const ladder::Rung &r) { return ladder::sameMode(r, mode); });
+            if (enableMode && at == list.end())
+                list.push_back(mode);
+            else if (disableMode && at != list.end())
+                list.erase(at);
+        }
+        if (list.empty()) {
+            *error = "Enable at least one resolution.";
+            return false;
+        }
+        draft.rungs = list;
+        listGiven = true;
     }
     if (enabled)
         draft.enabled = *enabled;
-    if (rampReady)
-        draft.rampReady = *rampReady;
+    if (tdn)
+        draft.tdnOff = *tdn == "off_in_4k";
     if (aspects)
         draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
-    ladder::validate(draft, ladderStatesLocked(draft, settings_), errors, warnings);
+    ladder::validateModes(draft, ladderStatesLocked(draft, settings_), errors, warnings);
     if (dryRun) {
         *json = modeLadderJsonLocked(draft, errors, warnings);
         return true;
@@ -12013,38 +12307,40 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         *error = errors.front();
         return false;
     }
-    if (draft.enabled && ladder::chooseRung(draft, ladderStatesLocked(draft, settings_), 0.0) < 0) {
-        *error = "No resolution of this ladder can run in the current format.";
-        return false;
-    }
 
     const ladder::Ladder previous = modeLadder_;
     const bool previousOverride = ladderOverride_;
     modeLadder_ = draft;
     ladderOverride_ = false;      // a changed ladder ends a Clear HDR override
+    const auto store = [&](CaptureSettings &target) {
+        target.dynresEnabled = draft.enabled;
+        target.dynresTdnOff = draft.tdnOff;
+        if (!draft.tdnOff)
+            target.dynresTdnRestore = false;   // keep never touches TDN, so nothing is left to restore
+        if (listGiven)
+            target.dynresModes = ladder::modesText(draft.rungs);
+        target.dynresAspects = ladder::aspectsText(draft.aspects);
+    };
     // Switching the ladder on (or changing it) may put the camera in another rung: one apply.
     CaptureSettings next = settings_;
+    store(next);
     const bool modeChanged = ladderRewriteLocked(next);
     const bool formatChanged = next.recordingFormat != settings_.recordingFormat ||
         next.cdngCompression != settings_.cdngCompression || next.lossyDngRatio != settings_.lossyDngRatio;
-    if ((modeChanged || formatChanged) && !applySettingsLocked(next, modeChanged)) {
-        modeLadder_ = previous;
-        ladderOverride_ = previousOverride;
-        *error = lastError_;
-        return false;
+    if (modeChanged || formatChanged) {
+        if (!applySettingsLocked(next, modeChanged)) {
+            modeLadder_ = previous;
+            ladderOverride_ = previousOverride;
+            *error = lastError_;
+            return false;
+        }
+    } else {
+        store(settings_);
+        persistSettingsLocked();
+        emitSettingsEventLocked();
     }
-    const bool saved = saveModeLadderLocked();
-    emitSettingsEventLocked();
     std::vector<std::string> shownErrors, shownWarnings;
-    ladder::validate(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
-    // The apply already ran. A failed write warns that the ladder is lost when Core restarts, unless the file
-    // reads back whole as this ladder: atomicWrite also fails after its rename, when the directory cannot be synced.
-    // The WebUI shows this warning as an error toast by its start (showLadderWriteWarning).
-    if (!saved) {
-        std::string written;
-        if (!readModeLadderFile(modeLadderPath(), written) || written != ladder::fileText(modeLadder_))
-            shownWarnings.push_back("Could not write mode_ladder.conf: this ladder is lost when Core restarts.");
-    }
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
     *json = modeLadderJsonLocked(modeLadder_, shownErrors, shownWarnings);
     return true;
 }
@@ -12061,7 +12357,7 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return true;
     }
     const auto text = [](const CaptureSettings &s) {
-        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, 0.0, "" });
+        return ladder::label({ s.resolution.width, s.resolution.height, s.rawBitDepth, s.clearHdr, "" });
     };
     if (wanted.resolution.width == settings.resolution.width && wanted.resolution.height == settings.resolution.height &&
         wanted.rawBitDepth == settings.rawBitDepth && wanted.clearHdr == settings.clearHdr) {
@@ -12071,8 +12367,8 @@ bool CameraController::applyLadderToPreset(CaptureSettings &settings, bool names
         return true;
     }
     *error = "This preset records " + text(settings) + " at " + std::to_string(static_cast<int>(settings.fps)) +
-             " fps; the Mode Ladder runs that rate in " + text(wanted) +
-             ". Turn the ladder off to load it, or save the preset again.";
+             " fps; Dynamic resolution runs that rate in " + text(wanted) +
+             ". Turn Dynamic resolution off to load it, or save the preset again.";
     return false;
 }
 
@@ -12295,12 +12591,18 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool fpsPhaseLock = next.fpsPhaseLock;
             const bool previewTdn = next.previewTdn;   // likewise one switch for the camera
             const bool mediaTrimEnabled = next.mediaTrimEnabled;   // one switch for the camera, not one per format
+            const bool stopOnDroppedFrame = next.stopOnDroppedFrame;   // and so is this one
             const CdngLog cdngLog = next.cdngLog; // CineMate Log is one switch for the camera too
             const bool fpsSpeedRampKeepExposure = next.fpsSpeedRampKeepExposure;
             const bool fpsSpeedRampStretchAudio = next.fpsSpeedRampStretchAudio;
             const bool fpsSpeedRampReturn = next.fpsSpeedRampReturn;
             const double conformFps = next.conformFps;
             const std::string clipNameTemplate = next.clipNameTemplate;   // one naming scheme for the camera
+            const bool dynresEnabled = next.dynresEnabled;   // one Dynamic resolution for the camera
+            const std::string dynresModes = next.dynresModes;
+            const std::string dynresAspects = next.dynresAspects;
+            const bool dynresTdnOff = next.dynresTdnOff;
+            const bool dynresTdnRestore = next.dynresTdnRestore;
             next = saved->second;
             next.tuningFile = tuningFile;
             next.timecodeMode = timecodeMode;
@@ -12314,7 +12616,13 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.fpsPhaseLock = fpsPhaseLock;
             next.previewTdn = previewTdn;
             next.mediaTrimEnabled = mediaTrimEnabled;
+            next.stopOnDroppedFrame = stopOnDroppedFrame;
             next.cdngLog = cdngLog;
+            next.dynresEnabled = dynresEnabled;
+            next.dynresModes = dynresModes;
+            next.dynresAspects = dynresAspects;
+            next.dynresTdnOff = dynresTdnOff;
+            next.dynresTdnRestore = dynresTdnRestore;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
@@ -12377,7 +12685,8 @@ bool CameraController::setCdngLog(CdngLog log)
     }
     CaptureSettings next = settings_;
     next.cdngLog = log;
-    const bool ok = applySettingsLocked(next, false);
+    const bool ladderChange = ladderRewriteLocked(next);   // Log shifts the table's numbers
+    const bool ok = applySettingsLocked(next, ladderChange);
     emitLogAppliedIfChangedLocked();
     return ok;
 }
@@ -12522,10 +12831,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
         setErrorLocked("Raw bit depth changes are blocked while recording.");
         return false;
     }
-    if (ladderActiveForLocked(settings_)) {      // T34: the ladder owns the mode
-        setErrorLocked(kLadderOwnsMode);
-        return false;
-    }
+    const bool ladderWasActive = ladderActiveForLocked(settings_);   // a manual pick pins the mode (ladderOverride_)
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
         ? session_->sensorFamily()
@@ -12538,8 +12844,7 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
             emitSettingsEventLocked();
             return true;
         }
-        ladderOverride_ = false;      // a real bit depth change ends a Clear HDR override
-        return applySettingsLocked(next, true);
+        return applySettingsLocked(next, true);   // 10-bit by rule: no choice to pin
     }
 
     CaptureSettings requested = settings_;
@@ -12553,11 +12858,13 @@ bool CameraController::setRawBitDepth(uint32_t bitDepth)
 
     CaptureSettings next = settings_;
     next.rawBitDepth = requested.rawBitDepth;
-    // A real bit depth change ends a Clear HDR override, except the 16-bit that turning Clear HDR on is followed by
-    // (the hardware clear_hdr action and the touch UI send it right after set_clear_hdr).
-    if (!(settings_.clearHdr && requested.rawBitDepth == 16))
-        ladderOverride_ = false;
-    return applySettingsLocked(next, true);
+    const bool overrideBefore = ladderOverride_;
+    ladderOverride_ = ladderWasActive || overrideBefore;   // pinned until the next fps change
+    if (!applySettingsLocked(next, true)) {
+        ladderOverride_ = overrideBefore;
+        return false;
+    }
+    return true;
 }
 
 bool CameraController::setClearHdr(bool enabled)
@@ -12567,8 +12874,8 @@ bool CameraController::setClearHdr(bool enabled)
         setErrorLocked("Clear HDR changes are blocked while recording.");
         return false;
     }
-    // An explicit choice beats the ladder: it holds the mode until fps, resolution, format, bit depth,
-    // Ramp-ready or the ladder itself change (they end ladderOverride_).
+    // An explicit choice beats Dynamic resolution: it pins the mode until the fps, the record format or the
+    // enabled list changes, or the switch goes off (they end ladderOverride_).
     const bool ladderWasActive = ladderActiveForLocked(settings_);
 
     const SensorFamily sensorFamily = (!simulateCamera_ && session_)
@@ -12576,6 +12883,9 @@ bool CameraController::setClearHdr(bool enabled)
         : SensorFamily::Unknown;
     CaptureSettings next = settings_;
     next.clearHdr = enabled;
+    // Clear HDR is entered at 4K, as the UIs label it; set_resolution picks another Clear HDR row after.
+    if (enabled && !settings_.clearHdr && sensorFamily == SensorFamily::Imx585)
+        next.resolution = Resolution{ 3840, 2160 };
     applyClearHdrCompression(next, settings_.clearHdr);   // before the sanitiser: lossless limits only apply to lossless
     if (enabled && !settings_.clearHdr && !simulateCamera_ && session_) {
         // Auto ISO and WB stop in Clear HDR (the sanitiser turns them off); hold the values
@@ -12770,6 +13080,8 @@ std::string CameraController::clipNameSensorLocked() const
     return sensorFamilyName(session_->sensorFamily());
 }
 
+// No I/O here: it runs under mutex_ on every settings read and event, so it looks names up in the media
+// watcher's last listing of the root, not on the medium.
 void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
 {
     // The example is the next take's name. During a take it keeps its last value: with a time token the numbering lists
@@ -12777,11 +13089,21 @@ void CameraController::fillClipNameExampleLocked(CaptureSettings &out) const
     if (recording_ || prerollTake_)
         return;
     try {
-        out.clipNameExample = nextClipFolderName(mediaRootPath(mediaRoot_), out, clipNameSensorLocked(),
-                                                 std::chrono::system_clock::now());
+        const std::vector<std::string> names(clipFolderNames_.begin(), clipFolderNames_.end());
+        out.clipNameExample = nextClipFolderName([this](const std::string &name) {
+            return clipFolderNames_.count(name) > 0;
+        }, names, out, clipNameSensorLocked(), std::chrono::system_clock::now());
     } catch (const std::exception &) {
         out.clipNameExample.clear();
     }
+}
+
+void CameraController::setClipFolderNames(std::set<std::string> names)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_)
+        return;   // listed before the take began: it lacks the take's folder (startRecording added it)
+    clipFolderNames_ = std::move(names);
 }
 
 bool CameraController::setClipNameTemplate(const std::string &value, std::string *stored)
@@ -12854,7 +13176,8 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings next = settings_;
     next.fpsPhaseLock = enabled;
-    return applySettingsLocked(next, false);
+    const bool ladderChange = ladderRewriteLocked(next);   // the lock shifts the table's numbers
+    return applySettingsLocked(next, ladderChange);
 }
 
 bool CameraController::setMediaTrimEnabled(bool enabled)
@@ -12881,14 +13204,36 @@ bool CameraController::setPreviewTdn(bool enabled)
         return false;
     }
     if (settings_.previewTdn == enabled) {
+        if (settings_.dynresTdnRestore) {   // the operator's own choice now: nothing left to restore
+            settings_.dynresTdnRestore = false;
+            persistSettingsLocked();
+        }
         lastError_.clear();
         emitSettingsEventLocked();
         return true;
     }
     CaptureSettings next = settings_;
     next.previewTdn = enabled;
+    next.dynresTdnRestore = false;   // the operator decided
+    ladderRewriteLocked(next);   // TDN takes the unbinned modes out of the table; the apply below reconfigures
+    if (enabled && !next.previewTdn) {   // the option keeps it off for the mode the table picks
+        setErrorLocked("Dynamic resolution keeps preview temporal denoise off in 4K. Set its TDN option to keep to use both.");
+        return false;
+    }
     // The pipeline restarts on the other tuning file, the same way setTuningFile does it.
     return applySettingsLocked(next, true);
+}
+
+bool CameraController::setStopOnDroppedFrame(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recording_) {
+        setErrorLocked("Stop on Dropped Frame changes are blocked while recording.");
+        return false;
+    }
+    CaptureSettings next = settings_;
+    next.stopOnDroppedFrame = enabled;
+    return applySettingsLocked(next, false);
 }
 
 std::string CameraController::activeTuningFile() const
@@ -12914,10 +13259,7 @@ bool CameraController::setFpsSpeedRamp(bool enabled, bool keepExposure, bool str
     next.fpsSpeedRampKeepExposure = keepExposure;
     next.fpsSpeedRampStretchAudio = stretchAudio;
     next.fpsSpeedRampReturn = returnAfter;
-    if (!recording_ && enabled != settings_.fpsSpeedRamp)
-        ladderOverride_ = false;   // Ramp-ready changes the rung with Speed Ramp: a Clear HDR override ends
-    const bool ladderChange = ladderRewriteLocked(next);   // T34: Ramp-ready changes the rung with Speed Ramp
-    return applySettingsLocked(next, ladderChange);
+    return applySettingsLocked(next, false);
 }
 
 bool CameraController::setAutofocusMode(AutofocusMode mode)
@@ -13003,6 +13345,13 @@ bool CameraController::startRecording(const AudioRecordingOptions &audioOptions,
     }
 
     if (simulateCamera_) recordingDropWarning_.reset();
+    if (!simulateCamera_) {
+        // The take's folder exists now; the media watcher lists the root again only after the take.
+        CaptureSettings take = settings_;
+        fillClipNameExampleLocked(take);
+        if (!take.clipNameExample.empty())
+            clipFolderNames_.insert(take.clipNameExample);
+    }
     recording_ = true;
     rampTakeBaseFps_ = settings_.fps;
     rampTakeChanged_ = false;
@@ -13457,6 +13806,9 @@ bool CameraController::stopRecording(int64_t stopUs)
     recordingFailureMessage_ = lastError_;
     if (!announcedEarly || !lastError_.empty())
         emitRecordingEventLocked();
+    const std::string takeError = lastError_;
+    ladderReapplyLocked();   // a lever or the storage changed in the take: the mode follows now
+    lastError_ = takeError;
     return lastError_.empty();
 }
 
@@ -13480,6 +13832,8 @@ bool CameraController::checkRecordingFailure()
     lastError_ = error;
     recordingFailureMessage_ = error;
     emitRecordingEventLocked();
+    ladderReapplyLocked();   // a lever or the storage changed in the take: the mode follows now
+    lastError_ = error;
     return true;
 }
 
@@ -13595,6 +13949,7 @@ CaptureSettings CameraController::settings() const
     result.isoMax = maximumIsoForSettings(result, family);
     result.fpsMax = maximumFpsForSettings(result, family);
     fillCameraIdentity(result);
+    fillLimitFieldsLocked(result);
     fillLadderFieldsLocked(result);
     fillClipNameExampleLocked(result);
     return result;
@@ -13667,13 +14022,19 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
         setErrorLocked("Wait for still captures to finish before loading a preset.");
         return false;
     }
-    const Resolution presetResolution = migratedImx585CropResolution(requested.resolution);   // a preset saved with 3840x2076 / 1920x1038
+    const Resolution presetResolution = requested.resolution;
     if (!validateResolution(presetResolution)) return false;
     rampNominalShutterUs_ = 0; // a preset brings its own shutter
     CaptureSettings next = supportedRecordingSettings(requested);
     next.resolution = presetResolution;
     next.tuningFile = normalizeTuningFilePath(next.tuningFile);
     if (!validateTuningFilePath(next.tuningFile, &lastError_)) return false;
+    // A preset never carries Dynamic resolution; a snapshot taken before an edit must not bring the old one back.
+    next.dynresEnabled = settings_.dynresEnabled;
+    next.dynresModes = settings_.dynresModes;
+    next.dynresAspects = settings_.dynresAspects;
+    next.dynresTdnOff = settings_.dynresTdnOff;
+    next.dynresTdnRestore = next.dynresTdnRestore || settings_.dynresTdnRestore;   // the preset's own rewrite may have turned TDN off
     const CaptureSettings previous = settings_;
     const bool tuningChanged = next.tuningFile != previous.tuningFile;
     const bool reconfigure = tuningChanged || next.photoModeEnabled != previous.photoModeEnabled || next.recordingFormat != previous.recordingFormat ||
@@ -13732,6 +14093,10 @@ bool CameraController::applySettingsLocked(CaptureSettings nextSettings, bool re
     requiresReconfigure |= nextSettings.photoModeEnabled != settings_.photoModeEnabled;
     requiresReconfigure |= activeIspColorProfile(nextSettings) != activeIspColorProfile(settings_);
     requiresReconfigure |= nextSettings.clearHdr != settings_.clearHdr;
+#if APERTARCORE_HAS_LIBCAMERA
+    // Clear HDR 12-bit stores 12-bit codes in cDNG and linear 16-bit in MLV; the stream takes the depth at configure.
+    requiresReconfigure |= storageRawBitDepthForSettings(nextSettings) != storageRawBitDepthForSettings(settings_);
+#endif
     if (!nextSettings.photoModeEnabled) nextSettings.timelapseExposureLimitUs = 0;
     if (nextSettings.timelapseExposureLimitUs)
         nextSettings.shutterUs = std::min(nextSettings.shutterUs, nextSettings.timelapseExposureLimitUs);
@@ -13877,6 +14242,7 @@ void CameraController::emitSettingsEventLocked()
     settings_.isoMax = maximumIsoForSettings(settings_, family);
     settings_.fpsMax = maximumFpsForSettings(settings_, family);
     fillCameraIdentity(settings_);
+    fillLimitFieldsLocked(settings_);
     fillLadderFieldsLocked(settings_);
     fillClipNameExampleLocked(settings_);
     settings_.cdngLogApplied = cdngLogApplicableLocked();

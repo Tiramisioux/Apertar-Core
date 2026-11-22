@@ -11,7 +11,6 @@
 #include <map>
 #include <memory>
 #include <sstream>
-#include <thread>
 
 #include <sys/stat.h>
 
@@ -41,6 +40,17 @@ std::map<std::string, std::string> scriptPaths(const hwconf::Document &doc)
     return out;
 }
 
+// True when a version Core kept (the history, the last text it wrote) has exactly these script paths. Putting a
+// saved version back is not typing a path in the browser: its paths were set over ssh once.
+bool keptScriptPaths(const std::filesystem::path &notes, const std::map<std::string, std::string> &paths)
+{
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator(notes / "hardware-history", error))
+        if (scriptPaths(hwconf::parse(readTextFile(entry.path()))) == paths)
+            return true;
+    return scriptPaths(hwconf::parse(readTextFile(notes / "hardware-last-written.conf"))) == paths;
+}
+
 std::string timestamp(const char *format, std::time_t when)
 {
     std::tm local {};
@@ -50,7 +60,7 @@ std::string timestamp(const char *format, std::time_t when)
     return out;
 }
 
-// The name part of a history entry: [a-z0-9_] only, so a caller cannot put a path in it.
+// The writer's name in a history entry and in the state note: [a-z0-9_] only, so a caller cannot put a path or a line in it.
 std::string safeName(const std::string &by)
 {
     std::string out;
@@ -194,18 +204,15 @@ std::optional<std::string> HardwareConfigStore::baseTextLocked(const std::string
     return std::nullopt;
 }
 
-// A file Core did not write must not be edited while an editor may still be saving it (nano rewrites in place).
+// A file Core did not write must not be edited while an editor may still be saving it (nano rewrites in place):
+// one changed in the last second is left alone. Never sleep here: every writer waits on mutex_.
 bool HardwareConfigStore::settledLocked() const
 {
     if (!stamp_.exists || revision_ == state_.writtenRevision)
         return true;
     const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     const int64_t age = now - stamp_.mtimeNs;
-    if (age >= 0 && age < 1000000000)
-        return false;
-    const Stamp first = statFile();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return first == statFile();
+    return !(age >= 0 && age < 1000000000);
 }
 
 std::string HardwareConfigStore::currentText() const
@@ -273,7 +280,16 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         return result;
     }
 
-    const std::string current = text_;
+    // A missing file starts from a /boot copy when there is one: the readers take its sections, so a write must keep them.
+    std::string current = text_;
+    if (!stamp_.exists) {
+        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
+            if (std::filesystem::is_regular_file(candidate, error)) {
+                current = readTextFile(candidate);
+                break;
+            }
+        }
+    }
     const std::string currentRevision = revision_;
     const hwconf::Document currentDoc = hwconf::parse(current);
     std::vector<hwconf::Edit> merged;
@@ -303,7 +319,7 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         result.conflicts = hwconf::conflicts(*baseText, current, merged);
         if (!result.conflicts.empty()) {
             result.code = "conflict";
-            result.error = "The file changed in the same place since you loaded it.";
+            result.error = "The file changed in the same place since you loaded it. Reload, then change it again.";
             return result;
         }
         next = hwconf::applyEdits(current, merged);
@@ -327,13 +343,19 @@ StoreResult HardwareConfigStore::saveLocked(const std::string &base, const std::
         return result;
     }
 
-    const hwconf::Document nextDoc = hwconf::parse(next);
-    if (scriptPaths(nextDoc) != scriptPaths(currentDoc)) {
+    // APERTAR_SCRIPT_PATHS=ssh: a new [run_script] path is set over ssh only (1.6.0 lets the browser write it).
+    const char *scriptPathsEnv = std::getenv("APERTAR_SCRIPT_PATHS");
+    const auto nextPaths = scriptPaths(hwconf::parse(next));
+    if (scriptPathsEnv && std::string(scriptPathsEnv) == "ssh" && nextPaths != scriptPaths(currentDoc) &&
+        !keptScriptPaths(notes_, nextPaths)) {
         result.code = "script_paths";
         result.error = "Script paths are changed over ssh, not here.";
         return result;
     }
-    result.newErrors = hwconf::newErrors(hwconf::validate(current, facts), result.issues);
+    // A whole-file save is written whatever the checker finds, as in 1.6.0: the readers skip what they cannot use
+    // and the reply names the issues. A key edit that adds an error is refused: the page writes keys nobody typed.
+    if (edits)
+        result.newErrors = hwconf::newErrors(hwconf::validate(current, facts), result.issues);
     if (!result.newErrors.empty() && !flags.force) {
         result.code = "errors";
         result.error = "Not saved: " + std::to_string(result.newErrors.size()) + " new error" +
@@ -406,7 +428,7 @@ void HardwareConfigStore::addHistoryLocked(const std::string &text, const std::s
 void HardwareConfigStore::writeStateLocked(const std::string &by)
 {
     state_.writtenAt = timestamp("%Y-%m-%d %H:%M:%S", std::time(nullptr));
-    state_.writtenBy = by;
+    state_.writtenBy = safeName(by);
     settingsFile::atomicWrite(notes_ / "hardware-state.conf",
                               "written_revision=" + state_.writtenRevision + "\n" +
                               "written_at=" + state_.writtenAt + "\n" +

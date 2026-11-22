@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "../util/Int128.hpp"
+
 namespace apertar {
 
 inline std::pair<int,int> recordingFrameRate(double fps)
@@ -45,15 +47,15 @@ struct TimecodeSlot {
 // The slot nearest bootUs and its time, in microseconds (the tie to the earlier slot, as FramePhaseLock::gridPoint).
 inline int64_t slotTimeOfBootUs(int64_t bootUs, int64_t periodNum, int64_t periodDen)
 {
-    const __int128 period = static_cast<__int128>(1000000) * periodDen;
-    const __int128 scaled = static_cast<__int128>(bootUs) * periodNum;
-    __int128 slot = scaled / period;
-    __int128 rest = scaled % period;
+    const Int128 period = static_cast<Int128>(1000000) * periodDen;
+    const Int128 scaled = static_cast<Int128>(bootUs) * periodNum;
+    Int128 slot = scaled / period;
+    Int128 rest = scaled % period;
     if (rest < 0) { rest += period; --slot; }
     if (2 * rest > period) ++slot;
-    const __int128 numerator = slot * period;
-    __int128 q = numerator / periodNum;
-    const __int128 r = numerator % periodNum;
+    const Int128 numerator = slot * period;
+    Int128 q = numerator / periodNum;
+    const Int128 r = numerator % periodNum;
     if (2 * r >= periodNum) ++q;
     return static_cast<int64_t>(q);
 }

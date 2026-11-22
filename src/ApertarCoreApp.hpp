@@ -128,7 +128,6 @@ private:
     void noteRelayEvent(const std::string &eventJson);
     // --camera names a secondary (not "" or cam0): the role gate of design 3.3 applies.
     bool secondaryRole() const;
-    std::optional<std::string> handleReadOnlyHardwareCommand(const ControlCommand &command);
     std::string testInputReply(const ControlCommand &command);
     std::string gpioPeripheralJson(const hwconf::Document &doc);
     std::string i2cPeripheralJson(const hwconf::Document &doc, const std::string &section, const std::string &title,
@@ -137,6 +136,7 @@ private:
     std::string buildWebStateJson() const;
     std::string buildPresetLibraryJson() const;
     std::string buildMediaLibraryJson() const;
+    std::string buildHardwareConfigFileJson();
     void enqueuePreviewFrame(PreviewFrameDescriptor frame);
     void enqueueCurrentPreviewRegistrations();
     void updateWebPreviewRegistration(const PreviewFrameDescriptor &frame);
@@ -168,6 +168,8 @@ private:
     void runStoragePrerollOnce(storagepreroll::Trigger trigger, unsigned seconds);
     void stopStoragePreroll();
     MediaSnapshot mediaSnapshot() const;
+    // Hands the camera the storage and the switches its known limits depend on (SustainedFps.hpp).
+    void refreshLadderContext();
     std::string mediaGateError() const;
     bool mediaGateBypassed() const;
     std::string playbackHoldReason(bool withYield = true) const;   // "" or recording, writing, media_test, standby, media
@@ -194,7 +196,7 @@ private:
     enum class ClipMergeOutcome { Done, Stopped, Shutdown };
     ClipMergeOutcome mergeSplitClip(const std::filesystem::path &clip);
     MediaProfile mediaProfile() const;
-    void handleHardwareInputAction(const std::string &action, bool buttonPress = true);
+    bool handleHardwareInputAction(const std::string &action, bool buttonPress = true);
     bool handlePowerButtonPress(bool doublePress);
     void handleSingleHardwareInputAction(const std::string &action);
     void handleHardwareAnalogInput(const GroveAnalogInput::AnalogEvent &event);
@@ -329,6 +331,7 @@ private:
     uint64_t mediaSpeedCurrentBytes_ = 0;
     uint64_t mediaSpeedLastBytes_ = 0;
     double mediaSpeedLastWriteSpeedMBps_ = 0.0;
+    double ladderSpeedMBps_ = 0.0;   // the last good speed test of the medium now mounted, for the known limits; 0 = none
     std::string mediaSpeedError_;
     std::thread mediaSpeedThread_;
 
@@ -341,6 +344,7 @@ private:
     MediaSnapshot mediaSnapshot_;
     bool mediaSnapshotValid_ = false;
     MediaProfile mediaProfile_;
+    std::atomic<bool> ladderFillHigh_{false};   // the card was above 94 percent full at the last refreshLadderContext
 
     // The "buffer" event thread (runBufferEvents): own thread, no controller lock; stopped in stopMediaWatcher.
     std::thread bufferEventThread_;
@@ -356,6 +360,8 @@ private:
     std::atomic<uint64_t> bufferSafetyStopUsed_{0};
     std::atomic<uint64_t> bufferSafetyStopCapacity_{0};
     std::atomic<bool> bufferSafetyStopRam_{false};
+    std::atomic<bool> droppedFrameStopPending_{false};   // Stop on Dropped Frame: the same thread stops the take
+    std::atomic<bool> stopOnDroppedFrameSetting_{false}; // the persisted switch (CaptureSettings::stopOnDroppedFrame)
     std::mutex bufferSafetyStopMutex_;
     std::condition_variable bufferSafetyStopCv_;
 

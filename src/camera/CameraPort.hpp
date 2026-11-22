@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -269,32 +270,84 @@ inline bool configNamesPort(const fs::path &root, const std::string &port)
 // ---- waiting ----
 
 // Looks for a sensor subdev below nodePath every pollMs until timeoutMs has passed (once when timeoutMs is 0).
-inline bool waitForSensorSubdev(const fs::path &root, const std::string &nodePath, int timeoutMs, int pollMs = 500)
+// `stop(ms)`, when given, waits instead of sleeping and returns true when the caller was told to stop (a signal):
+// the look-up then gives up with false.
+inline bool waitForSensorSubdev(const fs::path &root, const std::string &nodePath, int timeoutMs, int pollMs = 500,
+                                const std::function<bool(int)> &stop = {})
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     for (;;) {
         if (sensorSubdevUnder(root, nodePath)) return true;
         if (std::chrono::steady_clock::now() >= deadline) return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+        if (stop) {
+            if (stop(pollMs)) return false;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+        }
     }
 }
 
 // The secondary's check in main(), before app.start(): is there a sensor on its port? A boot may not have probed one
 // that config.txt names, so with `configNamesIt` it looks again every pollMs up to timeoutMs; without, at once.
-// Fills *why with the one log line when there is none.
+// Fills *why with the one log line when there is none. `stop` ends the wait at a signal, as in waitForSensorSubdev.
 inline bool secondaryHasSensor(const fs::path &root, const std::string &value, bool configNamesIt, int timeoutMs,
-                               int pollMs, std::string *why)
+                               int pollMs, std::string *why, const std::function<bool(int)> &stop = {})
 {
     const Node node = resolve(root, value);
     if (!node.valid) {
         if (why) *why = "ApertarCore camera " + value + ": no such I2C node or port; nothing to run, exiting.";
         return false;
     }
-    if (waitForSensorSubdev(root, node.path, configNamesIt ? timeoutMs : 0, pollMs)) return true;
+    bool stopped = false;
+    const std::function<bool(int)> noteStop = [&](int ms) { return stopped = stop(ms); };
+    if (waitForSensorSubdev(root, node.path, configNamesIt ? timeoutMs : 0, pollMs, stop ? noteStop : stop)) return true;
+    if (stopped) {
+        if (why) *why = "ApertarCore camera " + value + ": stopped by a signal while waiting for a sensor on " + node.path + ".";
+        return false;
+    }
     if (why)
         *why = "ApertarCore camera " + value + ": no sensor on " + node.path + (configNamesIt ? " after the wait" : "") +
                "; nothing to run, exiting.";
     return false;
+}
+
+// --check-dual, the cam1 unit's ExecCondition, and the relay's configured test: is this a two-sensor rig for the Core
+// `value` names? True only when a sensor is on that port AND another on cam0's, the primary's. A port config.txt names
+// is looked at again every pollMs up to timeoutMs (a boot may not have probed it yet); a port it does not name, at
+// once. sysfs and config.txt only. Fills *why with the one log line either way.
+inline bool dualSensorsPresent(const fs::path &root, const std::string &value, int timeoutMs, int pollMs, std::string *why)
+{
+    const Node own = resolve(root, value);
+    const Node primary = resolve(root, "cam0");
+    const std::string name = own.port.empty() ? value : own.port;
+    if (!own.valid || !primary.valid || own.path == primary.path) {
+        if (why)
+            *why = "ApertarCore dual check: " + (!own.valid ? "'" + value + "' is no I2C node or port"
+                                                 : !primary.valid ? std::string("cam0 does not resolve")
+                                                                  : value + " is cam0's own port") +
+                   "; one camera.";
+        return false;
+    }
+    const bool ownNamed = configNamesPort(root, own.port);
+    const bool primaryNamed = configNamesPort(root, "cam0");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        const bool ownFound = sensorSubdevUnder(root, own.path);
+        const bool primaryFound = sensorSubdevUnder(root, primary.path);
+        if (ownFound && primaryFound) {
+            if (why) *why = "ApertarCore dual check: a sensor on cam0 and on " + name + "; two cameras.";
+            return true;
+        }
+        const bool waitOn = (ownFound || ownNamed) && (primaryFound || primaryNamed);
+        if (!waitOn || std::chrono::steady_clock::now() >= deadline) {
+            if (why)
+                *why = "ApertarCore dual check: no sensor on " + (!primaryFound ? std::string("cam0 (") + primary.path
+                                                                                : name + " (" + own.path) +
+                       ")" + (waitOn ? " after the wait" : "") + "; one camera.";
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+    }
 }
 
 } // namespace apertar::cameraport

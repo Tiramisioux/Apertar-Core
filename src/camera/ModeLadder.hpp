@@ -1,6 +1,6 @@
-// Mode ladder (T34): pure logic, no libcamera, so it compiles and is tested on any host.
-// CameraController owns the sanitiser, so it supplies each rung's state (valid, usable,
-// ceiling) as plain numbers; this file parses, validates, chooses and prints.
+// Dynamic resolution (the mode ladder): pure logic, no libcamera, so it compiles and is tested on any host.
+// CameraController owns the sanitiser, so it supplies each mode's state (valid, usable,
+// ceiling) as plain numbers; this file parses, validates, orders, chooses and prints.
 #pragma once
 
 #include <algorithm>
@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-#include <apertar/core/Types.hpp>
-
 namespace apertar::ladder {
 
 struct Rung {
@@ -19,34 +17,21 @@ struct Rung {
     uint32_t height = 2160;
     uint32_t bits = 12;       // 10, 12 or 16
     bool clearHdr = false;
-    double threshold = 0.0;   // highest FPS this rung serves; 0 = the mode's own ceiling
-    // The raw format of this resolution: "none" (uncompressed cDNG), "lossless_jpeg", "lossy_3to1" or
-    // "lossy_5to1" (lossy DNG, no Clear HDR). Empty = the default: Clear HDR uncompressed, SDR lossless.
+    // The raw format the table gives this mode: "none" (uncompressed cDNG), "lossless_jpeg", or empty = the default:
+    // Clear HDR uncompressed, SDR lossless. Set by CameraController from the table's cell; never saved or parsed.
     std::string compression;
-    CdngLog cdngLog = CdngLog::Off;  // CineMate Log for this resolution: off, or on (one step below the source depth)
 };
 
-inline bool knownCompression(const std::string &c)
-{
-    return c.empty() || c == "none" || c == "lossless_jpeg" || c == "lossy_3to1" || c == "lossy_5to1";
-}
-
-// The depth this resolution stores through CineMate Log, 0 = linear.
-inline unsigned logBits(const Rung &r)
-{
-    return cdngLogStoredBits(r.cdngLog, r.bits);
-}
-
-// What this resolution records with: the named compression, else the default for its class.
+// What this mode records with: the named compression, else the default for its class.
 inline std::string effectiveCompression(const Rung &r)
 {
     return !r.compression.empty() ? r.compression : (r.clearHdr ? "none" : "lossless_jpeg");
 }
 
 struct Ladder {
-    bool enabled = false;     // the toggle: Core honours the ladder
-    bool rampReady = false;   // with Speed Ramp on: takes start in the top rung
-    std::vector<Rung> rungs;  // first = preferred mode, serves the lowest FPS; thresholds rise
+    bool enabled = false;     // Dynamic resolution is on: Core honours the table
+    bool tdnOff = false;      // dynres_tdn=off_in_4k: turn preview temporal denoise off for an unbinned mode, back on for a binned one
+    std::vector<Rung> rungs;  // the enabled modes, empty = the default list; the order of use is tryOrder's
     // The WebUI's aspect filter on Activated sensor modes, the ratios as the card labels them ("16:9",
     // "2.39:1"); empty = All. Kept here so the camera remembers it; it never changes which mode runs.
     std::vector<std::string> aspects;
@@ -85,46 +70,11 @@ inline std::string label(const Rung &r)       // "4K Clear HDR 16-bit", "3840x20
     return size + (r.clearHdr ? " Clear HDR " : " SDR ") + std::to_string(r.bits) + "-bit";
 }
 
-// One number per rung, in and out of takes.
-inline double rungCeiling(const Rung &r, const RungState &s)
-{
-    if (!s.usable || s.modeCeiling <= 0.0)
-        return 0.0;
-    return r.threshold > 0.0 ? std::min(r.threshold, s.modeCeiling) : s.modeCeiling;
-}
-
-inline double ladderCeiling(const Ladder &l, const std::vector<RungState> &s)
-{
-    double top = 0.0;
-    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
-        top = std::max(top, rungCeiling(l.rungs[i], s[i]));
-    return top;
-}
-
-// The first usable rung that reaches targetFps (upper bound inclusive). If none does,
-// the usable rung with the highest ceiling. -1 when no rung is usable.
-inline int chooseRung(const Ladder &l, const std::vector<RungState> &s, double targetFps)
-{
-    int best = -1;
-    double bestCeiling = 0.0;
-    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
-        const double ceiling = rungCeiling(l.rungs[i], s[i]);
-        if (ceiling <= 0.0)
-            continue;
-        if (ceiling >= targetFps - 0.0005)
-            return static_cast<int>(i);
-        if (ceiling > bestCeiling) {
-            bestCeiling = ceiling;
-            best = static_cast<int>(i);
-        }
-    }
-    return best;
-}
-
-// Resolution text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]], joined by ",".
-// log = CineMate Log on (one step down); log10 and log8 are old spellings that still parse as log; absent = off.
-// Example: 3840x2160:16:hdr:25:none:log,3840x2160:12:sdr::lossless_jpeg
-inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::string &error)
+// A list of modes as the settings and set_mode_ladder carry it: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",". The text of
+// an old ladder has up to three more fields (threshold, compression, Log); they are read and dropped: the table
+// decides them now.
+// Example: 3840x2160:16:hdr,3840x2160:12:sdr
+inline bool parseModes(const std::string &text, std::vector<Rung> &out, std::string &error)
 {
     out.clear();
     std::stringstream list(text);
@@ -135,13 +85,11 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
         std::string part;
         while (std::getline(fields, part, ':'))
             f.push_back(part);
-        if (!item.empty() && item.back() == ':')
-            f.push_back("");
         Rung r;
         char *end = nullptr;
         const auto x = f.empty() ? std::string::npos : f[0].find('x');
         if (f.size() < 3 || f.size() > 6 || x == std::string::npos) {
-            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION[:log|log10|log8]]].";
+            error = "\"" + item + "\": expected WIDTHxHEIGHT:BITS:hdr|sdr.";
             return false;
         }
         r.width = static_cast<uint32_t>(std::strtoul(f[0].c_str(), &end, 10));
@@ -153,27 +101,6 @@ inline bool parseRungs(const std::string &text, std::vector<Rung> &out, std::str
             return false;
         }
         r.clearHdr = f[2] == "hdr";
-        if (f.size() >= 4 && !f[3].empty()) {
-            r.threshold = std::strtod(f[3].c_str(), &end);
-            if (!end || *end != '\0' || !(r.threshold > 0.0 && r.threshold <= 280.0)) {
-                error = "\"" + item + "\": the threshold must be an FPS above 0 and at most 280, or empty.";
-                return false;
-            }
-        }
-        if (f.size() >= 5) {
-            r.compression = f[4];
-            if (!knownCompression(r.compression)) {
-                error = "\"" + item + "\": compression must be none, lossless_jpeg, lossy_3to1 or lossy_5to1.";
-                return false;
-            }
-        }
-        if (f.size() == 6) {
-            if (f[5] == "log" || f[5] == "log10" || f[5] == "log8") r.cdngLog = CdngLog::Auto;
-            else {
-                error = "\"" + item + "\": the last field must be log.";
-                return false;
-            }
-        }
         out.push_back(r);
     }
     if (out.empty()) {
@@ -190,18 +117,13 @@ inline std::string number(double v)
     return o.str();
 }
 
-inline std::string rungsText(const std::vector<Rung> &rungs)
+// The enabled modes as saved: WIDTHxHEIGHT:BITS:hdr|sdr joined by ",".
+inline std::string modesText(const std::vector<Rung> &rungs)
 {
     std::string text;
-    for (const auto &r : rungs) {
-        if (!text.empty())
-            text += ",";
-        text += std::to_string(r.width) + "x" + std::to_string(r.height) + ":" + std::to_string(r.bits) + ":" +
-                (r.clearHdr ? "hdr" : "sdr") +
-                (r.threshold > 0.0 || !r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + (r.threshold > 0.0 ? number(r.threshold) : "") : "") +
-                (!r.compression.empty() || r.cdngLog != CdngLog::Off ? ":" + r.compression : "") +
-                (r.cdngLog == CdngLog::Auto ? ":log" : "");
-    }
+    for (const auto &r : rungs)
+        text += (text.empty() ? "" : ",") + std::to_string(r.width) + "x" + std::to_string(r.height) + ":" +
+                std::to_string(r.bits) + ":" + (r.clearHdr ? "hdr" : "sdr");
     return text;
 }
 
@@ -246,68 +168,27 @@ inline std::string aspectsText(const std::vector<std::string> &aspects)
     return text;
 }
 
-// Errors refuse a save. Warnings are shown and saved (they depend on the format).
-inline void validate(const Ladder &l, const std::vector<RungState> &s,
-                     std::vector<std::string> &errors, std::vector<std::string> &warnings)
-{
-    const auto name = [](size_t i) { return "Resolution " + std::to_string(i + 1); };
-    if (l.rungs.size() > 8)
-        errors.push_back("At most 8 resolutions.");
-    double lastThreshold = 0.0, reached = 0.0;
-    size_t lastThresholdRung = 0;
-    for (size_t i = 0; i < l.rungs.size(); ++i) {
-        const Rung &r = l.rungs[i];
-        for (size_t j = 0; j < i; ++j)
-            if (sameMode(r, l.rungs[j]))
-                errors.push_back(name(i) + " repeats resolution " + std::to_string(j + 1) + ".");
-        if (r.threshold > 0.0) {
-            if (lastThreshold > 0.0 && r.threshold <= lastThreshold)
-                errors.push_back("Thresholds must rise down the list: " + name(i) + " (" + number(r.threshold) +
-                                 " fps) is not above resolution " + std::to_string(lastThresholdRung + 1) + " (" +
-                                 number(lastThreshold) + " fps).");
-            lastThreshold = r.threshold;
-            lastThresholdRung = i;
-        }
-        if (r.clearHdr && (r.compression == "lossy_3to1" || r.compression == "lossy_5to1"))
-            errors.push_back(name(i) + ": lossy DNG does not support Clear HDR.");
-        if (i >= s.size())
-            continue;
-        if (!s[i].valid) {
-            errors.push_back(name(i) + ": " + label(r) + " is not a mode of this sensor.");
-            continue;
-        }
-        if (!s[i].usable) {
-            warnings.push_back(name(i) + " (" + label(r) + ") cannot run in this format; it is skipped.");
-            continue;
-        }
-        if (r.threshold > s[i].modeCeiling + 0.0005)
-            warnings.push_back(name(i) + " stops at " + number(s[i].modeCeiling) + " fps here, not " +
-                               number(r.threshold) + ".");
-        const double ceiling = rungCeiling(r, s[i]);
-        if (ceiling <= reached + 0.0005)
-            warnings.push_back(name(i) + " is never used: an earlier resolution already reaches " + number(reached) + " fps.");
-        reached = std::max(reached, ceiling);
-        if (i > 0) {
-            const Rung &p = l.rungs[i - 1];
-            if (p.clearHdr != r.clearHdr || p.bits != r.bits)
-                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) + " changes " +
-                                   label(p) + " to " + label(r) + ": the look changes between takes.");
-            if (p.width != r.width || p.height != r.height)
-                warnings.push_back("Resolution " + std::to_string(i) + " -> " + std::to_string(i + 1) +
-                                   " changes the frame size.");
-        }
-    }
-}
-
 // A sensor mode the editor may add (from the probe), with its state in this format.
 struct PoolEntry {
     Rung mode;
     RungState state;
 };
 
-// The get_mode_ladder / set_mode_ladder reply. running = 0-based rung index, -1 = off the ladder.
+// What the Dynamic resolution pane shows about one step beside its cap: the table's own number and where it comes
+// from, the sentence, and whether the step is ever chosen. CameraController fills it from the table.
+struct StepInfo {
+    double fps30 = 0.0;       // the table's number before the levers and the rounding; 0 = no row
+    double fpsShort = 0.0;    // what the mode holds for takes up to about 8 minutes; 0 = none known
+    std::string basis;        // measured, derived, probable, unconfirmed, or sensor (no measurement)
+    std::string wall;         // back end, encoder, drive, sensor or TDN
+    std::string why;
+    bool neverUsed = false;   // an earlier step already holds every fps this one does
+};
+
+// The get_mode_ladder / set_mode_ladder reply. running = 0-based rung index, -1 = off the ladder. info = one entry
+// per rung of l, for the "steps" list.
 inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int running,
-                          const std::vector<PoolEntry> &pool,
+                          const std::vector<StepInfo> &info, const std::vector<PoolEntry> &pool,
                           const std::vector<std::string> &errors, const std::vector<std::string> &warnings)
 {
     const auto quote = [](const std::string &t) {  // labels and messages come from this file: ASCII
@@ -330,8 +211,6 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"bits\":" + std::to_string(r.bits) + ",\"clear_hdr\":" + (r.clearHdr ? "true" : "false") +
                ",\"label\":" + quote(label(r)) + ",\"class\":" + quote(classLabel(r)) +
                ",\"compression\":" + quote(effectiveCompression(r)) +
-               ",\"compression_set\":" + (r.compression.empty() ? "false" : "true") +
-               ",\"log_bits\":" + std::to_string(logBits(r)) +
                ",\"usable\":" + (st.usable ? "true" : "false") + ",\"mode_ceiling\":" + number(st.modeCeiling) +
                ",\"window_w\":" + std::to_string(st.windowWidth) + ",\"window_h\":" + std::to_string(st.windowHeight) +
                ",\"binning\":" + std::to_string(st.binning) +
@@ -340,16 +219,32 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
                ",\"lossless_jpeg\":" + number(st.ceilingBy[1]) + ",\"lossy_3to1\":" + number(st.ceilingBy[2]) +
                ",\"lossy_5to1\":" + number(st.ceilingBy[3]) + "}";
     };
+    const auto ceilingOf = [](const RungState &st) { return st.usable ? std::max(st.modeCeiling, 0.0) : 0.0; };
+    double top = 0.0;
+    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
+        top = std::max(top, ceilingOf(s[i]));
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
-        ",\"ramp_ready\":" + (l.rampReady ? "true" : "false") + ",\"resolutions_text\":" + quote(rungsText(l.rungs)) +
+        ",\"tdn\":" + (l.tdnOff ? "\"off_in_4k\"" : "\"keep\"") +
+        ",\"resolutions_text\":" + quote(modesText(l.rungs)) +
         ",\"aspects\":" + list(l.aspects) +
-        ",\"ceiling\":" + number(ladderCeiling(l, s)) + ",\"running_resolution\":" + std::to_string(running + 1) +
+        ",\"ceiling\":" + number(top) + ",\"running_resolution\":" + std::to_string(running + 1) +
         ",\"resolutions\":[";
-    double from = 0.0;  // a rung serves (from, ceiling]
+    double from = 0.0;  // a mode serves (from, ceiling]
     for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
-        const double ceiling = rungCeiling(l.rungs[i], s[i]);
-        out += std::string(i ? "," : "") + "{" + mode(l.rungs[i], s[i]) + ",\"threshold\":" +
-               number(l.rungs[i].threshold) + ",\"ceiling\":" + number(ceiling) + ",\"from\":" + number(from) + "}";
+        const double ceiling = ceilingOf(s[i]);
+        out += std::string(i ? "," : "") + "{" + mode(l.rungs[i], s[i]) + ",\"ceiling\":" + number(ceiling) +
+               ",\"from\":" + number(from) + "}";
+        from = std::max(from, ceiling);
+    }
+    out += "],\"steps\":[";
+    from = 0.0;
+    for (size_t i = 0; i < l.rungs.size() && i < s.size() && i < info.size(); ++i) {
+        const double ceiling = ceilingOf(s[i]);
+        out += std::string(i ? "," : "") + "{\"label\":" + quote(label(l.rungs[i])) +
+               ",\"cap\":" + number(ceiling) + ",\"from\":" + number(from) + ",\"fps30\":" + number(info[i].fps30) +
+               ",\"fps_short\":" + number(info[i].fpsShort) + ",\"basis\":" + quote(info[i].basis) +
+               ",\"wall\":" + quote(info[i].wall) + ",\"never_used\":" + (info[i].neverUsed ? "true" : "false") +
+               ",\"why\":" + quote(info[i].why) + "}";
         from = std::max(from, ceiling);
     }
     out += "],\"pool\":[";
@@ -358,53 +253,116 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
 }
 
-// mode_ladder.conf: one key per line, so a person can read it. A ladder save rewrites it whole, with this
-// header. A filter save writes a missing or empty file whole; in any other it replaces the aspects= line and
-// puts it last (withAspectsLine), so the header stays as it is.
-inline std::string fileText(const Ladder &l)
+// Errors refuse a save: a repeated mode, a mode this sensor does not have. A warning is shown and saved.
+inline void validateModes(const Ladder &l, const std::vector<RungState> &s,
+                          std::vector<std::string> &errors, std::vector<std::string> &warnings)
 {
-    return "# Apertar mode ladder (T34). Core writes this file; edit it in the WebUI (Settings > Modes: Activated sensor modes and Mode Ladder).\n"
-           "enabled=" + std::string(l.enabled ? "true" : "false") + "\n"
-           "ramp_ready=" + std::string(l.rampReady ? "true" : "false") + "\n"
-           "resolutions=" + rungsText(l.rungs) + "\n"
-           "aspects=" + aspectsText(l.aspects) + "\n";
-}
-
-// The file with its aspects= line replaced by one at the end (as fileText puts it; several become one). Every
-// other line stays byte for byte, so a filter save never rewrites what this Core could not read: a resolutions
-// line from another build, a CRLF hand edit, an unknown key. A last line without its newline gets one.
-inline std::string withAspectsLine(const std::string &text, const std::vector<std::string> &aspects)
-{
-    std::string out;
-    std::stringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        const auto eq = line.find('=');
-        if (eq != std::string::npos && line.compare(0, eq, "aspects") == 0)
-            continue;
-        out += line + "\n";
+    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
+        for (size_t j = 0; j < i; ++j)
+            if (sameMode(l.rungs[i], l.rungs[j]))
+                errors.push_back(label(l.rungs[i]) + " is listed twice.");
+        if (!s[i].valid)
+            errors.push_back(label(l.rungs[i]) + " is not a mode of this sensor.");
+        else if (!s[i].usable)
+            warnings.push_back(label(l.rungs[i]) + " cannot run in this format; it is skipped.");
     }
-    return out + "aspects=" + aspectsText(aspects) + "\n";
 }
 
-inline Ladder parseFile(const std::string &text)
+// The ladder from the text of its settings (camera_settings.conf keys): the switch, the enabled modes and the
+// aspect filter. A modes text that does not parse is an empty list, which means the default list; a bad filter
+// is All.
+inline Ladder fromText(bool enabled, const std::string &modes, const std::string &aspects, bool tdnOff = false)
 {
     Ladder l;
+    std::string error;
+    l.enabled = enabled;
+    l.tdnOff = tdnOff;
+    if (!modes.empty() && !parseModes(modes, l.rungs, error))
+        l.rungs.clear();
+    if (!parseAspects(aspects, l.aspects, error))
+        l.aspects.clear();
+    return l;
+}
+
+// mode_ladder.conf, the file the ladder lived in before camera_settings.conf held it: one key per line.
+// Read only to take an old file over. A resolutions line with thresholds, compression and Log fields reads as its
+// modes: the table decides the rest now.
+inline Ladder parseFile(const std::string &text)
+{
+    bool enabled = false;
+    std::string resolutions, aspects;
     std::stringstream in(text);
-    std::string line, error;
+    std::string line;
     while (std::getline(in, line)) {
         const auto eq = line.find('=');
         if (line.empty() || line[0] == '#' || eq == std::string::npos)
             continue;
         const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
-        if (key == "enabled") l.enabled = value == "true";
-        else if (key == "ramp_ready") l.rampReady = value == "true";
-        else if ((key == "resolutions" || key == "rungs") && !parseRungs(value, l.rungs, error)) l.rungs.clear();   // "rungs": the first name
-        else if (key == "aspects" && !parseAspects(value, l.aspects, error)) l.aspects.clear();   // a bad filter is All; the rungs stay
+        if (key == "enabled") enabled = value == "true";
+        else if (key == "resolutions" || key == "rungs") resolutions = value;   // "rungs": the first name
+        else if (key == "aspects") aspects = value;
     }
-    if (l.rungs.empty())
-        l.enabled = false;  // a broken file never switches the camera
-    return l;
+    return fromText(enabled, resolutions, aspects);
+}
+
+// Dynamic resolution: one enabled mode with what the camera knows about it right now.
+struct Candidate {
+    Rung mode;
+    bool usable = false;    // the sanitiser keeps it in the current format
+    bool crop = false;      // it reads a smaller window of the sensor than the full frame
+    double cap = 0.0;       // the highest fps it serves, a step of SustainedFps.hpp; 0 = not used
+};
+
+// The order the modes are tried in, best first: Clear HDR before SDR, deeper bit depth, a mode of the full frame
+// before a crop-in, more pixels first. Indexes into the candidates.
+inline std::vector<size_t> tryOrder(const std::vector<Candidate> &c)
+{
+    std::vector<size_t> order(c.size());
+    for (size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&c](size_t a, size_t b) {
+        const Rung &x = c[a].mode, &y = c[b].mode;
+        if (x.clearHdr != y.clearHdr) return x.clearHdr;
+        if (x.bits != y.bits) return x.bits > y.bits;
+        if (c[a].crop != c[b].crop) return !c[a].crop;
+        return uint64_t(x.width) * x.height > uint64_t(y.width) * y.height;
+    });
+    return order;
+}
+
+// The TDN option (dynres_tdn=off_in_4k): preview temporal denoise goes off when an unbinned mode (4K, a crop) is
+// chosen, and comes back on for a binned one, but only if the option turned it off (restore). Off: nothing changes.
+struct TdnChoice {
+    bool tdn;
+    bool restore;
+};
+
+inline TdnChoice tdnForMode(bool optionOn, bool unbinned, bool tdn, bool restore)
+{
+    if (optionOn && unbinned && tdn)
+        return { false, true };
+    if (optionOn && !unbinned && restore)
+        return { true, false };
+    return { tdn, restore };
+}
+
+// The first usable mode in that order whose cap reaches targetFps (upper bound inclusive). If none does, the
+// usable mode with the highest cap (the first of equals). An index into the candidates; -1 when none is usable.
+inline int chooseMode(const std::vector<Candidate> &c, double targetFps)
+{
+    int best = -1;
+    double bestCap = 0.0;
+    for (const size_t i : tryOrder(c)) {
+        if (!c[i].usable || c[i].cap <= 0.0)
+            continue;
+        if (c[i].cap >= targetFps - 0.0005)
+            return static_cast<int>(i);
+        if (c[i].cap > bestCap) {
+            bestCap = c[i].cap;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
 }
 
 } // namespace apertar::ladder

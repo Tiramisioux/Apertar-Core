@@ -167,7 +167,7 @@ std::string i2cDevicePath(int busNumber)
 
 } // namespace
 
-Pcf8574Input::Pcf8574Input(ActionCallback actionCallback)
+Pcf8574Input::Pcf8574Input(PressCallback actionCallback)
     : actionCallback_(std::move(actionCallback))
 {
 }
@@ -284,6 +284,8 @@ Pcf8574Input::Config Pcf8574Input::loadConfig()
                     config.debounceMs = std::clamp(*parsed, 0, 1000);
             } else if (key == "active_low") {
                 config.activeLow = parseConfigBool(value, config.activeLow);
+            } else if (key == "invert_on_start") {
+                config.invertOnStart = parseConfigBool(value, config.invertOnStart);
             } else {
                 std::string base = key;
                 int gesture = -1;
@@ -372,11 +374,11 @@ void Pcf8574Input::closeDevice(int *fd) const
     }
 }
 
-void Pcf8574Input::emitAction(const std::string &action)
+bool Pcf8574Input::emitAction(const std::string &action)
 {
     if (action.empty() || !actionCallback_)
-        return;
-    actionCallback_(action);
+        return false;
+    return actionCallback_(action);
 }
 
 void Pcf8574Input::setLastError(const std::string &error)
@@ -395,6 +397,7 @@ void Pcf8574Input::run()
     uint8_t observedPressedMask = 0;
     uint8_t stablePressedMask = 0;
     uint8_t invertedMask = 0;
+    uint8_t heldAtStartMask = 0;   // pins held when the device was opened: counted from their release
     auto observedChangedAt = std::chrono::steady_clock::now();
     bool haveSample = false;
     std::array<hardware::ButtonGesture, 8> gestures{};
@@ -422,13 +425,18 @@ void Pcf8574Input::run()
 
         const uint8_t levelMask = config_.activeLow ? static_cast<uint8_t>(~raw) : raw;
         if (!haveSample) {
-            // Like the GPIO buttons (Cinemate): a mapped pin that reads pressed at start is wired the other way round
-            // (a 1-0-1, normally closed button), so its levels are swapped from now on.
+            // invert_on_start=true, like the GPIO buttons (Cinemate): a mapped pin that reads pressed at start is wired
+            // the other way round (a 1-0-1, normally closed button), so its levels are swapped from now on.
             invertedMask = 0;
             for (int pin = 0; pin < 8; ++pin) {
-                if ((levelMask & (1u << pin)) && pinMapped(config_.actions, config_.gestureActions, pin)) {
+                if (!(levelMask & (1u << pin)) || !pinMapped(config_.actions, config_.gestureActions, pin))
+                    continue;
+                if (config_.invertOnStart) {
                     invertedMask |= static_cast<uint8_t>(1u << pin);
                     std::cerr << "PCF8574 input: pin " << pin << " reads pressed at start; taken as inverted (a 1-0-1 button).\n";
+                } else {
+                    std::cerr << "PCF8574 input: pin " << pin << " reads pressed at start; ignored until released. "
+                              << "If it is a normally closed button, set invert_on_start=true in [pcf8574].\n";
                 }
             }
         }
@@ -437,6 +445,7 @@ void Pcf8574Input::run()
         if (!haveSample) {
             observedPressedMask = pressedMask;
             stablePressedMask = pressedMask;
+            heldAtStartMask = config_.invertOnStart ? 0 : pressedMask;
             observedChangedAt = now;
             haveSample = true;
         } else if (pressedMask != observedPressedMask) {
@@ -451,20 +460,26 @@ void Pcf8574Input::run()
 
         // Press at once; single, double and triple click and hold counted like the GPIO buttons (ButtonGesture).
         const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        heldAtStartMask &= stablePressedMask;
         for (int pin = 0; pin < 8; ++pin) {
+            if (heldAtStartMask & (1u << pin))
+                continue;
             const auto &more = config_.gestureActions[pin];
             for (const auto event : gestures[pin].update((stablePressedMask & (1u << pin)) != 0, nowMs)) {
                 if (seenCallback_) {
                     static const char *const suffixes[] = {"", "_single", "_double", "_triple", "_hold"};
                     seenCallback_("pcf8574|pin" + std::to_string(pin) + suffixes[static_cast<size_t>(event)]);
                 }
+                bool woke = false;
                 switch (event) {
-                case hardware::ButtonGesture::Event::Press: emitAction(config_.actions[pin]); break;
-                case hardware::ButtonGesture::Event::Single: emitAction(more[0]); break;
-                case hardware::ButtonGesture::Event::Double: emitAction(more[1]); break;
-                case hardware::ButtonGesture::Event::Triple: emitAction(more[2]); break;
-                case hardware::ButtonGesture::Event::Hold: emitAction(more[3]); break;
+                case hardware::ButtonGesture::Event::Press: woke = emitAction(config_.actions[pin]); break;
+                case hardware::ButtonGesture::Event::Single: woke = emitAction(more[0]); break;
+                case hardware::ButtonGesture::Event::Double: woke = emitAction(more[1]); break;
+                case hardware::ButtonGesture::Event::Triple: woke = emitAction(more[2]); break;
+                case hardware::ButtonGesture::Event::Hold: woke = emitAction(more[3]); break;
                 }
+                if (woke)
+                    gestures[pin].consume();   // A wake press does nothing else.
             }
         }
 

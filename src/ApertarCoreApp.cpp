@@ -179,19 +179,6 @@ std::string errorReply(int id, const std::string &message)
     return out.str();
 }
 
-std::string errorReplyBody(int id, const std::string &message, const std::string &body)
-{
-    std::ostringstream out;
-    out << "{\"ok\":false";
-    if (id >= 0)
-        out << ",\"id\":" << id;
-    out << ",\"error\":\"" << escapeJson(message) << "\"";
-    if (!body.empty())
-        out << "," << body;
-    out << "}";
-    return out.str();
-}
-
 std::string imuStatusBody(bool includeLiveSample)
 {
     const Mpu6050RecordingSession::ConfigSnapshot imu =
@@ -272,6 +259,7 @@ std::string bufferSettingMembers()
         + ",\"storage_preroll_fps\":" + storagepreroll::prerollFpsText(storagepreroll::prerollFps())
         + ",\"storage_preroll_last\":\"" + escapeJson(storagepreroll::prerollLast()) + "\""
         + ",\"frames_per_folder\":" + std::to_string(bufferbudget::framesPerFolderRequest().load(std::memory_order_acquire))
+        + ",\"split_mode\":\"" + bufferbudget::splitModeName(bufferbudget::splitModeRequest().load(std::memory_order_acquire)) + "\""
         + ",\"frames_per_folder_env\":" + (std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") && *std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER") ? "true" : "false")
         + ",\"clip_merge_enabled\":" + (bufferbudget::clipMergeRequest().load(std::memory_order_acquire) ? "true" : "false")
         + ",\"clip_merge_env_off\":" + (bufferbudget::clipMergeEnvOff(std::getenv("APERTAR_CLIP_MERGE")) ? "true" : "false");
@@ -290,6 +278,8 @@ void refreshBufferRequest()
     const bufferbudget::BufferConf storageConf = bufferbudget::parseBufferConf(hardware::configStore().currentText());
     bufferbudget::framesPerFolderRequest().store(
         bufferbudget::requestedFramesPerFolder(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
+    bufferbudget::splitModeRequest().store(
+        bufferbudget::requestedSplitMode(std::getenv("APERTAR_CDNG_FRAMES_PER_FOLDER"), storageConf), std::memory_order_release);
     bufferbudget::clipMergeRequest().store(
         bufferbudget::requestedClipMerge(std::getenv("APERTAR_CLIP_MERGE"), storageConf), std::memory_order_release);
 }
@@ -335,12 +325,17 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"fps_take_max\":" << settings.fpsTakeMax
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
+        << ",\"limit_fps\":" << settings.limitFps
+        << ",\"limit_short_fps\":" << settings.limitShortFps
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -375,6 +370,7 @@ std::string settingsBody(const CaptureSettings &settings)
         << ",\"clear_hdr\":" << (settings.clearHdr ? "true" : "false")
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"preview_tdn\":" << (settings.previewTdn ? "true" : "false")
+        << ",\"stop_on_dropped_frame\":" << (settings.stopOnDroppedFrame ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
@@ -1909,6 +1905,7 @@ struct SharedUiSettingsSnapshot
     std::string externalMonitorInfoOverlay = "On";
     std::string externalMonitorOrientation = "Landscape";
     std::string timecodeMode = "Free Run";
+    bool fileTimecodeSeparate = false;   // true once the operator sets the file timecode apart from timecodeMode
     bool photoModeEnabled = false;
     bool photoLongExposureEnabled = false;
     bool photoBracketingEnabled = false;
@@ -1925,7 +1922,7 @@ struct SharedUiSettingsSnapshot
     bool recordingFrameEnabled = false;
     bool frameBufferBarEnabled = false;
     bool recordingRedTimecodeEnabled = true;
-    bool audioRecordedOutlineEnabled = true;
+    bool audioRecordedOutlineEnabled = false;
     bool recordAudioEnabled = false;
     bool soundRecorderEnabled = false;
     bool recordGyroEnabled = false;
@@ -2104,6 +2101,8 @@ SharedUiSettingsSnapshot readSharedUiSettings()
             snapshot.externalMonitorOrientation = normalizeExternalMonitorOrientationValue(value);
         else if (key == "timecodeMode")
             snapshot.timecodeMode = value == "Rec Run" ? "Rec Run" : "Free Run";
+        else if (key == "fileTimecodeSeparate")
+            snapshot.fileTimecodeSeparate = parseUiSettingsBool(value, false);
         else if (key == "photoModeEnabled")
             snapshot.photoModeEnabled = parseUiSettingsBool(value, snapshot.photoModeEnabled);
         else if (key == "photoLongExposureEnabled")
@@ -2236,7 +2235,7 @@ SharedUiSettingsSnapshot readSharedUiSettings()
     return snapshot;
 }
 
-// The dual-sensor settings as the `ui` object of /api/state and of the socket's get_state carries them (no braces).
+// The dual-sensor settings as the `ui` object of /api/state carries them (no braces).
 std::string dualSensorUiStateJson(const SharedUiSettingsSnapshot &ui)
 {
     return std::string("\"dual_sensor_enabled\":") + (ui.dualSensorEnabled ? "true" : "false")
@@ -3654,11 +3653,13 @@ std::filesystem::path bootConfigPath()
     return kBootConfigPath;
 }
 
-// One writer at a time: the fan mode and the Boot config card both read, change and replace config.txt.
-std::mutex &bootConfigMutex()
+// APERTAR_BOOT_CONFIG_TEXT=on: the card may save config.txt as text typed by hand (Edit file, the text field). Off, as in
+// 1.6.0, Core writes only the lines its own controls generate, so nobody who can reach the WebUI can hand it a file to
+// install as root. Read from Core's environment, so it is set over ssh only, as APERTAR_SCRIPT_PATHS=ssh.
+bool bootConfigTextEnabled()
 {
-    static std::mutex mutex;
-    return mutex;
+    const char *value = std::getenv("APERTAR_BOOT_CONFIG_TEXT");
+    return value && std::string(value) == "on";
 }
 
 bool fsyncPath(const std::filesystem::path &path)
@@ -3770,7 +3771,6 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
     const std::string existing = readTextFileRaw(bootConfigPath());
     if (existing.empty()) {
         if (errorMessage)
@@ -3795,11 +3795,25 @@ bool applyFanMode(const std::string &mode, std::string *errorMessage)
 
 // ---- Boot config card (System pane): config.txt read and edited in place, see hardware/BootConfigText.hpp ----
 
+// One device-tree file, from the paths RecordingCapabilities tries in the same order.
+std::string readDeviceTreeFile(const std::string &name)
+{
+    for (const char *base : {"/sys/firmware/devicetree/base/", "/proc/device-tree/"}) {
+        std::string text = readTextFileRaw(base + name);
+        if (!text.empty())
+            return text;
+    }
+    return {};
+}
+
 bootconf::Facts bootConfigFacts()
 {
     bootconf::Facts facts;
-    facts.board = bootconf::boardFromDeviceTree(readTextFileRaw("/proc/device-tree/compatible"),
-                                                readTextFileRaw("/proc/device-tree/model"));
+    std::string compatible = readDeviceTreeFile("compatible");
+    // A dev host has no device tree: with APERTAR_BOOT_CONFIG naming a copy, the copy is read as a Pi 5's. Nowhere else.
+    if (compatible.empty() && bootConfigPath() != std::filesystem::path(kBootConfigPath))
+        compatible = std::string("brcm,bcm2712\0", 13);
+    facts.board = bootconf::boardFromDeviceTree(compatible, readDeviceTreeFile("model"));
     std::set<std::string> names;
     std::error_code ec;
     for (const auto &entry : std::filesystem::directory_iterator(bootConfigPath().parent_path() / "overlays", ec))
@@ -3808,28 +3822,6 @@ bootconf::Facts bootConfigFacts()
     if (!names.empty())
         facts.overlays = std::move(names);
     return facts;
-}
-
-// The DRM connectors and whether they have modes: a DPI overlay shows a "connected" DPI connector even without a
-// panel, so this is information for the display question, not proof of a panel.
-std::string drmConnectorsJson()
-{
-    std::vector<std::string> items;
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
-        const std::string name = entry.path().filename().string();
-        if (name.rfind("card", 0) != 0 || name.find('-') == std::string::npos)
-            continue;
-        const std::string status = trimAscii(readTextFileRaw(entry.path() / "status"));
-        const std::string modes = readTextFileRaw(entry.path() / "modes");
-        items.push_back("{\"name\":" + bootconf::jsonString(name) + ",\"status\":" + bootconf::jsonString(status) +
-                        ",\"modes\":" + std::to_string(std::count(modes.begin(), modes.end(), '\n')) + "}");
-    }
-    std::sort(items.begin(), items.end());
-    std::string out = "[";
-    for (size_t i = 0; i < items.size(); ++i)
-        out += (i ? "," : "") + items[i];
-    return out + "]";
 }
 
 std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts)
@@ -3846,18 +3838,18 @@ std::string bootConfigJson(const std::string &text, const bootconf::Facts &facts
     return "{\"path\":" + bootconf::jsonString(path.string()) + ",\"readable\":" + (readable ? "true" : "false") +
            ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(text)) +
            ",\"helper\":" + (::access(kBootConfigHelper, X_OK) == 0 ? "true" : "false") +
+           ",\"text_editable\":" + (bootConfigTextEnabled() ? "true" : "false") +
            ",\"backup_path\":" + bootconf::jsonString(std::filesystem::exists(backup, ec) ? backup : std::string()) +
-           ",\"state\":" + bootconf::stateJson(state, facts) + ",\"drm\":" + drmConnectorsJson() +
+           ",\"state\":" + bootconf::stateJson(state, facts) +
            ",\"text\":" + bootconf::jsonString(text) + "}";
 }
 
+// A switch that decides whether a file is written: true or 1, false or 0, nothing else.
 std::optional<bool> boolFieldValue(const std::string &value)
 {
-    std::string v = value;
-    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (v == "true" || v == "1" || v == "on" || v == "yes")
+    if (value == "true" || value == "1")
         return true;
-    if (v == "false" || v == "0" || v == "off" || v == "no")
+    if (value == "false" || value == "0")
         return false;
     return std::nullopt;
 }
@@ -3903,44 +3895,42 @@ bool bootConfigRequestFrom(const ControlCommand &command, bootconf::Request *req
     return true;
 }
 
-struct BootConfigReply {
-    int status = 200;
-    std::string body;
-};
-
-BootConfigReply bootConfigGet(int id)
+// GET /api/boot-config: read only, no lock (the command that writes holds commandMutex_), as GET /api/config.
+std::string bootConfigGet()
 {
     const bootconf::Facts facts = bootConfigFacts();
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
-    return {200, okReply(id, "\"boot_config\":" + bootConfigJson(readTextFileRaw(bootConfigPath()), facts))};
+    return okReply(-1, "\"boot_config\":" + bootConfigJson(readTextFileRaw(bootConfigPath()), facts));
 }
 
-// set_boot_config / POST /api/boot-config. dry_run=true answers what would change without writing (the card's review).
-// A save carries the revision it was made against; a display change needs confirm_display=true (the DPI guard).
-BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional<std::string> &revision, bool browser)
+// set_boot_config. dry_run=true answers what would change without writing (the card's review). A save carries the
+// revision it was made against; a display change needs confirm_display=true (the DPI guard).
+std::string bootConfigSet(const ControlCommand &command)
 {
+    const std::optional<std::string> revision = command.string("revision");
+    if (command.string("text") && !bootConfigTextEnabled())
+        return errorReply(command.id, "config.txt is edited as text over ssh, not here.");
     bootconf::Request request;
     std::string error;
     if (!bootConfigRequestFrom(command, &request, &error))
-        return {400, errorReplyBody(command.id, error, "\"code\":\"invalid\"")};
-    const bool dryRun = boolFieldValue(command.string("dry_run").value_or("false")).value_or(false);
-    const bool confirmDisplay = boolFieldValue(command.string("confirm_display").value_or("false")).value_or(false);
+        return errorReply(command.id, error);
+    const auto dryRunValue = boolFieldValue(command.string("dry_run").value_or("false"));
+    const auto confirmDisplayValue = boolFieldValue(command.string("confirm_display").value_or("false"));
+    if (!dryRunValue || !confirmDisplayValue)
+        return errorReply(command.id, std::string(dryRunValue ? "confirm_display" : "dry_run") + " must be true or false.");
+    const bool dryRun = *dryRunValue;
+    const bool confirmDisplay = *confirmDisplayValue;
 
     const bootconf::Facts facts = bootConfigFacts();
-    std::lock_guard<std::mutex> lock(bootConfigMutex());
     const std::filesystem::path path = bootConfigPath();
     const std::string text = readTextFileRaw(path);
     if (text.empty())
-        return {500, errorReplyBody(command.id, "Could not read " + path.string() + ".", "\"code\":\"unreadable\"")};
+        return errorReply(command.id, "Could not read " + path.string() + ".");
     const std::string current = bootconf::revisionOf(text);
     if (!dryRun) {
-        if (!revision && browser)
-            return {409, errorReplyBody(command.id, "Apertar was updated: reload this page.", "\"code\":\"old_page\"")};
         if (revision && *revision != current)
-            return {409, errorReplyBody(command.id,
-                                        "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
-                                        "Reload the card and choose again.",
-                                        "\"code\":\"stale\",\"revision\":" + bootconf::jsonString(current))};
+            return errorReply(command.id,
+                              "config.txt changed since the card loaded it (the fan mode, or an edit by hand). "
+                              "Reload the card and choose again.");
     }
 
     // text: the file as the operator edited it on the card. The card's choices go on top of that text, and the result
@@ -3949,11 +3939,11 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
     if (edited) {
         const std::string problem = bootconf::textProblem(*edited);
         if (!problem.empty())
-            return {400, errorReplyBody(command.id, problem, "\"code\":\"invalid\"")};
+            return errorReply(command.id, problem);
     }
     bootconf::ApplyResult result = bootconf::applyRequest(edited ? *edited : text, request, facts);
     if (!result.ok)
-        return {400, errorReplyBody(command.id, result.error, "\"code\":\"refused\"")};
+        return errorReply(command.id, result.error);
     if (edited) {
         result.before = bootconf::readState(bootconf::parseDocument(text, facts.board), facts.board);
         result.changes = bootconf::lineChanges(text, result.text);
@@ -3963,26 +3953,24 @@ BootConfigReply bootConfigSet(const ControlCommand &command, const std::optional
         ",\"display_changed\":" + (result.displayChanged ? "true" : "false") +
         ",\"text\":" + bootconf::jsonString(result.text) + ",\"state\":" + bootconf::stateJson(result.after, facts);
     if (dryRun)
-        return {200, okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" +
-                                             bootconf::jsonString(current) + ",\"drm\":" + drmConnectorsJson())};
+        return okReply(command.id, "\"written\":false,\"dry_run\":true," + body + ",\"revision\":" + bootconf::jsonString(current));
     if (result.displayChanged && !confirmDisplay)
-        return {409, errorReplyBody(command.id,
-                                    "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
-                                    "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
-                                    "Send confirm_display=true to save anyway.",
-                                    "\"code\":\"confirm_display\",\"drm\":" + drmConnectorsJson())};
+        return errorReply(command.id,
+                          "This changes the display overlays. A DPI panel that is the camera's only screen stays dark "
+                          "after the reboot without them, and with them GPIO 0-27 (I2C bus 1 included) belong to the panel. "
+                          "Send confirm_display=true to save anyway.");
     if (result.changes.empty())
-        return {200, okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current))};
+        return okReply(command.id, "\"written\":false," + body + ",\"revision\":" + bootconf::jsonString(current));
 
     std::string how;
     bool denied = false;
     if (!writeBootConfigText(result.text, &error, &how, &denied))
-        return {denied ? 403 : 500, errorReplyBody(command.id, error, denied ? "\"code\":\"permission\"" : "\"code\":\"write_failed\"")};
+        return errorReply(command.id, error);
     std::cerr << "ApertarCore boot config: wrote " << path.string() << " (" << result.changes.size()
               << " line(s), via " << how << "); takes effect at the next reboot\n";
-    return {200, okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
-                                         ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(readTextFileRaw(path))) +
-                                         ",\"reboot_required\":true")};
+    return okReply(command.id, "\"written\":true,\"via\":" + bootconf::jsonString(how) + "," + body +
+                                   ",\"revision\":" + bootconf::jsonString(bootconf::revisionOf(readTextFileRaw(path))) +
+                                   ",\"reboot_required\":true");
 }
 
 std::string normalizedPowerError(const std::string &errorMessage)
@@ -5106,7 +5094,8 @@ std::string hardwareConfigDisplayPath(const std::filesystem::path &path)
     return value;
 }
 
-// What the validator needs to know about this Pi: the I2C buses that exist and the DPI overlays in config.txt.
+// What the validator needs to know about this Pi: the I2C buses and GPIO chips that exist and the DPI overlays in
+// config.txt.
 hwconf::Facts hardwareConfigFacts()
 {
     hwconf::Facts facts;
@@ -5119,6 +5108,9 @@ hwconf::Facts hardwareConfigFacts()
     std::sort(facts.buses.begin(), facts.buses.end());
     facts.known = !facts.buses.empty();
     facts.dpiLines = hwconf::parseConfigTxt(readTextFileRaw(bootConfigPath())).dpiLines;
+    for (const hardware::GpioChipInfo &chip : hardware::listGpioChips())
+        facts.gpioChips.push_back({chip.path, chip.label, chip.lines});
+    facts.headerChip = hardware::headerGpioChipPath();
     return facts;
 }
 
@@ -5134,21 +5126,6 @@ std::string controlsIssuesJson(const std::vector<hwconf::Issue> &issues)
             << ",\"section\":\"" << escapeJson(issue.section) << "\""
             << ",\"key\":\"" << escapeJson(issue.key) << "\""
             << ",\"message\":\"" << escapeJson(issue.message) << "\"}";
-    }
-    out << ']';
-    return out.str();
-}
-
-std::string controlsConflictsJson(const std::vector<hwconf::Conflict> &conflicts)
-{
-    std::ostringstream out;
-    out << '[';
-    for (size_t i = 0; i < conflicts.size(); ++i) {
-        const hwconf::Conflict &conflict = conflicts[i];
-        out << (i > 0 ? "," : "") << "{\"section\":\"" << escapeJson(conflict.section) << "\""
-            << ",\"key\":\"" << escapeJson(conflict.key) << "\""
-            << ",\"base\":\"" << escapeJson(conflict.base) << "\""
-            << ",\"current\":\"" << escapeJson(conflict.current) << "\"}";
     }
     out << ']';
     return out.str();
@@ -5180,6 +5157,11 @@ std::string defaultHardwareConfigTemplate()
 # INA219 I2C bus example: /dev/i2c-4 -> bus=4
 # Address can be decimal or hex.
 
+[network]
+# Hotspot fallback wait in seconds (0-86400); 0 removes the delay.
+# An established Wi-Fi connection is left alone. Restart apertar-network.service after changes.
+hotspot_delay_seconds=60
+
 [ina219]
 enabled=true
 bus=4
@@ -5196,23 +5178,26 @@ pcie_controller=1000110000.pcie
 # Write buffer: frames = the original queue (12 frames; a frame is dropped when it is full), ram = a large RAM queue
 # sized from the free memory at the start of a take (CineMate style). ram refuses itself when it would be smaller
 # than the original queue. Takes effect at the next take.
-buffer=frames
-buffer_ram_fraction=0.6
-buffer_ram_floor_mb=512
-buffer_ram_max_fraction=0.5
+# buffer=frames
+# buffer_ram_fraction=0.6
+# buffer_ram_floor_mb=512
+# buffer_ram_max_fraction=0.5
 # Safety stop: ram mode ends the take cleanly (every queued frame is still written) when the buffer is this full, in percent. 0 = never; 50 to 99.
 # buffer_stop_percent=90
-# Frames per folder: 0 keeps every frame of a take in its clip folder; 100 to 100000 starts a new part_NNN folder inside
-# the clip every that many frames (an exFAT create walks the whole folder, so long takes in one folder get slower).
+# Split a take into part_NNN folders inside the clip (an exFAT create walks the whole folder, so long takes in one folder
+# get slower): on splits every cDNG and lossy DNG take (the default), auto only where a flat folder would not last 30 minutes
+# (exFAT or FAT above 32 fps), off keeps every frame in the clip folder. MLV is never split.
 # Takes effect at the next take. Resolve and Premiere import one folder as one clip: split clips are merged first.
-# frames_per_folder=0
+# split=on
+# Frames per part, 100 to 100000.
+# frames_per_folder=5000
 # Merge split clips back into one folder while the camera is idle (on, the default) or leave them split (off).
 # clip_merge=on
 
 [media]
 # Storage pre-roll: a short test take at the sensor's maximum fps through the real write path, deleted at once (CineMate's warm-up).
-# preroll=on runs it when Core starts, when a card is inserted and after a format; the command storage_preroll always works. Read at each request.
-# preroll=on
+# preroll=on runs it when Core starts, when a card is inserted and after a format (default off); the command storage_preroll always works. Read at each request.
+# preroll=off
 # Length in seconds, 1 to 10.
 # preroll_seconds=2
 
@@ -5220,27 +5205,27 @@ buffer_ram_max_fraction=0.5
 # Highest ISO in Clear HDR, per sensor mode; 0 = no cap. SDR is never capped. Restart Core after a change.
 # 12-bit: the sensor merges HG/LG only up to gain code 57 (17.1 dB) = ISO 720.
 # 16-bit: the driver caps Clear HDR gain at code 80 (24 dB) = ISO 1585.
-clear_hdr_iso_max_12bit=720
-clear_hdr_iso_max_16bit=1585
+# clear_hdr_iso_max_12bit=720
+# clear_hdr_iso_max_16bit=1585
 
 [display]
-# Resolutions: 1920x1080(Default), 720x720, 640x480, 800x480, 1280x720, 1024x600
+# Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
 # Layouts:
 # square (For 720x720)
 # landscape_compact (For 640x480 and 800x480)
 # landscape_medium (For 1024x600)
 # landscape (For 1280x720)
 # landscape_large (For 1920x1080)
-ui_width=1920
-ui_height=1080
-ui_layout=landscape_large
+ui_width=720
+ui_height=720
+ui_layout=square
 controls_opacity=1.0
 # Zoom button magnification: 1.0-4.0; restart the UI after changing this.
 zoom_toggle_factor=4.0
 controls_mode=Light
 rotation=0
 windowed=false
-hdmi_external_only=true
+hdmi_external_only=false
 
 [run_script]
 # run_script (alias script) runs all configured scripts sequentially, up to five.
@@ -5255,10 +5240,107 @@ path4=
 path5=
 
 [imu]
-enabled=false
+# Current options: driver=mpu6050, bmi160, bmi270, icm42688p.
+# Free-running IMUs use sync_offset_ms to bake in a measured Gyroflow sync correction.
+enabled=true
 driver=mpu6050
 sync_mode=free_run
 sync_offset_ms=0
+
+[mpu6050]
+# Optional gyro/accelerometer sidecar recording for Gyroflow stabilization.
+# Enable "Record Gyro Data" in Record settings to write a .gcsv beside each clip.
+enabled=true
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+dlpf_hz=98
+use_fifo=true
+fifo_batch_samples=24
+# orientation uses Gyroflow axis notation. For chip facing back, X left, Y down, use xYz.
+orientation=XYZ
+# UI-only neutral level reference. Use Set Level in Gyro Calibration to update these.
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+# Prefer stored/manual bias. Set auto_calibrate_seconds only if the camera is guaranteed still after pressing record.
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+# Optional Gyroflow rolling-shutter metadata. Direction: 0=top-bottom, 1=bottom-top.
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi160]
+# Direct-polled Bosch BMI160 IMU. Use driver=bmi160 in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[bmi270]
+# Direct-polled Bosch BMI270 IMU. Some boards need their Bosch config blob initialized by their driver.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
+
+[icm42688p]
+# Direct-polled TDK InvenSense ICM42688-P IMU. Use driver=icm42688p in [imu] to select it.
+enabled=false
+bus=1
+address=0x68
+sample_rate_hz=500
+gyro_range_dps=1000
+accel_range_g=8
+use_fifo=false
+orientation=XYZ
+level_reference_set=false
+level_reference_orientation=XYZ
+level_accel_x=0
+level_accel_y=0
+level_accel_z=0
+auto_calibrate_seconds=0
+gyro_bias_x=0
+gyro_bias_y=0
+gyro_bias_z=0
+frame_readout_time_ms=0
+frame_readout_direction=0
 
 [pcf8574]
 # Pin actions include capture, record_toggle, iso_up/down, fps_up/down, wb_up/down,
@@ -5271,6 +5353,11 @@ sync_offset_ms=0
 enabled=false
 bus=1
 address=0x20
+active_low=true
+poll_ms=40
+debounce_ms=60
+# A pin that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
 
 [neorotary4]
 # Optional Adafruit NeoRotary 4 / seesaw quad rotary encoder. Each knob has clockwise, counter-clockwise and press actions.
@@ -5278,18 +5365,57 @@ address=0x20
 enabled=false
 bus=1
 address=0x49
+poll_ms=30
+debounce_ms=60
+invert_direction=false
+reset_on_start=false
+max_events_per_poll=8
+encoder0_cw=iso_up
+encoder0_ccw=iso_down
+encoder0_press=iso
+encoder1_cw=shutter_up
+encoder1_ccw=shutter_down
+encoder1_press=shutter
+encoder2_cw=wb_up
+encoder2_ccw=wb_down
+encoder2_press=wb
+encoder3_cw=fps_up
+encoder3_ccw=fps_down
+encoder3_press=resolution
 
-[gpio]
+[gpio_buttons]
 # GPIO button actions use the same names as [pcf8574].
+# Grove digital ports use the BCM number printed on the Grove Base HAT, for example D5 -> d5.
 # Example: d17=recindicatorled reserves GPIO17 as the recording LED output.
 enabled=false
+# chip=auto is the Pi's 40-pin header; another chip by path, for example /dev/gpiochip13.
+chip=auto
+active_low=true
+pull=up
+poll_ms=12
+debounce_ms=60
+# A button that reads pressed when Core starts is ignored until released; true takes it as a normally closed (1-0-1) button.
+# invert_on_start=false
+# Example buttons (GPIO 5 and 6 are also the pins of the [gpio_encoders] example):
+# d5=capture
+# d6=eject
 
 [gpio_encoders]
 # Optional direct GPIO / Grove incremental rotary encoders. Press, cw and ccw actions use the names of [pcf8574].
+# For Grove Encoder, connect SIGA/SIGB to the two configured digital pins.
+# chip, active_low, pull, poll_ms and debounce_ms are shared with [gpio_buttons]: set them there.
 enabled=false
+# Example encoder:
+# encoder0_a=5
+# encoder0_b=6
+# encoder0_cw=iso_up
+# encoder0_ccw=iso_down
+# encoder0_press_gpio=13
+# encoder0_press=iso
+# encoder0_steps_per_event=4
 
 [gpio_switches]
-# Optional two- and three-way switches on GPIO pins, read like [gpio] (chip, pull, active_low, debounce_ms).
+# Optional two- and three-way switches on GPIO pins; chip, pull, active_low and debounce_ms come from [gpio_buttons].
 # Two-way: switch0_pins=17, switch0_on=..., switch0_off=...
 # Three-way: switch1_pins=22,23, switch1_position0=... (22 closed), switch1_position1=... (middle), switch1_position2=... (23 closed)
 # The position a switch is in is applied when Core starts.
@@ -5297,9 +5423,19 @@ enabled=false
 
 [grove_analog]
 # Optional Grove Base HAT analog controls: potentiometers, sliders, rotary angle sensors.
+# ADC address is usually 0x04 on STM32 HATs and 0x08 on newer MM32 HATs.
 enabled=false
 bus=1
 address=0x04
+poll_ms=80
+deadband=32
+emit_on_start=false
+a0=wb
+a0_min=2500
+a0_max=8000
+a0_step=50
+a1=iso
+a1_mode=preset
 
 [trigger_output]
 # Optional capture trigger pulse for DIY hot shoe, flash sync, tally, or accessories.
@@ -6413,55 +6549,6 @@ std::string formatFileTimestampHuman(const std::filesystem::file_time_type &time
     if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &localTm) == 0)
         return "Unknown";
     return buffer;
-}
-
-std::string buildHardwareConfigFileJson()
-{
-    const std::filesystem::path path = editableHardwareConfigPath();
-    const hardware::StoreInfo info = hardware::configStore().info();
-    std::error_code ec;
-    const bool exists = info.exists;
-
-    // A missing file starts from a /boot copy when there is one (the readers take its sections), else the template.
-    std::string text = info.text;
-    std::string bootCopy;
-    if (!exists) {
-        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
-            if (std::filesystem::is_regular_file(candidate, ec)) {
-                bootCopy = candidate;
-                text = readTextFileRaw(candidate);
-                break;
-            }
-            ec.clear();
-        }
-        if (bootCopy.empty())
-            text = defaultHardwareConfigTemplate();
-    }
-    uint64_t sizeBytes = static_cast<uint64_t>(text.size());
-    if (exists) {
-        const auto fileSize = std::filesystem::file_size(path, ec);
-        if (!ec)
-            sizeBytes = static_cast<uint64_t>(fileSize);
-    }
-    ec.clear();
-
-    std::string modifiedText = exists ? formatFileTimestampHuman(std::filesystem::last_write_time(path, ec)) : "Not saved yet";
-    if (ec)
-        modifiedText = "Unknown";
-
-    std::ostringstream out;
-    out << "{\"ok\":true"
-        << ",\"path\":\"" << escapeJson(path.string()) << "\""
-        << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(path)) << "\""
-        << ",\"exists\":" << (exists ? "true" : "false")
-        << ",\"revision\":\"" << escapeJson(info.revision) << "\""
-        << ",\"boot_copy\":\"" << escapeJson(bootCopy) << "\""
-        << ",\"size_bytes\":" << sizeBytes
-        << ",\"size_text\":\"" << escapeJson(formatBytesHuman(sizeBytes)) << "\""
-        << ",\"modified_text\":\"" << escapeJson(modifiedText) << "\""
-        << ",\"text\":\"" << escapeJson(text) << "\""
-        << "}";
-    return out.str();
 }
 
 // What the Config page may send before the store sees it. Empty, too large and binary texts never get that far.
@@ -7621,7 +7708,7 @@ std::string clipInfoJson(const std::string &id, const std::filesystem::path &dir
     std::snprintf(fpsBuf, sizeof fpsBuf, "%.3f", f.fps);
     out << ",\"has_audio\":" << (hasAudio ? "true" : "false")
         << ",\"sound_text\":\"" << escapeJson(soundText) << "\""
-        << ",\"audio_url\":\"" << (hasAudio ? "/api/media/file?kind=folder&id=" + escapeJson(id) + "&name=" + escapeJson(f.name) + ".wav" : std::string()) << "\""
+        << ",\"audio_url\":\"" << (hasAudio ? escapeJson("/api/media/file?kind=folder&id=" + urlEncodeComponent(id) + "&name=" + urlEncodeComponent(f.name + ".wav")) : std::string()) << "\""
         << ",\"fps_badge\":\"" << fpsBuf << " FPS\""
         << ",\"info_line\":\"cDNG sequence \u2022 " << f.frames.count() << " frames\""
         << ",\"meta\":{\"captured\":\"" << escapeJson(f.shotDateText) << "\",\"type\":\"cDNG sequence\""
@@ -8041,6 +8128,7 @@ std::string buildCurrentPresetPayload(const std::string &presetName, const Captu
               uiValues.count("timecodeMode")
                   ? normalizeTimecodeModeValue(uiValues.at("timecodeMode"))
                   : uiSnapshot.timecodeMode);
+    addBoolFromMap("fileTimecodeSeparate", uiSnapshot.fileTimecodeSeparate);
     addBoolFromMap("photoModeEnabled", false);
     addBoolFromMap("photoLongExposureEnabled", uiSnapshot.photoLongExposureEnabled);
     addBoolFromMap("photoBracketingEnabled", uiSnapshot.photoBracketingEnabled);
@@ -8215,13 +8303,13 @@ ApertarCoreApp::ApertarCoreApp(Options options)
     , camera_(
           [this](const std::string &eventJson) { publishEvent(eventJson); },
           [this](PreviewFrameDescriptor frame) { enqueuePreviewFrame(std::move(frame)); })
-    , gpioInput_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , gpioInput_([this](const std::string &action) { return handleHardwareInputAction(action); },
                  [this](const std::string &action) { handleHardwareInputAction(action, false); })
     , standbyPowerButton_([this](bool doublePress) { return handlePowerButtonPress(doublePress); })
     , groveAnalogInput_([this](const GroveAnalogInput::AnalogEvent &event) { handleHardwareAnalogInput(event); })
-    , neoRotary4Input_([this](const std::string &action) { handleHardwareInputAction(action); },
+    , neoRotary4Input_([this](const std::string &action) { return handleHardwareInputAction(action); },
                        [this](const std::string &action) { handleHardwareInputAction(action, false); })
-    , pcf8574Input_([this](const std::string &action) { handleHardwareInputAction(action); })
+    , pcf8574Input_([this](const std::string &action) { return handleHardwareInputAction(action); })
 {
     // The write queue's safety stop (see runBufferSafetyStop): lock-free, runs under the queue's mutex. Set before any take.
     bufferbudget::safetyStopHook() = [this](const bufferbudget::SafetyStopHit &hit) {
@@ -8231,6 +8319,13 @@ ApertarCoreApp::ApertarCoreApp(Options options)
         bufferSafetyStopPending_.store(true, std::memory_order_release);
         bufferSafetyStopCv_.notify_one();
     };
+    // Stop on Dropped Frame (see runBufferSafetyStop): the first drop of a take, from the writer or copy thread. Only flags.
+    camera_.setDroppedFrameHook([this] {
+        if (!stopOnDroppedFrameSetting_.load(std::memory_order_acquire))
+            return;
+        droppedFrameStopPending_.store(true, std::memory_order_release);
+        bufferSafetyStopCv_.notify_one();
+    });
 }
 
 ApertarCoreApp::~ApertarCoreApp()
@@ -8308,6 +8403,8 @@ void ApertarCoreApp::startCam1Client()
         const cameraport::Node node = cameraport::resolve({}, "cam1");
         return node.valid && cameraport::sensorSubdevUnder({}, node.path);
     };
+    // One sensor (either port) or none: no cam1, as the cam1 unit's ExecCondition skips it.
+    options.dualSensors = [] { return cameraport::dualSensorsPresent({}, "cam1", 0, 0, nullptr); };
     options.primaryInStandby = [this] { return primaryStandby_.load(std::memory_order_acquire); };
     options.ties = [] { return cam1TiesCached(); };
     options.primaryView = [this] { return relayView(); };
@@ -8431,7 +8528,6 @@ void ApertarCoreApp::publishRelayView(const std::string &afterCommand)
         relayView_.ladderKnown = text.has_value();
         relayView_.ladderResolutions = text.value_or("");
         relayView_.ladderEnabled = jsonkeys::boolOf(ladderJson, "enabled").value_or(false);
-        relayView_.ladderRampReady = jsonkeys::boolOf(ladderJson, "ramp_ready").value_or(false);
     }
 }
 
@@ -8460,6 +8556,30 @@ bool ApertarCoreApp::start()
         const auto result = standbyUsbPower("on");
         if (result.exitCode != 0)
             std::cerr << "Apertar standby USB recovery: " << result.output << '\n';
+    }
+
+    // No hardware file at any path the readers try, and no record that one existed: write the template, as the 1.6.0
+    // touch UI did at its first start. A file moved away leaves a record, so it is offered for restore, not replaced.
+    bool wroteDefault = false;
+    {
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        const std::filesystem::path notes = hardware::HardwareConfigStore::defaultNotesDirectory();
+        std::error_code error;
+        bool known = std::filesystem::exists(notes / "hardware-last-written.conf", error);
+        for (const auto &path : hardwareConfigCandidatePaths())
+            known = known || std::filesystem::is_regular_file(path, error);
+        for (const auto &entry : std::filesystem::directory_iterator(notes / "hardware-history", error))
+            known = known || entry.path().filename().string().rfind("adopted-", 0) == 0;
+        if (!known) {
+            const hardware::StoreResult result =
+                store.replace(std::string(hwconf::kAbsentRevision), defaultHardwareConfigTemplate(), "core");
+            wroteDefault = result.written;
+            if (wroteDefault)
+                std::cerr << "ApertarCore controls: wrote the default " << hardwareConfigDisplayPath(store.path()) << "\n";
+            else
+                std::cerr << "ApertarCore controls: could not write the default " << hardwareConfigDisplayPath(store.path())
+                          << ": " << result.error << "\n";
+        }
     }
 
     {
@@ -8516,6 +8636,7 @@ bool ApertarCoreApp::start()
     }
 
     mediaTrimSetting_.store(camera_.settings().mediaTrimEnabled);
+    stopOnDroppedFrameSetting_.store(camera_.settings().stopOnDroppedFrame);
     publishRelayView("start");   // the relay's first resync reads this (design 4.4)
     // The secondary does not read UI.conf here: it forces photo mode, long exposure and bracketing off, so a stale
     // camera_settings.conf in .config-cam1 cannot leave cam1 in photo mode (design 3.3).
@@ -8533,6 +8654,14 @@ bool ApertarCoreApp::start()
         next.bracketingEnabled = stillSettings.photoBracketingEnabled;
         next.bracketingEv = stillSettings.photoBracketingEv;
         camera_.applyCapturePreset(next);
+    }
+
+    // A camera that already has two different timecodes (the UI.conf mode and camera_settings.conf) keeps them
+    // apart: fileTimecodeSeparate is written once, so the touch UI does not copy one over the other.
+    if (!secondaryRole() && !stillSettings.fileTimecodeSeparate &&
+        stillSettings.timecodeMode != (camera_.settings().timecodeMode == TimecodeMode::RecRun ? "Rec Run" : "Free Run")) {
+        (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
+        std::cerr << "ApertarCore timecode: UI and file timecode differ, kept apart (fileTimecodeSeparate=true)\n";
     }
 
     if (!controlServer_.start(options_.socketPath, [this](const std::string &line) {
@@ -8593,7 +8722,7 @@ bool ApertarCoreApp::start()
         const size_t errors = controlsErrorCount(issues);
         controlsErrors_ = errors;
         controlsWarnings_ = issues.size() - errors;
-        const bool adopted = store.adopt();
+        const bool adopted = !wroteDefault && store.adopt();   // Core's own template is not "as Core first found it"
         refreshBufferRequest();
         std::cerr << "ApertarCore controls: " << hardwareConfigDisplayPath(store.path()) << " " << info.revision << ": "
                   << errors << " errors, " << issues.size() - errors << " warnings"
@@ -8823,6 +8952,19 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         response.body = commandclasses::kSecondaryRefusal;
         return response;
     }
+    // Playback and downloads are held (409) while a take, a write, the speed test, standby or missing media needs the card.
+    const auto holdResponse = [](const std::string &hold) {
+        WebServer::Response response;
+        response.status = 409;
+        response.contentType = "application/json; charset=utf-8";
+        const char *sentence = hold == "writing" ? "Wait for the current capture to finish writing to media."
+            : hold == "media_test" ? "Wait for the media speed test to finish first."
+            : hold == "standby" ? "Wake the camera first."
+            : hold == "media" ? "Mount media first."
+            : "Stop recording or the timelapse before playing or downloading media.";
+        response.body = errorReply(-1, sentence);
+        return response;
+    };
 
     if (request.method == "OPTIONS") {
         WebServer::Response response;
@@ -8924,11 +9066,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         const std::string hold = playbackHoldReason();
         playback::ClipFacts facts;
         if (!hold.empty()) {
-            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok) {
-                response.status = 409;
-                response.body = errorReply(-1, "Playback held: " + hold + ".");
-                return response;
-            }
+            if (!clipFactsCache().peek(*itemPath, facts) || !facts.ok)
+                return holdResponse(hold);
         } else {
             facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
             if (!facts.ok) {
@@ -8963,16 +9102,13 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A frame needs kind=folder, id, n and a width of 320, 480, 640, 960, 1280 or 1920.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const std::filesystem::path mediaRoot(options_.mediaRoot);
         const auto itemPath = resolveMediaLibraryPath(mediaRoot, *requestedId);
         if (!itemPath || !std::filesystem::is_directory(*itemPath)) {
-            response.status = 404;
-            response.body = "{\"ok\":false,\"error\":\"This clip was removed.\",\"gone\":true}";
+            response.status = 410;
+            response.body = errorReply(-1, "This clip was removed.");
             return response;
         }
         const playback::ClipFacts facts = clipFactsCache().get(*itemPath, clipMergeIsActive(itemPath->filename().string()));
@@ -8990,15 +9126,12 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             *requestedId, *itemPath, facts.frames, number, static_cast<uint32_t>(width), facts.token,
             [] { return playbackYield().active(playbackNowMs()); });
         if (frame.status != 200) {
+            // The read stopped because a take, a media test or an eject began: name the hold.
+            if (frame.status == 409)
+                return holdResponse(playbackHoldReason());
             response.status = frame.status;
-            if (frame.status == 409) {
-                // The read stopped because a take, a media test or an eject began: name the hold.
-                std::string why = playbackHoldReason();
-                if (why.empty()) why = "recording";
-                response.body = "{\"ok\":false,\"error\":\"Playback held: " + why + ".\",\"hold\":\"" + why + "\"}";
-            }
-            else if (frame.busy)
-                response.body = "{\"ok\":false,\"busy\":true}";
+            if (frame.busy)
+                response.body = errorReply(-1, "Playback is busy. Try again in a moment.");
             else
                 response.body = errorReply(-1, frame.error);
             return response;
@@ -9033,11 +9166,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             response.body = errorReply(-1, "A sound request needs kind=folder, id and the name of a .wav file in the clip.");
             return response;
         }
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            response.status = 409;
-            response.body = "{\"ok\":false,\"error\":\"Playback held: " + hold + ".\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
         const auto itemPath = resolveMediaLibraryPath(std::filesystem::path(options_.mediaRoot), *requestedId);
         std::error_code ec;
         const std::filesystem::path file = itemPath ? *itemPath / *requestedName : std::filesystem::path();
@@ -9086,6 +9216,32 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
+    if (request.method == "GET" && request.path == "/api/config/history") {
+        // The saved versions of the hardware file, newest first; ?name= returns one version's text.
+        WebServer::Response response;
+        response.contentType = "application/json; charset=utf-8";
+        hardware::HardwareConfigStore &store = hardware::configStore();
+        if (const auto name = queryParameterValue(request.query, "name"); name && !name->empty()) {
+            const auto text = store.historyText(*name);
+            if (!text) {
+                response.status = 404;
+                response.body = errorReply(-1, "No saved version called " + *name + ".");
+                return response;
+            }
+            response.body = okReply(-1, "\"name\":\"" + escapeJson(*name) + "\",\"text\":\"" + escapeJson(*text) + "\"");
+            return response;
+        }
+        std::ostringstream body;
+        body << "\"revision\":\"" << escapeJson(store.currentRevision()) << "\",\"history\":[";
+        const auto entries = store.history();
+        for (size_t i = 0; i < entries.size(); ++i)
+            body << (i ? "," : "") << "{\"name\":\"" << escapeJson(entries[i].name) << "\",\"saved_at\":\"" << escapeJson(entries[i].savedAt)
+                 << "\",\"by\":\"" << escapeJson(entries[i].by) << "\",\"revision\":\"" << escapeJson(entries[i].revision) << "\"}";
+        body << "]";
+        response.body = okReply(-1, body.str());
+        return response;
+    }
+
     if (request.method == "POST" && request.path == "/api/config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
@@ -9096,16 +9252,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             return response;
         }
 
-        // The page names the revision it loaded. A browser without one is a tab from before the update; a script
-        // (no Origin) keeps last-writer-wins.
+        // The page names the revision it loaded, to be refused when the file is newer. Without it the text is
+        // saved over the current file, as in 1.6.0.
         hardware::HardwareConfigStore &store = hardware::configStore();
         const auto revisionHeader = request.headers.find("x-apertar-revision");
-        if (revisionHeader == request.headers.end() && request.headers.count("origin")) {
-            response.status = 409;
-            response.body = errorReplyBody(-1, "Apertar was updated: reload this page. Your text stays in the box.",
-                                           "\"code\":\"old_page\"");
-            return response;
-        }
         const std::string base = revisionHeader != request.headers.end() ? revisionHeader->second : store.currentRevision();
 
         hardware::StoreFlags flags;
@@ -9115,15 +9265,10 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
             const bool changed = result.needsReview || result.code == "stale" || result.code == "conflict" ||
                 result.code == "being_written" || result.code == "locked";
             response.status = changed ? 409 : 400;
-            const std::string code = result.needsReview ? "merge_review" : result.code;
             const std::string message = result.needsReview
                 ? "The file changed since you loaded it. Reload; your text stays in the box."
                 : result.error;
-            response.body = errorReplyBody(-1, message,
-                "\"code\":\"" + escapeJson(code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
+            response.body = errorReply(-1, message);
             return response;
         }
         if (result.written) {
@@ -9149,13 +9294,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         const auto requestedKind = queryParameterValue(request.query, "kind");
         const auto requestedId = queryParameterValue(request.query, "id");
@@ -9278,13 +9418,8 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
     }
 
     if (request.method == "GET" && request.path == "/api/media/download-selected") {
-        if (const std::string hold = playbackHoldReason(); !hold.empty()) {
-            WebServer::Response response;
-            response.status = 409;
-            response.contentType = "application/json; charset=utf-8";
-            response.body = "{\"ok\":false,\"error\":\"" + std::string(hold == "recording" ? "Recording. Downloads wait until the take ends." : "Playback held: " + hold + ". Downloads wait.") + "\",\"hold\":\"" + hold + "\"}";
-            return response;
-        }
+        if (const std::string hold = playbackHoldReason(); !hold.empty())
+            return holdResponse(hold);
 
         std::string errorMessage;
         const std::vector<MediaSelection> selections = mediaSelectionsFromQuery(request.query, &errorMessage);
@@ -9626,42 +9761,11 @@ WebServer::Response ApertarCoreApp::handleWebRequest(const WebServer::Request &r
         return response;
     }
 
-    // System pane, Boot config card: /boot/firmware/config.txt (bootConfigGet / bootConfigSet above).
+    // System pane, Boot config card: reads /boot/firmware/config.txt (bootConfigGet above); it saves with set_boot_config.
     if (request.method == "GET" && request.path == "/api/boot-config") {
         WebServer::Response response;
         response.contentType = "application/json; charset=utf-8";
-        const BootConfigReply reply = bootConfigGet(-1);
-        response.status = reply.status;
-        response.body = reply.body;
-        return response;
-    }
-
-    if (request.method == "POST" && request.path == "/api/boot-config") {
-        WebServer::Response response;
-        response.contentType = "application/json; charset=utf-8";
-        // The body is the card's fields as one JSON object; the command parser wants a name, so it gets one.
-        std::string payload = request.body;
-        const size_t brace = payload.find('{');
-        if (brace == std::string::npos) {
-            response.status = 400;
-            response.body = errorReply(-1, "Expected a JSON object.");
-            return response;
-        }
-        const size_t next = payload.find_first_not_of(" \t\r\n", brace + 1);
-        const bool empty = next != std::string::npos && payload[next] == '}';
-        payload.insert(brace + 1, empty ? "\"cmd\":\"set_boot_config\"" : "\"cmd\":\"set_boot_config\",");
-        const ParseResult parsed = parseControlCommand(payload);
-        if (!parsed.ok) {
-            response.status = 400;
-            response.body = errorReply(-1, parsed.error);
-            return response;
-        }
-        const auto revisionHeader = request.headers.find("x-apertar-revision");
-        const std::optional<std::string> revision = revisionHeader != request.headers.end()
-            ? std::optional<std::string>(revisionHeader->second) : parsed.command.string("revision");
-        const BootConfigReply reply = bootConfigSet(parsed.command, revision, request.headers.count("origin") > 0);
-        response.status = reply.status;
-        response.body = reply.body;
+        response.body = bootConfigGet();
         return response;
     }
 
@@ -9944,11 +10048,13 @@ std::string ApertarCoreApp::buildWebStateJson() const
     }
 
     uint64_t estimatedBytesPerSecond = estimatedRawBytesPerSecond(settings);
+    bool secondCameraRecords = false;
     // Time left is one value for the rig (design 6.4): both Cores fill one card, so free space over the rates of the
     // cameras in record_cameras. With no cam1 configured this is today's one-camera figure.
     if (!secondaryRole() && cam1Client_.configured()) {
         const std::string cameras = recordCamerasNow(cam1Client_, uiSettings, camera_.isRecording());
         const uint64_t cam1Rate = cam1EstimatedBytesPerSecond(cam1Client_.snapshot().settings, settings);
+        secondCameraRecords = cameras == "both" || cameras == "cam1";
         if (cameras == "both")
             estimatedBytesPerSecond += cam1Rate;
         else if (cameras == "cam1" && cam1Rate > 0)
@@ -9971,12 +10077,15 @@ std::string ApertarCoreApp::buildWebStateJson() const
             recordStillsLeft = std::floor(static_cast<double>(mediaFreeBytes) / estimatedStillFrameBytes);
     }
 
-    // The whole card's recording time in the current mode; the bar is time left out of it.
+    // One camera: the bar is time left out of 2 hours. With the second camera in the take set, out of the whole
+    // card's recording time in the current mode.
     std::optional<double> cardRecordMinutes;
-    if (estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
+    if (secondCameraRecords && estimatedBytesPerSecond > 0 && mediaTotalBytes > 0)
         cardRecordMinutes = static_cast<double>(mediaTotalBytes) / static_cast<double>(estimatedBytesPerSecond) / 60.0;
     std::optional<double> timeLeftPercent;
-    if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
+    if (recordTimeLeftMinutes.has_value() && !secondCameraRecords)
+        timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / 120.0) * 100.0, 0.0, 100.0);
+    else if (recordTimeLeftMinutes.has_value() && cardRecordMinutes.has_value() && cardRecordMinutes.value() > 0.0)
         timeLeftPercent = std::clamp((recordTimeLeftMinutes.value() / cardRecordMinutes.value()) * 100.0, 0.0, 100.0);
 
     std::optional<double> batteryPercent;
@@ -10043,12 +10152,17 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"fps_take_max\":" << jsonNumber(settings.fpsTakeMax, 3)
         << ",\"ladder_active\":" << (settings.ladderActive ? "true" : "false")
         << ",\"ladder_resolution\":" << settings.ladderRung
-        << ",\"ladder_ramp_ready\":" << (settings.ladderRampReady ? "true" : "false")
         << ",\"ladder_enabled\":" << (settings.ladderEnabled ? "true" : "false")
         << ",\"ladder_override\":" << (settings.ladderOverride ? "true" : "false")
         << ",\"ladder_count\":" << settings.ladderCount
         << ",\"ladder_text\":\"" << escapeJson(settings.ladderText) << "\""
         << ",\"ladder_tops\":" << jsonNumberArray(settings.ladderTops)
+        << ",\"limit_fps\":" << jsonNumber(settings.limitFps, 3)
+        << ",\"limit_short_fps\":" << jsonNumber(settings.limitShortFps, 3)
+        << ",\"limit_basis\":\"" << escapeJson(settings.limitBasis) << "\""
+        << ",\"limit_by\":\"" << escapeJson(settings.limitBy) << "\""
+        << ",\"limit_why\":\"" << escapeJson(settings.limitWhy) << "\""
+        << ",\"split_effective\":" << (settings.splitEffective ? "true" : "false")
         << ",\"iso_auto_after_clear_hdr\":" << (settings.isoAutoAfterClearHdr ? "true" : "false")
         << ",\"shutter_us\":" << settings.shutterUs
         << ",\"shutter_auto\":" << (settings.shutterAuto ? "true" : "false")
@@ -10081,6 +10195,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"clear_hdr\":" << (settings.clearHdr ? "true" : "false")
         << ",\"fps_phase_lock\":" << (settings.fpsPhaseLock ? "true" : "false")
         << ",\"preview_tdn\":" << (settings.previewTdn ? "true" : "false")
+        << ",\"stop_on_dropped_frame\":" << (settings.stopOnDroppedFrame ? "true" : "false")
         << ",\"fps_speed_ramp\":" << (settings.fpsSpeedRamp ? "true" : "false")
         << ",\"fps_speed_ramp_keep_exposure\":" << (settings.fpsSpeedRampKeepExposure ? "true" : "false")
         << ",\"fps_speed_ramp_stretch_audio\":" << (settings.fpsSpeedRampStretchAudio ? "true" : "false")
@@ -10154,7 +10269,8 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"record_time_left_minutes\":" << jsonNumberOrNull(recordTimeLeftMinutes, 1)
         << ",\"record_stills_left\":" << jsonNumberOrNull(recordStillsLeft, 0)
         << ",\"time_left_percent\":" << jsonNumberOrNull(timeLeftPercent, 1)
-        << ",\"time_left_label\":\"" << escapeJson(timeLeftEstimateLabel(settings, cardRecordMinutes)) << "\""
+        << ",\"time_left_label\":\"" << escapeJson(secondCameraRecords ? timeLeftEstimateLabel(settings, cardRecordMinutes)
+                                                    : std::string("Current format estimate")) << "\""
         << ",\"time_zone\":\"" << escapeJson(currentTimeZone) << "\""
         << ",\"time_zone_options\":" << jsonStringArray(timeZones)
         << ",\"local_time_input\":\"" << escapeJson(localDateTimeValue) << "\""
@@ -10195,6 +10311,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << "}"
         << ",\"ui\":{"
         << "\"timecode_mode\":\"" << escapeJson(uiSettings.timecodeMode) << "\""
+        << ",\"file_timecode_separate\":" << (uiSettings.fileTimecodeSeparate ? "true" : "false")
         << ",\"focus_peaking_enabled\":" << (uiSettings.focusPeakingEnabled ? "true" : "false")
         << ",\"focus_peaking_threshold\":" << jsonNumber(uiSettings.focusPeakingThreshold, 2)
         << ",\"focus_peaking_color\":\"" << escapeJson(uiSettings.focusPeakingColor) << "\""
@@ -10256,7 +10373,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"favorites_order\":" << jsonStringArray(uiSettings.favoritesOrder)
         << "," << valueStepsJson(uiSettings, camera_.sensorName())
         << "}"
-        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui, as in get_state (design 4.5)
+        << cam1StateMembers(cam1Client_, uiSettings, camera_.isRecording())   // beside ui (design 4.5)
         << ",\"audio\":{"
         << "\"input_devices\":" << jsonAudioDeviceOptions(audioDevices.inputOptions)
         << ",\"output_devices\":" << jsonAudioDeviceOptions(audioDevices.outputOptions)
@@ -10872,25 +10989,26 @@ bool ApertarCoreApp::handlePowerButtonPress(bool doublePress)
     return true;
 }
 
-void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
+// True when the press only woke the camera from Standby: the input then counts nothing more from it.
+bool ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool buttonPress)
 {
     if (!running_.load(std::memory_order_relaxed) || action.empty())
-        return;
+        return false;
 
     const auto actions = hardware::parseButtonActions(action, [](const std::string &token) { return token; });
     if (!actions.error.empty()) {
         std::cerr << "Hardware input mapping ignored: " << actions.error << '\n';
-        return;
+        return false;
     }
     // Keep one button's sequence together across GPIO, I2C and analog inputs.
     std::lock_guard<std::mutex> sequenceLock(hardwareInputSequenceMutex_);
     if (camera_.state() == CameraState::Standby) {
         if (!buttonPress)
-            return;
+            return false;
         ControlCommand wake;
         wake.name = "wake";
         dispatchHardwareInputCommand(std::move(wake));
-        return;
+        return true;
     }
     lastUserActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -10900,6 +11018,7 @@ void ApertarCoreApp::handleHardwareInputAction(const std::string &action, bool b
         handleSingleHardwareInputAction(singleAction);
         if (camera_.state() == CameraState::Standby) break;
     }
+    return false;
 }
 
 void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
@@ -11060,7 +11179,7 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
     }
 
     if (action == "clear_hdr") {
-        // IMX585, raw formats: Clear HDR on or off. On asks for 16-bit, as the touch UI's resolution button does.
+        // IMX585, raw formats: Clear HDR on or off. On asks for 16-bit; the touch UI's resolution button stays at 12-bit.
         if (lowerAscii(camera_.sensorName()).find("imx585") == std::string::npos || cameraSettings.photoModeEnabled ||
             (cameraSettings.recordingFormat != RecordingFormat::Cdng && cameraSettings.recordingFormat != RecordingFormat::Mlv)) {
             std::cerr << "Hardware input action ignored: clear_hdr needs the IMX585 recording CinemaDNG or MLV.\n";
@@ -11415,13 +11534,17 @@ void ApertarCoreApp::runMediaSpeedTest(uint64_t testMiB, std::string mountPath)
     std::filesystem::remove(tempPath, rmEc);
     runShellCommand("sync", nullptr);
 
-    std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
-    mediaSpeedTestRunning_ = false;
-    mediaSpeedCurrentUsedFio_ = false;
-    mediaSpeedLastUsedFio_ = usedFio;
-    mediaSpeedLastBytes_ = mediaSpeedCurrentBytes_;
-    mediaSpeedLastWriteSpeedMBps_ = result.exitCode == 0 ? measuredMBps : 0.0;
-    mediaSpeedError_ = errorMessage;
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        mediaSpeedTestRunning_ = false;
+        mediaSpeedCurrentUsedFio_ = false;
+        mediaSpeedLastUsedFio_ = usedFio;
+        mediaSpeedLastBytes_ = mediaSpeedCurrentBytes_;
+        mediaSpeedLastWriteSpeedMBps_ = result.exitCode == 0 ? measuredMBps : 0.0;
+        ladderSpeedMBps_ = mediaSpeedLastWriteSpeedMBps_;
+        mediaSpeedError_ = errorMessage;
+    }
+    refreshLadderContext();   // a drive-limited mode may hold less on this card than the table says
 }
 
 void ApertarCoreApp::joinMediaSpeedTest()
@@ -11434,8 +11557,8 @@ namespace {
 std::string mediaEventJson(const MediaSnapshot &snapshot)
 {
     std::ostringstream out;
-    out << "{\"event\":\"media\",\"state\":\"" << snapshot.stateName() << "\""
-        << ",\"mounted\":" << (snapshot.mounted() ? "true" : "false")
+    out << "{\"event\":\"media\",\"media_state\":\"" << snapshot.stateName() << "\""
+        << ",\"media_alive\":" << (snapshot.mounted() ? "true" : "false")
         << ",\"device\":\"" << escapeJson(snapshot.device) << "\""
         << ",\"fstype\":\"" << escapeJson(snapshot.fstype) << "\""
         << ",\"free_bytes\":" << snapshot.freeBytes
@@ -11502,6 +11625,20 @@ void ApertarCoreApp::runMediaWatcher()
             mediaSnapshot_ = current;
             mediaSnapshotValid_ = true;
         }
+        if ((current.mounted() && current.totalBytes > 0 &&
+             1.0 - double(current.freeBytes) / double(current.totalBytes) > 0.94) != ladderFillHigh_.load(std::memory_order_relaxed))
+            refreshLadderContext();
+        // The clip-name example (clip_name_example) is computed from this listing, here on the watcher's own
+        // thread, so a hung medium never blocks the camera lock. Not during a take; nothing on a dead mount.
+        if (!camera_.isRecording()) {
+            std::set<std::string> names;
+            if (current.state == MediaSnapshot::State::Mounted || current.state == MediaSnapshot::State::None) {
+                std::error_code ec;
+                for (std::filesystem::directory_iterator it(options_.mediaRoot, ec), end; !ec && it != end; it.increment(ec))
+                    names.insert(it->path().filename().string());
+            }
+            camera_.setClipFolderNames(std::move(names));
+        }
         // A delete made outside Core (the touch UI removes clips itself) frees space without a trim: when the
         // mounted medium gains 1 GiB or more between two polls while nothing records, ask for one. Core's own
         // deletes already request theirs; repeated requests coalesce (kb working/dng-chain, R4).
@@ -11548,6 +11685,11 @@ void ApertarCoreApp::runMediaWatcher()
                 previousProfile = mediaProfile_;
                 mediaProfile_ = profile;
             }
+            {
+                std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+                ladderSpeedMBps_ = 0.0;   // a speed test belongs to the card it ran on
+            }
+            refreshLadderContext();
             if (current.mounted()) {
                 applyMediaTuning(profile, true);
                 trimMedia("mount");   // once per mount; the worker waits for an idle medium
@@ -11704,6 +11846,7 @@ void ApertarCoreApp::stopMediaWatcher()
 // the lock-free hook set in the constructor; this thread then does the same as the record_stop button (GPIO, WebUI,
 // touch UI): dispatchHardwareInputCommand -> handleCommand("record_stop") takes commandMutex_, stops audio and camera,
 // syncs the tracking and publishes the events. It is a clean stop: no failRecording, no fault. Not lock-free by design.
+// The same thread serves Stop on Dropped Frame: the first drop of a take (CameraController drop hook) ends the take the same way.
 void ApertarCoreApp::runBufferSafetyStop()
 {
     while (bufferSafetyStopRunning_.load(std::memory_order_acquire)) {
@@ -11712,11 +11855,19 @@ void ApertarCoreApp::runBufferSafetyStop()
             // The hook sets the flag without this mutex, so a wake-up can slip between the check and the wait: 100 ms backstop.
             bufferSafetyStopCv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
                 return !bufferSafetyStopRunning_.load(std::memory_order_acquire) ||
-                    bufferSafetyStopPending_.load(std::memory_order_acquire);
+                    bufferSafetyStopPending_.load(std::memory_order_acquire) ||
+                    droppedFrameStopPending_.load(std::memory_order_acquire);
             });
         }
         if (!bufferSafetyStopRunning_.load(std::memory_order_acquire))
             return;
+        if (droppedFrameStopPending_.exchange(false, std::memory_order_acq_rel) && camera_.isRecording()) {
+            std::cerr << "ApertarCore recording: Recording stopped: a frame was dropped.\n";
+            ControlCommand command;
+            command.name = "record_stop";
+            dispatchHardwareInputCommand(std::move(command));
+            continue;
+        }
         if (!bufferSafetyStopPending_.exchange(false, std::memory_order_acq_rel))
             continue;
         if (!camera_.isRecording())
@@ -11737,7 +11888,7 @@ void ApertarCoreApp::runBufferSafetyStop()
 // ---- Storage pre-roll ---------------------------------------------------------------------------------------------
 // CineMate's storage warm-up: a short raw take at the mode's maximum fps through the real write path, deleted at
 // once (see CameraController::startStoragePreroll for what it keeps out of). Triggers: the storage_preroll command
-// (always), and with [media] preroll=on (default; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
+// (always), and with [media] preroll=on (default off; APERTAR_STORAGE_PREROLL=0|1 beats the file) Core start, a card
 // inserted and a format. The automatic ones wait 3 s, and for the mount's trim, so the order is trim, then pre-roll.
 // One thread, a cv, coalesced requests; never on the HTTP or watcher thread.
 
@@ -12013,6 +12164,47 @@ MediaProfile ApertarCoreApp::mediaProfile() const
 {
     std::lock_guard<std::mutex> lock(mediaStateMutex_);
     return mediaProfile_;
+}
+
+// The camera reads TDN, phase lock and Log itself; the rest of what the known limits depend on lives here: the
+// storage, the filesystem, how full the card is, the aids, the audio and the clip split. Pushed at a media change,
+// when the card crosses 94 percent, after a switch or a preset and after set_frames_per_folder.
+void ApertarCoreApp::refreshLadderContext()
+{
+    const MediaProfile profile = mediaProfile();
+    uint64_t total = 0, free = 0;
+    {
+        std::lock_guard<std::mutex> lock(mediaStateMutex_);
+        total = mediaSnapshot_.totalBytes;
+        free = mediaSnapshot_.freeBytes;
+    }
+    const SharedUiSettingsSnapshot ui = readSharedUiSettings();
+    sustained::Context context;
+    switch (profile.mediaClass) {
+    case MediaClass::PiNvme:
+        context.storage = sustained::Kind::Nvme;
+        break;
+    case MediaClass::UsbUas:
+        context.storage = sustained::Kind::UsbSsd;
+        break;
+    default:   // no column for this storage: the USB SSD's stands in
+        context.storage = sustained::Kind::UsbSsd;
+        context.storageMeasured = false;
+        break;
+    }
+    context.fatLike = profile.filesystem == MediaFilesystem::Exfat || profile.filesystem == MediaFilesystem::Vfat;
+    context.fillFraction = total > 0 ? 1.0 - double(free) / double(total) : 0.0;
+    {
+        std::lock_guard<std::mutex> lock(mediaSpeedMutex_);
+        context.speedMBps = ladderSpeedMBps_;
+    }
+    context.aidsOn = ui.focusPeakingEnabled || ui.zebraEnabled;
+    context.audioOn = ui.recordAudioEnabled;
+    const bufferbudget::SplitMode split = bufferbudget::splitModeRequest().load(std::memory_order_acquire);
+    context.splitOn = split != bufferbudget::SplitMode::Off;
+    context.splitAuto = split == bufferbudget::SplitMode::Auto;
+    ladderFillHigh_.store(context.fillFraction > 0.94, std::memory_order_relaxed);
+    camera_.setLadderContext(context);
 }
 
 // Kernel-side knobs (block queue, vm.dirty_*) need root; Core hands them to
@@ -12752,9 +12944,11 @@ std::string ApertarCoreApp::gpioPeripheralJson(const hwconf::Document &doc)
         detail = error;
     }
 
-    const std::string chipSetting = hwconf::effectiveValue(doc, "gpio_buttons", "chip").value_or("auto");
+    // The header's GPIOs are lines 0 to 27; another chip's lines are all its own.
+    const std::string chipSetting = hwconf::gpioInputChip(doc);
     const std::string chipPath = chipSetting == "auto" ? hardware::headerGpioChipPath() : chipSetting;
-    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{} : hardware::readGpioChipInfo(chipPath, 28);
+    const hardware::GpioChipInfo chip = chipPath.empty() ? hardware::GpioChipInfo{}
+        : hardware::readGpioChipInfo(chipPath, chipSetting == "auto" ? 28 : 64);
     if (state == "running")
         detail = "Core reads the buttons on " + (chip.ok ? chip.path + " (" + chip.label + ")" : chipSetting) + ".";
 
@@ -13113,7 +13307,7 @@ void ApertarCoreApp::applyHardwareText(const std::string &text)
     }
     std::cerr << "ApertarCore controls: " << (names.empty() ? std::string("applied; no Core driver reads what changed") : "applied: restarted " + names + " in " + std::to_string(ms) + " ms") << "\n";
     publishEvent("{\"event\":\"controls\",\"applied\":\"" + escapeJson(hardware::configStore().currentRevision()) + "\",\"groups\":\"" +
-                 escapeJson(names) + "\",\"errors\":" + std::to_string(controlsErrors_.load()) + ",\"warnings\":" +
+                 escapeJson(names) + "\",\"controls_errors\":" + std::to_string(controlsErrors_.load()) + ",\"controls_warnings\":" +
                  std::to_string(controlsWarnings_.load()) + "}");
 }
 
@@ -13174,6 +13368,10 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
                 return errorReply(command.id, row.title + " is switched off: switch it on and save first.");
             if (line.actions.empty() || (line.actions.size() == 1 && line.actions[0] == "none"))
                 return errorReply(command.id, "Nothing is assigned to " + row.title + " " + line.label + ".");
+            // A script starts from a physical press only, as in 1.6.0.
+            for (const std::string &action : line.actions)
+                if (hardware::scriptActionSlot(action) >= 0)
+                    return errorReply(command.id, "Scripts run from a button, not from the WebUI.");
             const bool turn = key.size() > 3 && (key.compare(key.size() - 3, 3, "_cw") == 0 ||
                                                  (key.size() > 4 && key.compare(key.size() - 4, 4, "_ccw") == 0));
             handleHardwareInputAction(line.raw, !turn);   // a turn does not wake from standby, as on the knob
@@ -13183,146 +13381,86 @@ std::string ApertarCoreApp::testInputReply(const ControlCommand &command)
     return errorReply(command.id, "test_input: no control " + section + " " + key + " in the saved file.");
 }
 
-// The hardware commands that only read: they run without the command lock.
-std::optional<std::string> ApertarCoreApp::handleReadOnlyHardwareCommand(const ControlCommand &command)
+std::string ApertarCoreApp::buildHardwareConfigFileJson()
 {
-    if (command.name == "get_controls") {
-        hardware::HardwareConfigStore &store = hardware::configStore();
-        const hardware::StoreInfo info = store.info();
-        const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, hardwareConfigFacts());
-        const size_t errors = controlsErrorCount(issues);
-        controlsErrors_ = errors;
-        controlsWarnings_ = issues.size() - errors;
-        std::ostringstream body;
-        body << "\"controls\":{\"revision\":\"" << escapeJson(info.revision) << "\""
-             << ",\"path\":\"" << escapeJson(store.path().string()) << "\""
-             << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(store.path())) << "\""
-             << ",\"exists\":" << (info.exists ? "true" : "false")
-             << ",\"written_by\":\"" << escapeJson(info.writtenBy) << "\""
-             << ",\"written_at\":\"" << escapeJson(info.writtenAt) << "\""
-             << ",\"errors\":" << errors
-             << ",\"warnings\":" << issues.size() - errors
-             << ",\"issues\":" << controlsIssuesJson(issues)
-             << ",\"text\":\"" << escapeJson(info.text) << "\""
-             << ",\"replaced\":" << controlsReplacedJson(store.replacedByDefault())
-             << ",\"model\":" << hwconf::modelJson(hwconf::parse(info.text))
-             << ",\"peripherals\":[" << gpioPeripheralJson(hwconf::parse(info.text))
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
-             << "," << i2cPeripheralJson(hwconf::parse(info.text), "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
-             << "," << cfeHatPeripheralJson(hwconf::parse(info.text), options_.mediaRoot)
-             << "," << outputPeripheralJson(hwconf::parse(info.text), "recording_indicator", "Tally LED",
-                                            recordingIndicatorOutput_.enabled(), recordingIndicatorOutput_.lastError())
-             << "," << outputPeripheralJson(hwconf::parse(info.text), "trigger_output", "Trigger output",
-                                            triggerOutput_.enabled(), triggerOutput_.lastError())
-             << "],\"i2c_buses\":" << i2cBusesJson()
-             << ",\"apply\":" << controlsApplyJson()
-             << ",\"dpi_lines\":[";
-        const hwconf::Facts facts = hardwareConfigFacts();
-        for (size_t i = 0; i < facts.dpiLines.size(); ++i)
-            body << (i ? "," : "") << facts.dpiLines[i];
-        body << "]}";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "controls_history") {
-        // T42/T43: the saved versions, newest first; name= returns one version's text (Undo, the Config history).
-        hardware::HardwareConfigStore &store = hardware::configStore();
-        if (const auto name = command.string("name"); name && !name->empty()) {
-            const auto text = store.historyText(*name);
-            if (!text)
-                return errorReply(command.id, "No saved version called " + *name + ".");
-            return okReply(command.id, "\"name\":\"" + escapeJson(*name) + "\",\"text\":\"" + escapeJson(*text) + "\"");
-        }
-        std::ostringstream body;
-        body << "\"revision\":\"" << escapeJson(store.currentRevision()) << "\",\"history\":[";
-        const auto entries = store.history();
-        for (size_t i = 0; i < entries.size(); ++i)
-            body << (i ? "," : "") << "{\"name\":\"" << escapeJson(entries[i].name) << "\",\"saved_at\":\"" << escapeJson(entries[i].savedAt)
-                 << "\",\"by\":\"" << escapeJson(entries[i].by) << "\",\"revision\":\"" << escapeJson(entries[i].revision) << "\"}";
-        body << "]";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "controls_last_input") {
-        // T42 Listen: the last control that fired, as section and key, and how long ago.
-        std::lock_guard<std::mutex> lock(lastInputMutex_);
-        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - lastInputAt_).count());
-        const auto bar = lastInput_.find('|');
-        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
-            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
-            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
-    }
-    if (command.name == "scan_i2c") {
-        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
-        // driver is reading (it is listed as Core's), never during a take.
-        if (recordingGateActive())
-            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
-        const auto busValue = command.number("bus");
-        if (!busValue || *busValue < 0 || *busValue > 255)
-            return errorReply(command.id, "scan_i2c needs bus= (a bus from Settings > Config > Hardware).");
-        const int bus = static_cast<int>(*busValue);
-        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
-        std::set<int> held;
-        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
-            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
-            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
-            if (running && b && *b == bus)
-                held.insert(a ? static_cast<int>(*a) : fallback);
-        };
-        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
-        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
-        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
-        static const std::map<int, const char *> known = {
-            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
-            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
-            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
-            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
-        std::ostringstream body;
-        body << "\"bus\":" << bus << ",\"found\":[";
-        bool first = true;
-        for (int address = 0x03; address <= 0x77; ++address) {
-            const auto guess = known.find(address);
-            std::string by;
-            if (held.count(address)) {
-                by = "core";
-            } else {
-                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
-                if (!probe.busExists)
-                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
-                if (!probe.found)
-                    continue;
-                by = probe.kernelDriver ? "kernel" : "";
-            }
-            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
-                 << (guess == known.end() ? "" : guess->second) << "\"}";
-            first = false;
-        }
-        body << "]";
-        return okReply(command.id, body.str());
-    }
-    if (command.name == "list_actions") {
-        const SharedUiSettingsSnapshot uiSettings = readSharedUiSettings();
-        const CaptureSettings cameraSettings = camera_.settings();
-        std::vector<std::string> resolutions;
-        for (const Resolution &resolution : availablePcfResolutionOptions(camera_.sensorName(), cameraSettings))
-            resolutions.push_back(resolution.toString());
-        std::string body = hardware::actions::catalogJson();   // "{...}": the reply wants the members
-        body = body.substr(1, body.size() - 2);
-        body += ",\"values\":{\"iso\":" + jsonNumberArray(pcfIsoOptions(uiSettings.isoSteps, cameraSettings.isoMax))
-            + ",\"shutter_angle\":" + jsonNumberArray(pcfShutterAngleOptions(uiSettings.shutterAngleSteps, cameraSettings.fps,
-                                                       uiSettings.flickerFreeShutterAngles ? uiSettings.mainsHz : 0))
-            + ",\"shutter_speed\":" + jsonNumberArray(pcfShutterSpeedDenominatorOptions(
-                  cameraSettings.photoModeEnabled && cameraSettings.longExposureEnabled, cameraSettings.timelapseExposureLimitUs))
-            + ",\"wb\":" + jsonNumberArray(pcfWhiteBalanceOptions(uiSettings.wbSteps))
-            + ",\"fps\":" + jsonNumberArray(availablePcfFpsOptions(cameraSettings, camera_.sensorName(), uiSettings.fpsSteps))
-            + ",\"resolution\":" + jsonStringArray(resolutions) + "}";
-        body += ",\"values_for\":\"" + escapeJson(camera_.sensorName() + " \xC2\xB7 " + cameraSettings.resolution.toString()
-            + " \xC2\xB7 Clear HDR " + (cameraSettings.clearHdr ? "on" : "off")) + "\"";
-        body += ",\"gestures\":{\"button\":[\"press\"],\"encoder\":[\"turn\",\"cw\",\"ccw\",\"press\"],\"analog\":[\"target\"]}";
-        return okReply(command.id, body);
-    }
+    const std::filesystem::path path = editableHardwareConfigPath();
+    const hardware::StoreInfo info = hardware::configStore().info();
+    std::error_code ec;
+    const bool exists = info.exists;
+    // The model, the peripherals and the issues are of the file Core runs; text is what the editor starts from.
+    const hwconf::Document doc = hwconf::parse(info.text);
+    const hwconf::Facts facts = hardwareConfigFacts();
+    const std::vector<hwconf::Issue> issues = hwconf::validate(info.text, facts);
+    const size_t errors = controlsErrorCount(issues);
 
-    return std::nullopt;
+    // A missing file starts from a /boot copy when there is one (the readers take its sections), else the template.
+    std::string text = info.text;
+    std::string bootCopy;
+    if (!exists) {
+        for (const char *candidate : { "/boot/firmware/apertar-hardware.conf", "/boot/apertar-hardware.conf" }) {
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                bootCopy = candidate;
+                text = readTextFileRaw(candidate);
+                break;
+            }
+            ec.clear();
+        }
+        if (bootCopy.empty())
+            text = defaultHardwareConfigTemplate();
+    }
+    uint64_t sizeBytes = static_cast<uint64_t>(text.size());
+    if (exists) {
+        const auto fileSize = std::filesystem::file_size(path, ec);
+        if (!ec)
+            sizeBytes = static_cast<uint64_t>(fileSize);
+    }
+    ec.clear();
+
+    std::string modifiedText = exists ? formatFileTimestampHuman(std::filesystem::last_write_time(path, ec)) : "Not saved yet";
+    if (ec)
+        modifiedText = "Unknown";
+
+    std::ostringstream out;
+    out << "{\"ok\":true"
+        << ",\"path\":\"" << escapeJson(path.string()) << "\""
+        << ",\"display_path\":\"" << escapeJson(hardwareConfigDisplayPath(path)) << "\""
+        << ",\"exists\":" << (exists ? "true" : "false")
+        << ",\"revision\":\"" << escapeJson(info.revision) << "\""
+        << ",\"boot_copy\":\"" << escapeJson(bootCopy) << "\""
+        << ",\"size_bytes\":" << sizeBytes
+        << ",\"size_text\":\"" << escapeJson(formatBytesHuman(sizeBytes)) << "\""
+        << ",\"modified_text\":\"" << escapeJson(modifiedText) << "\""
+        << ",\"text\":\"" << escapeJson(text) << "\""
+        << ",\"written_by\":\"" << escapeJson(info.writtenBy) << "\""
+        << ",\"written_at\":\"" << escapeJson(info.writtenAt) << "\""
+        << ",\"errors\":" << errors
+        << ",\"warnings\":" << issues.size() - errors
+        << ",\"issues\":" << controlsIssuesJson(issues)
+        << ",\"replaced\":" << controlsReplacedJson(hardware::configStore().replacedByDefault())
+        << ",\"model\":" << hwconf::modelJson(doc)
+        << ",\"peripherals\":[" << gpioPeripheralJson(doc)
+        << "," << i2cPeripheralJson(doc, "neorotary4", "NeoRotary 4", 0x49, neoRotary4Input_.enabled(), neoRotary4Input_.lastError())
+        << "," << i2cPeripheralJson(doc, "pcf8574", "PCF8574 buttons", 0x20, pcf8574Input_.enabled(), pcf8574Input_.lastError())
+        << "," << i2cPeripheralJson(doc, "grove_analog", "Grove analog (ADC)", 0x04, groveAnalogInput_.enabled(), groveAnalogInput_.lastError())
+        << "," << cfeHatPeripheralJson(doc, options_.mediaRoot)
+        << "," << outputPeripheralJson(doc, "recording_indicator", "Tally LED",
+                                       recordingIndicatorOutput_.enabled(), recordingIndicatorOutput_.lastError())
+        << "," << outputPeripheralJson(doc, "trigger_output", "Trigger output",
+                                       triggerOutput_.enabled(), triggerOutput_.lastError())
+        << "],\"i2c_buses\":" << i2cBusesJson()
+        << ",\"apply\":" << controlsApplyJson()
+        << ",\"dpi_lines\":[";
+    for (size_t i = 0; i < facts.dpiLines.size(); ++i)
+        out << (i ? "," : "") << facts.dpiLines[i];
+    // The GPIO chips a chip= setting can name; "header" marks the one chip=auto means.
+    out << "],\"gpio_chips\":[";
+    for (size_t i = 0; i < facts.gpioChips.size(); ++i) {
+        const hwconf::GpioChipFact &chip = facts.gpioChips[i];
+        out << (i ? "," : "") << "{\"path\":\"" << escapeJson(chip.path) << "\",\"label\":\"" << escapeJson(chip.label)
+            << "\",\"lines\":" << chip.lines << ",\"header\":" << (chip.path == facts.headerChip ? "true" : "false") << "}";
+    }
+    out << "]}";
+    return out.str();
 }
 
 std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
@@ -13330,9 +13468,6 @@ std::string ApertarCoreApp::handleCommand(const ControlCommand &command)
     // The secondary takes the allowlist's commands only (design 4.2); the rest is the primary's.
     if (secondaryRole() && !commandclasses::allowedOnSecondary(command.name))
         return errorReply(command.id, commandclasses::kSecondaryRefusal);
-    // The read-only hardware commands answer before the command lock, so a slow one never holds up a button.
-    if (const auto reply = handleReadOnlyHardwareCommand(command))
-        return *reply;
     // The WebUI's Try and Remote controls: the actions are commands that take the command lock themselves.
     if (command.name == "test_input")
         return testInputReply(command);
@@ -13814,6 +13949,70 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         return okReply(command.id, body.str());
     }
 
+    if (command.name == "controls_last_input") {
+        // T42 Listen: the last control that fired, as section and key, and how long ago.
+        std::lock_guard<std::mutex> lock(lastInputMutex_);
+        const long long ago = lastInputSeq_ == 0 ? -1 : static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastInputAt_).count());
+        const auto bar = lastInput_.find('|');
+        return okReply(command.id, "\"seq\":" + std::to_string(lastInputSeq_) + ",\"section\":\"" +
+            escapeJson(bar == std::string::npos ? std::string() : lastInput_.substr(0, bar)) + "\",\"key\":\"" +
+            escapeJson(bar == std::string::npos ? lastInput_ : lastInput_.substr(bar + 1)) + "\",\"ms_ago\":" + std::to_string(ago));
+    }
+    if (command.name == "scan_i2c") {
+        // T40: which addresses answer on a bus. One read per address, as the probe does; never an address a Core
+        // driver is reading (it is listed as Core's), never during a take.
+        if (recordingGateActive())
+            return errorReply(command.id, "Not during a take: scan the I2C bus when the camera is idle.");
+        const auto busValue = command.number("bus");
+        if (!busValue || *busValue < 0 || *busValue > 255)
+            return errorReply(command.id, "scan_i2c requires bus.");
+        const int bus = static_cast<int>(*busValue);
+        const hwconf::Document doc = hwconf::parse(hardware::configStore().currentText());
+        std::set<int> held;
+        const auto holdIfRunning = [&](const char *section, int fallback, bool running) {
+            const auto b = hwconf::integer(hwconf::effectiveValue(doc, section, "bus").value_or("1"));
+            const auto a = hwconf::integer(hwconf::effectiveValue(doc, section, "address").value_or(""));
+            if (running && b && *b == bus)
+                held.insert(a ? static_cast<int>(*a) : fallback);
+        };
+        holdIfRunning("neorotary4", 0x49, neoRotary4Input_.enabled());
+        holdIfRunning("pcf8574", 0x20, pcf8574Input_.enabled());
+        holdIfRunning("grove_analog", 0x04, groveAnalogInput_.enabled());
+        static const std::map<int, const char *> known = {
+            {0x04, "Grove ADC"}, {0x1a, "IMX585 / IMX283 sensor"}, {0x20, "PCF8574"}, {0x21, "PCF8574"}, {0x22, "PCF8574"}, {0x23, "PCF8574"},
+            {0x24, "PCF8574"}, {0x25, "PCF8574"}, {0x26, "PCF8574"}, {0x27, "PCF8574"}, {0x34, "CFexpress hat"}, {0x40, "INA219"},
+            {0x41, "INA219"}, {0x44, "INA219"}, {0x45, "INA219"}, {0x49, "NeoRotary 4"}, {0x4a, "NeoRotary 4"},
+            {0x68, "MPU6050 / BMI gyro"}, {0x69, "MPU6050 / BMI gyro"}};
+        std::ostringstream body;
+        body << "\"bus\":" << bus << ",\"found\":[";
+        bool first = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        for (int address = 0x03; address <= 0x77; ++address) {
+            const auto guess = known.find(address);
+            std::string by;
+            if (held.count(address)) {
+                by = "core";
+            } else {
+                const hardware::I2cProbe probe = hardware::probeI2cAddress(bus, address);
+                if (!probe.busExists)
+                    return errorReply(command.id, probe.error.empty() ? "No I2C bus " + std::to_string(bus) + "." : probe.error);
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return errorReply(command.id, "I2C bus " + std::to_string(bus) + " does not answer: check the wiring.");
+                if (!probe.found)
+                    continue;
+                by = probe.kernelDriver ? "kernel" : "";
+            }
+            body << (first ? "" : ",") << "{\"address\":\"" << hwconf::hex(address) << "\",\"by\":\"" << by << "\",\"guess\":\""
+                 << (guess == known.end() ? "" : guess->second) << "\"}";
+            first = false;
+        }
+        body << "]";
+        return okReply(command.id, body.str());
+    }
+    if (command.name == "list_actions")
+        return okReply(command.id, hardware::actions::catalogJson());
+
     if (command.name == "test_output") {
         // T42: one blink of the tally or one trigger pulse, to see which one is wired where.
         const std::string which = command.string("which").value_or("");
@@ -13839,10 +14038,10 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, "set_controls needs base= (the revision you loaded).");
         // restore=true puts back the version Core last knew, when the file was replaced by a default.
         if (const auto restore = command.string("restore"); restore) {
-            bool wanted = false;
-            if (!parseBooleanToken(*restore, &wanted))
+            const auto wanted = boolFieldValue(*restore);
+            if (!wanted)
                 return errorReply(command.id, "restore must be true or false.");
-            if (wanted) {
+            if (*wanted) {
                 const hardware::ReplacedInfo replaced = hardware::configStore().replacedByDefault();
                 if (!replaced.replaced)
                     return errorReply(command.id, "Nothing to restore: the file has not been replaced.");
@@ -13857,25 +14056,27 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, "Send the whole file (text=) or single keys (set.<section>.<key>=), not both.");
         if (!text && edits.empty())
             return errorReply(command.id, "set_controls needs text= (the whole file), restore=true, or set.<section>.<key>=value.");
+        // A whole file, restored text included, gets the same checks as POST /api/config.
+        if (std::string message; text && !checkHardwareConfigText(*text, &message))
+            return errorReply(command.id, message);
         hardware::StoreFlags flags;
         flags.backup = true;   // WebUI and core.py saves keep <file>.bak; the IMU code does not
         const std::pair<const char *, bool *> flagFields[] = {
             { "dry_run", &flags.dryRun }, { "force", &flags.force }, { "confirm_merge", &flags.confirmMerge } };
         for (const auto &[name, flag] : flagFields) {
-            if (const auto value = command.string(name); value && !parseBooleanToken(*value, flag))
-                return errorReply(command.id, std::string(name) + " must be true or false.");
+            if (const auto value = command.string(name); value) {
+                const auto parsed = boolFieldValue(*value);
+                if (!parsed)
+                    return errorReply(command.id, std::string(name) + " must be true or false.");
+                *flag = *parsed;
+            }
         }
         const std::string by = command.string("by").value_or("api");
         const hardware::StoreResult result = edits.empty()
             ? hardware::configStore().replace(*base, *text, by, flags, hardwareConfigFacts())
             : hardware::configStore().edit(*base, edits, by, flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues) +
-                ",\"new_errors\":" + controlsIssuesJson(result.newErrors) +
-                ",\"conflicts\":" + controlsConflictsJson(result.conflicts));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13909,11 +14110,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "storage", "buffer", *value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13924,23 +14122,33 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             (result.written ? "true" : "false") + ",\"apply\":\"next_take\"," + bufferSettingMembers());
     }
 
-    // frames_per_folder=<N> and clip_merge=on|off in [storage], through the store like set_buffer_mode. Allowed while
-    // recording: frames_per_folder applies to the next take, clip_merge to the merge worker's next rename.
+    // frames_per_folder=<N>, split=off|on|auto and clip_merge=on|off in [storage], through the store like set_buffer_mode.
+    // Allowed while recording: the split applies to the next take, clip_merge to the merge worker's next rename.
+    // set_frames_per_folder takes value (0 = no split, else the part size, which turns the split on unless it is automatic)
+    // and/or mode (off, on or auto).
     if (command.name == "set_frames_per_folder" || command.name == "set_clip_merge") {
         const bool fpf = command.name == "set_frames_per_folder";
-        std::string key, value;
+        std::vector<hwconf::Edit> edits;
         if (fpf) {
             const auto v = command.string("value");
-            if (!v || !framepath::framesPerFolderProblem(*v).empty())
-                return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000.");
-            key = "frames_per_folder";
-            value = *v;
+            const auto m = command.string("mode");
+            if ((!v && !m) || (v && !framepath::framesPerFolderProblem(*v).empty()) ||
+                (m && *m != "off" && *m != "on" && *m != "auto"))
+                return errorReply(command.id, "set_frames_per_folder needs value=0 (one folder) or a whole number from 100 to 100000, or mode=off, on or auto.");
+            const unsigned size = v ? static_cast<unsigned>(std::strtoul(v->c_str(), nullptr, 10)) : 0;
+            if (size > 0)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "frames_per_folder", *v });
+            if (m)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", *m });
+            else if (v && size == 0)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", "off" });
+            else if (bufferbudget::splitModeRequest().load(std::memory_order_acquire) != bufferbudget::SplitMode::Auto)
+                edits.push_back({ hwconf::Edit::Op::Set, "storage", "split", "on" });
         } else {
             const auto enabled = command.string("enabled");
             if (!enabled || (*enabled != "true" && *enabled != "false" && *enabled != "1" && *enabled != "0"))
                 return errorReply(command.id, "set_clip_merge needs enabled=true or enabled=false.");
-            key = "clip_merge";
-            value = (*enabled == "true" || *enabled == "1") ? "on" : "off";
+            edits.push_back({ hwconf::Edit::Op::Set, "storage", "clip_merge", (*enabled == "true" || *enabled == "1") ? "on" : "off" });
         }
         hardware::HardwareConfigStore &store = hardware::configStore();
         const std::string base = command.string("base").value_or("");
@@ -13948,18 +14156,16 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.backup = true;
         flags.trusted = true;   // [storage] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
-            { { hwconf::Edit::Op::Set, "storage", key, value } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+            edits, command.string("by").value_or("api"), flags, hardwareConfigFacts());
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
             wakeControlsWorker();
         }
         refreshBufferRequest();
+        refreshLadderContext();
         if (!fpf && bufferbudget::clipMergeRequest().load())
             clipMerge("switch");
         return okReply(command.id, "\"revision\":\"" + escapeJson(result.revision) + "\",\"written\":" +
@@ -13983,11 +14189,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         flags.trusted = true;   // [media] is text-mode only for set_controls; the value is checked above
         const hardware::StoreResult result = store.edit(base.empty() ? store.currentRevision() : base,
             { { hwconf::Edit::Op::Set, "media", "preroll", text } }, command.string("by").value_or("api"), flags, hardwareConfigFacts());
-        if (!result.ok) {
-            return errorReplyBody(command.id, result.error,
-                "\"code\":\"" + escapeJson(result.code) + "\",\"revision\":\"" + escapeJson(result.revision) + "\""
-                ",\"issues\":" + controlsIssuesJson(result.issues));
-        }
+        if (!result.ok)
+            return errorReply(command.id, result.error);
         if (result.written) {
             controlsErrors_ = controlsErrorCount(result.issues);
             controlsWarnings_ = result.issues.size() - controlsErrors_.load();
@@ -13999,7 +14202,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"get_controls\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_history\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_dual_sensor_enabled\",\"set_preview_source\",\"set_hdmi1_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"get_boot_config\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_stop_on_dropped_frame\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_dual_sensor_enabled\",\"set_preview_source\",\"set_hdmi1_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -14016,7 +14219,6 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"recording\":" << (recording ? "true" : "false")
              << ",\"recording_error\":\"" << escapeJson(camera_.recordingError()) << "\""
              << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
-             << ",\"media_state\":\"" << mediaSnapshot().stateName() << "\""
              << ",\"recording_has_dropped_frames\":" << (camera_.recordingHasDroppedFrames() ? "true" : "false")
              << ",\"recording_dropped_frames\":" << camera_.recordingDroppedFrames()
              << takeSlotMembers(camera_.takeSnapshot())
@@ -14044,8 +14246,6 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
-             << clipMergeStateJson()
-             << ",\"ui\":{" << dualSensorUiStateJson(uiState) << "}"
              << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
         return okReply(command.id, body.str());
     }
@@ -14296,6 +14496,17 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             : errorReply(command.id, camera_.lastError());
     }
 
+    if (command.name == "set_stop_on_dropped_frame") {
+        const auto enabled = command.string("enabled");
+        if (!enabled)
+            return errorReply(command.id, "set_stop_on_dropped_frame requires enabled.");
+        const bool on = *enabled == "true" || *enabled == "1";
+        if (!camera_.setStopOnDroppedFrame(on))
+            return errorReply(command.id, camera_.lastError());
+        stopOnDroppedFrameSetting_.store(on);
+        return okReply(command.id, settingsBody(camera_.settings()));
+    }
+
     if (command.name == "set_fps_phase_lock") {
         const auto enabled = command.string("enabled");
         if (!enabled)
@@ -14393,10 +14604,19 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (target != "ui" && !camera_.setTimecodeMode(mode))
             return errorReply(command.id, camera_.lastError());
 
+        // UI.conf fileTimecodeSeparate: true once the operator sets the file timecode apart (ui or files),
+        // false again by a change of both; a camera that never sets it apart gets no key.
         if (target != "files") {
-            (void)updateSharedUiGeneralSettings({
+            std::vector<std::pair<std::string, std::string>> updates = {
                 { "timecodeMode", mode == TimecodeMode::RecRun ? "Rec Run" : "Free Run" }
-            });
+            };
+            if (target == "ui")
+                updates.emplace_back("fileTimecodeSeparate", "true");
+            else if (readSharedUiSettings().fileTimecodeSeparate)
+                updates.emplace_back("fileTimecodeSeparate", "false");
+            (void)updateSharedUiGeneralSettings(updates);
+        } else {
+            (void)updateSharedUiGeneralSettings({ { "fileTimecodeSeparate", "true" } });
         }
         return okReply(command.id, settingsBody(camera_.settings()));
     }
@@ -14452,6 +14672,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         if (!updateSharedUiGeneralSettings({ { settingKey, value ? "true" : "false" } }))
             return errorReply(command.id, "Could not update shared UI settings.");
 
+        refreshLadderContext();
         return okReply(command.id, settingsBody(camera_.settings()));
     };
 
@@ -15313,9 +15534,10 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         return okReply(command.id, "\"mode_ladder\":" + camera_.modeLadderJson());
 
     if (command.name == "set_mode_ladder") {
-        // T34: any of resolutions (WIDTHxHEIGHT:BITS:hdr|sdr[:FPS], comma-separated), enabled, ramp_ready
-        // (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
-        // saved in a take too); dry_run=true only validates and returns the errors and warnings.
+        // Dynamic resolution: any of modes (WIDTHxHEIGHT:BITS:hdr|sdr, comma-separated; "resolutions" is the old name),
+        // enable_mode or disable_mode (one mode), enabled (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
+        // saved in a take too), tdn (keep, or off_in_4k: Dynamic resolution turns preview temporal denoise off for 4K
+        // and crops and back on for 2K); dry_run=true only validates and returns the errors and warnings.
         const auto boolField = [&command](const char *name) -> std::optional<bool> {
             const auto value = command.string(name);
             if (!value)
@@ -15324,8 +15546,9 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         };
         const bool dryRun = boolField("dry_run").value_or(false);
         std::string json, error;
-        if (!camera_.setModeLadder(command.string("resolutions"), boolField("enabled"), boolField("ramp_ready"),
-                                   command.string("aspects"), dryRun, &json, &error))
+        const auto modes = command.string("modes") ? command.string("modes") : command.string("resolutions");
+        if (!camera_.setModeLadder(modes, boolField("enabled"), command.string("enable_mode"), command.string("disable_mode"),
+                                   command.string("aspects"), command.string("tdn"), dryRun, &json, &error))
             return errorReply(command.id, error);
         return okReply(command.id, "\"mode_ladder\":" + json + (dryRun ? "" : "," + settingsBody(camera_.settings())));
     }
@@ -15382,7 +15605,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, "set_value_steps needs values, free, increment, flicker_free or mains_hz.");
         if (!updateSharedUiGeneralSettings(updates))
             return errorReply(command.id, "Could not save the value list.");
-        return okReply(command.id, "\"ui\":{" + valueStepsJson(readSharedUiSettings(), camera_.sensorName()) + "}");
+        return okReply(command.id, valueStepsJson(readSharedUiSettings(), camera_.sensorName()));
     }
 
     if (command.name == "set_favorites_order") {
@@ -15685,6 +15908,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             !addBoolUpdate("frameBufferBarEnabled") ||
             !addBoolUpdate("recordingRedTimecodeEnabled") ||
             !addBoolUpdate("audioRecordedOutlineEnabled") ||
+            !addBoolUpdate("fileTimecodeSeparate") ||
             !addBoolUpdate("soundRecorderEnabled") ||
             !addBoolUpdate("recordAudioEnabled") ||
             !addBoolUpdate("recordGyroEnabled") ||
@@ -15771,6 +15995,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             }))
             return errorReply(command.id, camera_.lastError());
 
+        refreshLadderContext();
         return okReply(command.id,
                        "\"applied_preset\":\"" + escapeJson(trimAscii(presetLabel)) + "\""
                        + std::string(",\"state\":{") + settingsBody(camera_.settings()) + "}");
@@ -15815,11 +16040,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
                        ",\"network_time_synced\":" + std::string(networkTimeSynced ? "true" : "false"));
     }
 
-    if (command.name == "get_boot_config")
-        return bootConfigGet(command.id).body;
-
     if (command.name == "set_boot_config")
-        return bootConfigSet(command, command.string("revision"), false).body;
+        return bootConfigSet(command);
 
     if (command.name == "set_fan_mode") {
         const auto value = command.string("value");

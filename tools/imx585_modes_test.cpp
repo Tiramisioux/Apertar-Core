@@ -15,9 +15,9 @@ static int failures = 0;
 
 int main()
 {
-    CHECK(im::all(im::Class::S12).size() == 62);
-    CHECK(im::all(im::Class::S10).size() == 62);
-    CHECK(im::all(im::Class::H12).size() == 29);
+    CHECK(im::all(im::Class::S12).size() == 64);
+    CHECK(im::all(im::Class::S10).size() == 64);
+    CHECK(im::all(im::Class::H12).size() == 29);   // the driver's binned 1920x1080 row is left out
     CHECK(im::all(im::Class::H16).size() == 34);
 
     CHECK(im::classFor(12, false) == im::Class::S12);
@@ -63,7 +63,7 @@ int main()
     CHECK(im::find(im::Class::S12, 960, 540, 0) != nullptr);
     CHECK(im::find(im::Class::S12, 1488, 1080, 1280) != nullptr);
     CHECK(im::find(im::Class::S12, 1080, 1080, 1280) == nullptr);
-    CHECK(im::offered(im::Class::S12, 1280).size() == 62 - 11 - 10 - 1);   // 960 x11, 1024 x10, 1080x1080b
+    CHECK(im::offered(im::Class::S12, 1280).size() == 64 - 11 - 10 - 1);   // 960 x11, 1024 x10, 1080x1080b
     for (const im::Mode &mode : im::offered(im::Class::S10))
         CHECK(mode.width >= im::kDefaultMinModeWidth);
 
@@ -74,7 +74,47 @@ int main()
     for (const im::Class cls : { im::Class::S12, im::Class::S10, im::Class::H12, im::Class::H16 })
         CHECK(im::find(cls, 3840, 2160));
     CHECK(im::anyClassHas(1920, 1016));
-    CHECK(!im::anyClassHas(3840, 2076));            // the retired 1.6.0 size
+
+    // 1.85:1 of both drivers: the cinemate-port driver's 3840x2072 / 1920x1036b and the original
+    // driver's 3840x2076 / 1920x1038b, in SDR 12-bit and 10-bit; 3840 also in 12-bit Clear HDR.
+    for (const im::Class cls : { im::Class::S12, im::Class::S10 }) {
+        for (const uint32_t height : { 2072u, 2076u }) {
+            const im::Mode *uhd = im::find(cls, 3840, height);
+            CHECK(uhd && !uhd->binned);
+        }
+        for (const uint32_t height : { 1036u, 1038u }) {
+            const im::Mode *hd = im::find(cls, 1920, height);
+            CHECK(hd && hd->binned);
+        }
+    }
+    const im::Mode *hdr185 = im::find(im::Class::H12, 3840, 2076);
+    CHECK(hdr185 && !hdr185->binned);
+    CHECK(!im::find(im::Class::H12, 1920, 1038, 0));
+    CHECK(!im::find(im::Class::H16, 3840, 2076, 0));   // RAW16 1.85:1 stays 3840x2072 (transport 3840x2112)
+    CHECK(im::transportFor(im::Class::S12, 3840, 2076, 0) == std::optional<im::Size>(im::Size{ 3840, 2076 }));
+    CHECK(im::transportFor(im::Class::S10, 1920, 1038, 0) == std::optional<im::Size>(im::Size{ 1920, 1038 }));
+
+    // driverCropSize: a 1.85:1 size follows the height the probe found in the class.
+    const std::vector<im::Size> portS12 = { { 1920, 1080 }, { 3840, 2160 }, { 3840, 2072 }, { 1920, 1036 } };
+    const std::vector<im::Size> originalS12 = { { 1920, 1080 }, { 3840, 2160 }, { 3840, 2076 }, { 1920, 1038 } };
+    const std::vector<im::Size> portH16 = { { 3840, 2200 }, { 3840, 2112 }, { 1920, 1100 } };
+    const std::vector<im::Size> none;
+    for (const uint32_t height : { 2072u, 2076u }) {
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, portS12) == (im::Size{ 3840, 2072 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, originalS12) == (im::Size{ 3840, 2076 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 3840, height }, none) == (im::Size{ 3840, height }));
+        CHECK(im::driverCropSize(im::Class::H16, { 3840, height }, portH16) == (im::Size{ 3840, 2072 }));
+        CHECK(im::driverCropSize(im::Class::H16, { 3840, height }, none) == (im::Size{ 3840, 2072 }));
+    }
+    for (const uint32_t height : { 1036u, 1038u }) {
+        CHECK(im::driverCropSize(im::Class::S12, { 1920, height }, portS12) == (im::Size{ 1920, 1036 }));
+        CHECK(im::driverCropSize(im::Class::S12, { 1920, height }, originalS12) == (im::Size{ 1920, 1038 }));
+        CHECK(im::driverCropSize(im::Class::S10, { 1920, height }, none) == (im::Size{ 1920, height }));
+        CHECK(im::driverCropSize(im::Class::H12, { 1920, height }, none) == (im::Size{ 1920, height }));  // no binned 1.85:1 there
+    }
+    CHECK(im::driverCropSize(im::Class::H12, { 3840, 2076 }, { { 3840, 2160 }, { 3840, 2072 } }) == (im::Size{ 3840, 2072 }));
+    CHECK(im::driverCropSize(im::Class::S12, { 3840, 2160 }, originalS12) == (im::Size{ 3840, 2160 }));
+    CHECK(im::driverCropSize(im::Class::S12, { 3840, 2024 }, portS12) == (im::Size{ 3840, 2024 }));
 
     // nearest: an exact row is its own nearest; a missing size takes the closest row.
     for (const im::Mode &mode : im::offered(im::Class::H12)) {
@@ -86,6 +126,19 @@ int main()
     near = im::nearest(im::Class::H16, 4056, 3040);
     CHECK(near && near->width == 3840 && near->height == 2160);
     CHECK(im::nearest(im::Class::S12, 3840, 2160, 100000) == nullptr);
+
+    // Why setClearHdr enters at 3840x2160: the nearest 12-bit Clear HDR row of Full HD is the 1x1
+    // 1920x1040 crop, not 4K; the 4K row exists in that class and is 1x1.
+    near = im::nearest(im::Class::H12, 1920, 1080);
+    CHECK(near && near->width == 1920 && near->height == 1040 && !near->binned);
+    // Binned 1920x1080 is not offered at 12-bit Clear HDR (its curve is unverified); 16-bit and SDR keep it.
+    CHECK(!im::find(im::Class::H12, 1920, 1080, 0));
+    for (const im::Class cls : { im::Class::S12, im::Class::S10, im::Class::H16 }) {
+        const im::Mode *hd = im::find(cls, 1920, 1080);
+        CHECK(hd && hd->binned);
+    }
+    const im::Mode *hdr4k = im::find(im::Class::H12, 3840, 2160);
+    CHECK(hdr4k && !hdr4k->binned);
 
     // APERTAR_IMX585_MIN_MODE_WIDTH: a number overrides, a negative or unparsable value keeps the default.
     CHECK(im::minModeWidth() == 1280);

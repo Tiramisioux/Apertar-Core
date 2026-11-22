@@ -1655,6 +1655,10 @@ std::string_view webControlPageHtml()
       overflow-wrap: anywhere;
     }
 
+    .dynres-off .ladder-dim {
+      opacity: 0.55;
+    }
+
     .crop-frame {
       position: relative;
       flex: 0 0 auto;
@@ -1716,48 +1720,10 @@ std::string_view webControlPageHtml()
       gap: 10px;
     }
 
-    .ladder-list.off .ladder-row {
-      opacity: 0.55;
-    }
-
     .ladder-item {
       display: flex;
       flex-direction: column;
       gap: 8px;
-    }
-
-    .ladder-transition {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 2px 10px 2px 44px;
-      font-size: 13px;
-      color: #d4d4d8;
-    }
-
-    .ladder-transition .ladder-fps-input {
-      flex: 0 0 auto;
-      width: 84px;
-      min-height: 40px;
-      border-radius: 999px;
-      text-align: center;
-      font-size: 15px;
-      font-weight: 700;
-    }
-
-    .ladder-transition .ladder-fps-input.problem {
-      border-color: var(--danger);
-    }
-
-    .ladder-fps-unit {
-      flex: 0 0 auto;
-      margin-left: -4px;
-      font-weight: 700;
-      color: #f4f4f5;
-    }
-
-    .ladder-transition svg {
-      flex: 0 0 auto;
     }
 
     .ladder-row {
@@ -1771,14 +1737,6 @@ std::string_view webControlPageHtml()
       background: #202024;
     }
 
-    .ladder-row.dragging {
-      background: #111113;
-    }
-
-    .ladder-row.drop-target {
-      border: 1px dashed rgba(255, 255, 255, 0.7);
-    }
-
     .ladder-row-main {
       display: flex;
       flex-wrap: wrap;
@@ -1786,18 +1744,6 @@ std::string_view webControlPageHtml()
       gap: 14px;
       flex: 1 1 360px;
       min-width: 0;
-    }
-
-    .ladder-handle {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      min-height: 44px;
-      color: var(--muted);
-      cursor: grab;
-      touch-action: none;
-      user-select: none;
     }
 
     .ladder-badge {
@@ -1831,100 +1777,15 @@ std::string_view webControlPageHtml()
       color: var(--muted);
     }
 
-    .ladder-row-desc.crop-in {
-      color: #fbbf24;
-    }
-
-    .ladder-row-range,
-    .ladder-problem {
+    .ladder-row-range {
       margin-top: 6px;
       font-size: 13px;
       color: #d4d4d8;
     }
 
-    .ladder-problem {
-      color: #fca5a5;
-    }
-
-    .ladder-row-controls {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: flex-start;
-      gap: 12px;
-      flex: 0 1 auto;
-      min-width: 0;
-    }
-
-    .ladder-row-controls .field-stack {
-      gap: 4px;
-    }
-
-    .ladder-row-controls .input-label {
-      font-size: 11px;
-    }
-
-    .ladder-row-controls .settings-input,
-    .ladder-row-controls .settings-select {
-      min-height: 44px;
-      border-radius: 14px;
-      padding-left: 12px;
-    }
-
-    .ladder-row-controls .settings-input.problem {
-      border-color: var(--danger);
-    }
-
-    .ladder-thr {
-      flex: 0 0 120px;
-      width: 120px;
-    }
-
-    .ladder-comp {
-      flex: 0 0 190px;
-      width: 190px;
-    }
-
     .ladder-note {
       font-size: 12px;
       color: var(--muted);
-    }
-
-    .ladder-size {
-      font-size: 13px;
-      font-weight: 600;
-      color: #e4e4e7;
-    }
-
-    .ladder-note.over {
-      color: #fbbf24;
-    }
-
-    .ladder-row-buttons {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding-top: 19px;
-    }
-
-    .ladder-icon-button {
-      width: 44px;
-      height: 44px;
-      border-radius: 14px;
-      border: 1px solid #27272a;
-      background: rgba(9, 9, 11, 0.72);
-      color: #f4f4f5;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .ladder-icon-button.remove {
-      color: #fca5a5;
-    }
-
-    .ladder-icon-button:disabled {
-      color: #52525b;
-      cursor: default;
     }
 
     .pill-grid.ladder-pair {
@@ -2024,12 +1885,18 @@ std::string_view webControlPageHtml()
       min-height: 44px;
       padding: 0 12px;
       border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.9);
-      background: #ffffff;
-      color: #09090b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #202024;
+      color: #e4e4e7;
       font-size: 14px;
       font-weight: 600;
       white-space: nowrap;
+    }
+
+    .ladder-add.active {
+      border-color: rgba(255, 255, 255, 0.9);
+      background: #ffffff;
+      color: #09090b;
     }
 
     .ladder-add:disabled {
@@ -2042,26 +1909,6 @@ std::string_view webControlPageHtml()
       flex: 0 0 auto;
       align-items: center;
       gap: 10px;
-    }
-
-    .ladder-pool-number {
-      color: var(--muted);
-      font-size: 14px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .ladder-add.remove {
-      background: transparent;
-      border-color: rgba(252, 165, 165, 0.5);
-      color: #fca5a5;
-    }
-
-    .ladder-add.on-ladder {
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      opacity: 1;
     }
 
     .section-head .online-pill {
@@ -2080,11 +1927,6 @@ std::string_view webControlPageHtml()
     .select-note.switching {
       font-weight: 700;
       color: #fbbf24;
-    }
-
-    .select-note.ladder-on {
-      font-weight: 600;
-      color: var(--ok);
     }
 
     .pill-sub {
@@ -2107,24 +1949,6 @@ std::string_view webControlPageHtml()
       color: #fbbf24;
     }
 
-    .pill-grid.ladder-locked .pill-button.active {
-      border-color: #52525b;
-      background: #3f3f46;
-      color: #a1a1aa;
-      box-shadow: none;
-    }
-
-    @media (max-width: 560px) {
-      .ladder-comp {
-        flex: 1 1 100%;
-        width: auto;
-      }
-
-      .ladder-transition {
-        padding-left: 10px;
-      }
-    }
-
     .ladder-line {
       cursor: pointer;
     }
@@ -2132,13 +1956,6 @@ std::string_view webControlPageHtml()
     .select-note.ladder-line:hover {
       color: #f4f4f5;
       text-decoration: underline;
-    }
-
-    .ladder-link {
-      color: inherit;
-      font-weight: 600;
-      text-decoration: underline;
-      text-underline-offset: 2px;
     }
 
     /* Value lists (T33): one chip per value, x removes it. */
@@ -3945,22 +3762,6 @@ std::string_view webControlPageHtml()
       color: #fcd34d;
     }
 
-    .config-diff .diff-info {
-      margin: 6px 0 0;
-      font-family: inherit;
-      white-space: normal;
-      color: var(--muted);
-    }
-
-    .config-diff .diff-confirm {
-      display: flex;
-      gap: 8px;
-      align-items: flex-start;
-      margin: 8px 0 0;
-      font-family: inherit;
-      white-space: normal;
-    }
-
     .config-diff .diff-actions {
       display: flex;
       gap: 10px;
@@ -4765,18 +4566,6 @@ std::string_view webControlPageHtml()
       transform: translateY(0);
     }
 
-    .toast.with-link {
-      pointer-events: auto;
-    }
-
-    .toast .ladder-link {
-      color: #fca5a5;
-    }
-
-    [data-ladder-lock] select:disabled {
-      pointer-events: none;
-    }
-
     .toast.error {
       border-color: rgba(239, 68, 68, 0.42);
       background: rgba(48, 9, 9, 0.95);
@@ -5356,14 +5145,14 @@ std::string_view webControlPageHtml()
                 <img class="icon-image" src="/icons/settings.png" alt="">
               </div>
               <h2 class="section-title">Camera settings</h2>
-              <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder">Resolution ladder on</div>
+              <div class="online-pill ladder-line hidden" id="quickLadderPill" data-ladder-link="1" role="link" tabindex="0" title="Open Dynamic resolution">Dynamic resolution</div>
             </div>
 
             <div class="stack" id="cameraStack">
               <section class="select-block" data-dual-tie="fps">
                 <div class="select-topline">
                   <span>Frame rate</span>
-                  <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open the Mode Ladder"></span>
+                  <span class="select-note ladder-line" id="fpsLadderLine" data-ladder-link="1" role="link" tabindex="0" title="Open Dynamic resolution"></span>
                 </div>
                 <div class="pill-grid" id="fpsOptions"></div>
               </section>
@@ -5795,6 +5584,7 @@ std::string_view webControlPageHtml()
                   <span class="input-label">Log</span>
                   <div class="pill-grid" id="settingsCdngLogOptions"></div>
                   <p class="settings-card-copy" id="settingsCdngLogNote">Linear storage.</p>
+                  <span class="subtle-note">Makes Clear HDR 16-bit files a quarter smaller but costs 2 to 3 fps in 4K. No effect in SDR, no cost at 2K.</span>
                 </label>
               </div>
               <div class="settings-field-grid hidden" id="settingsBufferModeField" data-search="buffer ram frames queue safety stop dropped">
@@ -5934,15 +5724,15 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Timecode</h3>
-                  <p class="settings-card-copy">The UI shows one timecode; the clips and the audio carry another. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
+                  <p class="settings-card-copy">Mode sets the timecode of the screens and the clips. Files can set the clips' and the audio's timecode apart. Time of Day is the camera's clock; Clip counts each clip from 00:00:00:00.</p>
                 </div>
               </div>
               <div class="field-stack">
-                <span class="input-label">UI timecode</span>
+                <span class="input-label">Mode</span>
                 <div class="pill-grid ladder-pair" id="settingsTimecodeOptions"></div>
               </div>
               <div class="field-stack">
-                <span class="input-label">File timecode (DNG, MLV, ProRes, H.264, WAV)</span>
+                <span class="input-label">Files (DNG, MLV, ProRes, H.264, WAV)</span>
                 <div class="pill-grid ladder-pair" id="settingsFileTimecodeOptions"></div>
               </div>
             </div>
@@ -6017,19 +5807,19 @@ std::string_view webControlPageHtml()
             <div class="settings-card" id="settingsModeLadderCard">
               <div class="settings-card-head">
                 <div>
-                  <h3 class="settings-card-title">Mode Ladder</h3>
-                  <p class="settings-card-copy">Switches resolution automatically when you change FPS. Each resolution runs to its max FPS, then the next one takes over.</p>
+                  <h3 class="settings-card-title">Dynamic resolution</h3>
+                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera holds for 30-minute takes on a hot drive. When the FPS goes up, the resolution goes down first, then the bit depth, then Clear HDR to SDR.</p>
                 </div>
                 <div class="online-pill off" id="settingsModeLadderValue">Off</div>
               </div>
               <div class="ladder-box">
                 <div class="ladder-box-text">
-                  <div class="ladder-box-title">Activate ladder</div>
+                  <div class="ladder-box-title">Dynamic resolution</div>
                   <div class="subtle-note" id="settingsModeLadderSwitchNote">Off: changing FPS never switches resolution.</div>
                 </div>
                 <div class="pill-grid ladder-pair" id="settingsModeLadderOptions"></div>
               </div>
-              <div class="ladder-box">
+              <div class="ladder-box ladder-dim">
                 <div class="ladder-box-text">
                   <span class="input-label">Running now</span>
                   <div class="ladder-now" id="settingsModeLadderNow">--</div>
@@ -6037,17 +5827,21 @@ std::string_view webControlPageHtml()
                 </div>
                 <div class="crop-frame large" id="settingsModeLadderNowCrop" role="img"></div>
               </div>
-              <div class="field-stack">
+              <div class="field-stack ladder-dim">
                 <span class="input-label">During a take</span>
-                <span class="ladder-row-range">FPS stops at the running resolution's ceiling. Resolutions change between takes only, with a short preview blink.</span>
-                <span class="subtle-note">While the ladder is on, Resolution, Bit Depth and Clear HDR are greyed in Recording format: the FPS picks the mode.</span>
+                <span class="ladder-row-range">FPS stops at the running resolution's limit. Resolutions change between takes only, with a short preview blink.</span>
               </div>
-              <div class="field-stack">
+              <div class="field-stack ladder-dim">
                 <div class="ladder-list-head">
-                  <span class="input-label">Resolutions array</span>
-                  <span class="ladder-note">In quality order: Resolution 1 serves the lowest FPS</span>
+                  <span class="input-label">Steps</span>
+                  <span class="ladder-note">Best picture first. 30-minute takes, hot drive.</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
+              </div>
+              <div class="field-stack ladder-dim">
+                <span class="input-label">Preview temporal denoise</span>
+                <div class="pill-grid two-col" id="settingsModeLadderTdnOptions"></div>
+                <span class="subtle-note" id="settingsModeLadderTdnNote"></span>
               </div>
             </div>
           </section>
@@ -6129,6 +5923,7 @@ std::string_view webControlPageHtml()
                   <span class="capture-value" id="settingsHdmi0Value">--</span>
                 </div>
               </div>
+              <span class="subtle-note">A connected WebUI costs about 0.5 fps, only at the limit of 4K Clear HDR. Close it on the shoot day.</span>
               <div class="field-stack">
                 <span class="input-label">Recording frame</span>
                 <div class="pill-grid" id="settingsRecordingFrameOptions"></div>
@@ -6220,6 +6015,7 @@ std::string_view webControlPageHtml()
                     <span>Focus peaking</span>
                   </div>
                   <div class="pill-grid" id="settingsFocusPeakingOptions"></div>
+                  <span class="subtle-note">No measured cost. At the limit of 4K Clear HDR the camera lost fewer frames with it on. Leave it on.</span>
                 </section>
                 <div class="settings-field-grid">
                   <div class="field-stack">
@@ -6239,6 +6035,7 @@ std::string_view webControlPageHtml()
                     <span>Zebra</span>
                   </div>
                   <div class="pill-grid" id="settingsZebraOptions"></div>
+                  <span class="subtle-note">No measured cost. At the limit of 4K Clear HDR the camera lost fewer frames with it on. Leave it on.</span>
                 </section>
                 <div class="settings-field-grid">
                   <div class="field-stack">
@@ -6383,6 +6180,7 @@ std::string_view webControlPageHtml()
                     <span>Record Audio</span>
                   </div>
                   <div class="pill-grid" id="settingsRecordAudioOptions"></div>
+                  <span class="subtle-note">Costs under 1 fps, only at the limit of 4K Clear HDR. Record sound as you like; at the limit, turning it off gains about 1 fps.</span>
                 </section>
               </div>
 
@@ -6679,7 +6477,7 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Preview temporal denoise</span>
                 </div>
-                <span class="subtle-note">Smooths noise in the live picture by blending each frame with the previous one. Off makes the image processor about six times faster per frame at 4K Clear HDR 16-bit. Recordings are raw and never affected.</span>
+                <span class="subtle-note">Costs about 5 fps and drops frames in every 4K mode; leave it off while recording 4K. No cost at 2K.</span>
                 <div class="pill-grid" id="settingsPreviewTdnOptions"></div>
               </section>
               <section class="select-block">
@@ -6693,14 +6491,18 @@ std::string_view webControlPageHtml()
                 <div class="select-topline">
                   <span>Frame-rate phase lock</span>
                 </div>
-                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock.</span>
+                <span class="subtle-note">Nudges the sensor's frame timing to follow the Pi's clock. Costs about 1 fps at the limit of 4K Clear HDR and Log; no cost at 2K or in lossless modes. Use it only when you sync to something.</span>
                 <div class="pill-grid" id="settingsFpsPhaseLockOptions"></div>
               </section>
               <section class="select-block" data-search="frames per folder part split clip folder dng take long">
                 <div class="select-topline">
-                  <span>Frames per folder</span>
+                  <span>Split long takes</span>
                 </div>
-                <span class="subtle-note">0 keeps every frame of a take in one folder (as before). A number from 100 to 100000 starts a new part_NNN folder inside the clip every that many frames, so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
+                <span class="subtle-note">Needed for long cDNG takes: a folder with many files slows file creation. Automatic turns it on above 32 fps. No effect on MLV, ProRes and H.264.</span>
+                <span class="subtle-note">Off keeps every frame of a take in one folder. On starts a new part_NNN folder inside the clip every N frames (the part size below), so a long take never fills one folder. Applies to the next take. Resolve and Premiere import one folder as one clip: merge a split clip first (the camera does this when idle, or tools/flatten_clip.py).</span>
+                <div class="pill-grid three-col" id="settingsSplitModeOptions"></div>
+                <span class="subtle-note" id="settingsSplitModeNote"></span>
+                <span class="input-label">Part size (frames per folder, 0 = off)</span>
                 <div class="field-stack">
                   <input class="settings-input" id="settingsFramesPerFolderInput" type="number" min="0" max="100000" step="1" value="0">
                   <button class="secondary-button" id="settingsFramesPerFolderApply" type="button">Apply</button>
@@ -6715,6 +6517,13 @@ std::string_view webControlPageHtml()
                 <div class="pill-grid" id="settingsClipMergeOptions"></div>
                 <span class="subtle-note" id="settingsClipMergeStatus"></span>
                 <span class="subtle-note" id="settingsClipMergeLast" hidden></span>
+              </section>
+              <section class="select-block" data-search="stop dropped frame drop recording take test">
+                <div class="select-topline">
+                  <span>Stop on Dropped Frame</span>
+                </div>
+                <span class="subtle-note">Ends the take at the first dropped frame.</span>
+                <div class="pill-grid" id="settingsStopOnDroppedFrameOptions"></div>
               </section>
             </div>
 
@@ -7592,7 +7401,7 @@ std::string_view webControlPageHtml()
       },
       modes: {
         title: "Modes",
-        copy: "The sensor modes the camera offers, and the mode ladder that picks one by FPS.",
+        copy: "The sensor modes the camera offers, and Dynamic resolution, which picks one by FPS.",
       },
       favorites: {
         title: "Favorites",
@@ -7640,16 +7449,13 @@ std::string_view webControlPageHtml()
       ladderStash: null,
       ladderServer: null,      // Core's last mode_ladder reply
       ladderError: "",
-      ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
-      ladderSaveAgain: false,
       ladderRecordingSeen: null,
-      ladderCheckTimer: 0,
       ladderSaving: false,
       ladderToggling: false,
       ladderFetching: false,
       ladderFetchedMs: -10000,
-      ladderSeenActive: null,
-      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (mode_ladder.conf) when Core keeps it; empty = All
+      ladderSeenKey: null,     // what the limits looked like at the last snapshot: a change fetches the steps again
+      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (camera_settings.conf) when Core keeps it; empty = All
       ladderAspectsPending: false,   // a filter click not saved yet: Core's replies leave ladderAspects alone
       ladderAspectsTimer: 0,
       ladderAspectsSaving: false,
@@ -8596,29 +8402,25 @@ std::string_view webControlPageHtml()
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
     // Auto in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
-    // ---- Mode Ladder (T34) -----------------------------------------------------------------------
-    // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
-    // its max. Core owns the ladder (get_mode_ladder, set_mode_ladder). The editor keeps a draft of
-    // the resolutions, refuses a change that would make it illegal and saves it on the camera
-    // 200 ms after the last edit. A resolution: Core's mode identity (width, height,
-    // bits, clear_hdr), its compression (comp) and its max FPS (thr, "" = its ceiling).
+    // ---- Dynamic resolution ------------------------------------------------------------------------
+    // The FPS picks the sensor mode from Core's table of known limits (get_mode_ladder, set_mode_ladder). The
+    // page shows Core's steps and sends one edit at a time: the switch, one mode in or out, the TDN option.
+    // A mode is Core's identity: width, height, bits, clear_hdr.
     const ladderCompressions = [
       { value: "none", label: "Uncompressed", factor: 1 },
       { value: "lossless_jpeg", label: "Lossless JPEG", factor: 0.6 },
       { value: "lossy_3to1", label: "Lossy 3:1", factor: 1 / 3 },
       { value: "lossy_5to1", label: "Lossy 5:1", factor: 1 / 5 },
     ];
-    const ladderMaxResolutions = 8;
-    const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
     // The readout area a crop is measured against: the IMX283's is its 5472-wide active area.
     function ladderCropAreaFor() {
       return sensorNameLower(modesSnapshot()).indexOf("imx283") !== -1 ? { width: 5472, height: 3648 } : ladderCropArea;
     }
-    const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K SDR"], ["crop", "4K SDR crops"], ["2k", "2K SDR binned"]];
+    const ladderGroups = [["chdr", "4K Clear HDR"], ["4k", "4K"], ["crop", "4K crops"], ["2k", "2K binned"]];
     // The IMX283's groups (design §5.3): by binning, the 1x1 readout split into the full frame and its windows.
-    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K SDR 2×2 binned"],
-      ["bin3", "1.8K SDR 3×3 binned"]];
+    const imx283LadderGroups = [["full", "5.5K full frame"], ["win", "5.5K windows (1×1)"], ["bin2", "2.7K 2×2 binned"],
+      ["bin3", "1.8K 3×3 binned"]];
 
     // The Modes cards edit one camera. state.ladder* holds that camera's ladder; the other's waits in state.ladderStash.
     // modesSnapshot() is the snapshot whose sensor names the modes: cam0's (never the CAM1 projection), or cam1's.
@@ -8657,25 +8459,24 @@ std::string_view webControlPageHtml()
       const info = ladderModeInfo(mode);
       const binning = imx283Binning(mode, info);
       const aspect = ladderAspectText(mode);
-      return ladderSizeText(mode) + " SDR" + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
+      return ladderSizeText(mode) + (binning >= 2 ? " " + binning + "×" + binning + " binned" : "")
         + (ladderCropIn(info) ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + mode.bits + "-bit";
     }
 
     function ladderBlankBank() {
-      return { server: null, draft: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
+      return { server: null, aspects: [], aspectsPending: false, error: "", fetchedMs: -10000, open: { full: true, win: false, bin2: true, bin3: false } };
     }
 
     function switchModesCamera(cam) {
       const target = cam === "cam1" ? "cam1" : "cam0";
       if (target === state.modesCam)
         return;
-      if (state.ladderSaving || state.ladderAspectsSaving || ladderDirty()) {
+      if (state.ladderSaving || state.ladderAspectsSaving) {
         showToast("Wait for the modes to be saved.", true);
         return;
       }
-      clearTimeout(state.ladderCheckTimer);
       clearTimeout(state.ladderAspectsTimer);
-      const out = { server: state.ladderServer, draft: state.ladderDraft, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
+      const out = { server: state.ladderServer, aspects: state.ladderAspects, aspectsPending: state.ladderAspectsPending,
         error: state.ladderError, fetchedMs: state.ladderFetchedMs, open: state.ladderOpen };
       const incoming = state.ladderStash || ladderBlankBank();
       state.ladderStash = out;
@@ -8686,11 +8487,10 @@ std::string_view webControlPageHtml()
       state.ladderError = incoming.error;
       state.ladderFetchedMs = incoming.fetchedMs;
       state.ladderOpen = incoming.open;
-      state.ladderDraft = incoming.draft || (incoming.server ? ladderDraftFromServer(incoming.server) : []);
       renderLadderEditor();
       renderModesSwitch();
       if (!state.ladderServer && !state.ladderFetching)
-        void fetchModeLadder(true);
+        void fetchModeLadder();
     }
 
     // CAM0 | CAM1 on the Activated sensor modes card: shown when the sensors are of different kinds, or CAM1's resolution is untied.
@@ -8727,7 +8527,7 @@ std::string_view webControlPageHtml()
         state.modesCam, switchModesCamera, 2);
     }
 
-    // The Mode Ladder card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
+    // The Dynamic resolution card belongs to CAM0: on the CAM1 side it is greyed, because CAM1's ladder is off by rule (§4.4).
     function renderLadderCardGrey() {
       const card = document.getElementById("settingsModeLadderCard");
       if (!card)
@@ -8741,13 +8541,9 @@ std::string_view webControlPageHtml()
         card.insertBefore(note, card.firstChild);
       }
       if (note)
-        note.textContent = "CAM1's ladder is off: the Mode Ladder runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
+        note.textContent = "CAM1 has no Dynamic resolution of its own: it runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
     }
     const ladderIcons = {
-      handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
-      up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
-      down: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>',
-      remove: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>',
       chevron: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>',
     };
 
@@ -8777,9 +8573,9 @@ std::string_view webControlPageHtml()
       return Math.abs(ratio - 16 / 9) < 0.01 ? "16:9" : ratio.toFixed(2) + ":1";
     }
 
-    function ladderClassText(mode) {  // "ClearHDR16", "SDR12 2.39:1": Core's running line
+    function ladderClassText(mode) {  // "Clear HDR 16-bit", "12-bit 2.39:1": as Core's running line
       const aspect = ladderAspectText(mode);
-      return (mode.clear_hdr ? "ClearHDR" : "SDR") + mode.bits + (aspect === "16:9" ? "" : " " + aspect);
+      return (mode.clear_hdr ? "Clear HDR " : "") + mode.bits + "-bit" + (aspect === "16:9" ? "" : " " + aspect);
     }
 
     // What Core knows about a mode: the probe's pool entry, else the saved resolution.
@@ -8795,9 +8591,9 @@ std::string_view webControlPageHtml()
       return !!info && Number(info.window_w) > 0 && Number(info.window_w) < ladderCropAreaFor().width;
     }
 
-    function ladderClassName(mode) {  // "Clear HDR", "SDR", "SDR 2×2 binned"
+    function ladderClassName(mode) {  // "Clear HDR", "", "2×2 binned" (1.6.0 names no class for a plain mode)
       const info = ladderModeInfo(mode);
-      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? "SDR " + Number(info.binning) + "×" + Number(info.binning) + " binned" : "SDR");
+      return mode.clear_hdr ? "Clear HDR" : (info && Number(info.binning) >= 2 ? Number(info.binning) + "×" + Number(info.binning) + " binned" : "");
     }
 
     // Size, class, then the aspect ratio when it is not 16:9, then the depth: "4K Clear HDR 16-bit",
@@ -8815,9 +8611,9 @@ std::string_view webControlPageHtml()
       if (mode.clear_hdr)
         return (mode.width === 3840 && aspect === "16:9" ? "4K" : ladderSizeText(mode)) + " Clear HDR " + bits;
       if (!cropIn && mode.width === 3840)
-        return "4K SDR " + (aspect === "16:9" ? "" : aspect + " ") + bits;
+        return "4K " + (aspect === "16:9" ? "" : aspect + " ") + bits;
       if (!cropIn && mode.width === 1920)
-        return "2K SDR binned " + (aspect === "16:9" ? "" : aspect + " ") + bits;
+        return "2K binned " + (aspect === "16:9" ? "" : aspect + " ") + bits;
       return ladderSizeText(mode) + (cropIn ? " crop in" : "") + (aspect === "16:9" ? "" : " " + aspect) + " " + bits;
     }
 
@@ -8835,57 +8631,6 @@ std::string_view webControlPageHtml()
       return ladderCropIn(info) || ladderAspectText(mode) !== "16:9" ? "crop" : "4k";
     }
 
-    // Known when the probe gave a ceiling for some compression, or the mode is usable in this
-    // format (then a zero is real). Otherwise nobody knows here: Core's dry run checks it.
-    function ladderCeilingKnown(rung) {
-      const info = ladderModeInfo(rung);
-      if (!info || !info.ceilings)
-        return false;
-      return Object.keys(info.ceilings).some((key) => Number(info.ceilings[key]) > 0) || info.usable === true;
-    }
-
-    // The highest FPS a resolution records in its compression (0: it cannot).
-    function ladderCeiling(rung) {
-      if (!ladderCeilingKnown(rung))
-        return ladderUnknownCeiling;
-      return Number(ladderModeInfo(rung).ceilings[rung.comp]) || 0;
-    }
-
-    // Why a resolution cannot record in its compression; "" when it can, or when nobody knows.
-    function ladderCannotRecord(rung) {
-      if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
-        return "Lossy DNG cannot record Clear HDR.";
-      if (!ladderCeilingKnown(rung) || ladderCeiling(rung) > 0)
-        return "";
-      return "This mode cannot record in " + ladderCompression(rung.comp).label + ".";
-    }
-
-    // Core's ladder as a draft, normalised as edits write it (a max at the ceiling is empty);
-    // as saved when Core finds errors in it, so the rows show them.
-    function ladderDraftFromServer(server) {
-      const draft = (server && Array.isArray(server.resolutions) ? server.resolutions : []).map((rung) => ({
-        width: Number(rung.width),
-        height: Number(rung.height),
-        bits: Number(rung.bits),
-        clear_hdr: rung.clear_hdr === true,
-        comp: ladderCompression(rung.compression).value,
-        thr: Number(rung.threshold) > 0 ? String(Number(rung.threshold)) : "",
-      }));
-      const result = server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
-      // A max that is what the arrangement gives that place follows the place; any other was set by hand.
-      const reference = ladderArranged(result.map((rung) => Object.assign({}, rung, { auto: true })));
-      result.forEach((rung) => {
-        const same = reference.find((other) => ladderKey(other) === ladderKey(rung) && other.comp === rung.comp);
-        rung.auto = !!same && same.thr === rung.thr;
-      });
-      return result;
-    }
-
-    // The default max of the n-th resolution: 25, 33, 50, then 25 more for each.
-    function ladderDefaultMax(index) {
-      return index < 3 ? [25, 33, 50][index] : 50 + 25 * (index - 2);
-    }
-
     // Resolution 1 is the best picture (it serves the lowest FPS). The order of the array: the
     // picture size first, then Clear HDR before SDR, then the deeper bit depth.
     function ladderQualityCompare(a, b) {
@@ -8898,128 +8643,9 @@ std::string_view webControlPageHtml()
       return b.bits - a.bits;
     }
 
-    // In quality order. A row whose max was not set by hand gets the default of its place (25, 33,
-    // 50, +25 ...), cut to the mode's ceiling and to one under the max of the row below, so that
-    // every row keeps FPS of its own.
-    function ladderArranged(list) {
-      const sorted = list.slice().sort(ladderQualityCompare);
-      const out = new Array(sorted.length);
-      let nextTop = Infinity;
-      for (let index = sorted.length - 1; index >= 0; index--) {
-        let rung = sorted[index];
-        if (rung.auto !== false) {
-          const ceiling = ladderCeiling(rung);
-          // The last resolution has none below it: it runs to its own ceiling (no default max to collide with the one above).
-          const top = index === sorted.length - 1 ? ceiling : Math.min(ladderDefaultMax(index), ceiling, nextTop - 1);
-          rung = Object.assign({}, rung, { auto: true, thr: top >= ceiling ? "" : String(top) });
-        }
-        nextTop = rung.thr !== "" ? Number(rung.thr) : ladderCeiling(rung);
-        out[index] = rung;
-      }
-      return out;
-    }
-
-    // Core's text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
-    function ladderDraftText(list) {
-      return list.map((rung) => ladderKey(rung) + (rung.thr !== "" || rung.comp ? ":" + rung.thr : "")
-        + (rung.comp ? ":" + rung.comp : "")).join(",");
-    }
-
-    // CAM1 keeps mode keys only (no max, no compression: its ladder is off, the activated modes are closest()'s candidates).
-    function ladderDraftTextFor(list) {
-      return modesIsCam1() ? list.map(ladderKey).join(",") : ladderDraftText(list);
-    }
-
-    function ladderDirty() {
-      return !!state.ladderServer && ladderDraftTextFor(state.ladderDraft) !== ladderDraftTextFor(ladderDraftFromServer(state.ladderServer));
-    }
-
     // The camera field of get_mode_ladder / set_mode_ladder: cam1 only on the CAM1 side.
     function ladderCameraFields() {
       return modesIsCam1() ? { camera: "cam1" } : {};
-    }
-
-    // Each resolution serves (from, top]: from = where the ones above stop. An empty max at a
-    // ceiling nobody knows moves nothing: from is then only a lower bound.
-    function ladderSpans(list) {
-      let previous = 0;
-      return list.map((rung) => {
-        const ceiling = ladderCeiling(rung);
-        const threshold = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
-        const from = previous;
-        const top = Math.max(previous, Math.min(threshold, ceiling));
-        previous = top;
-        return { from, top, ceiling };
-      });
-    }
-
-    // Every max into its legal range; one out of range is cleared (= the mode's ceiling).
-    function normalizeLadderDraft(list) {
-      let previous = 0;
-      return list.map((rung) => {
-        const ceiling = ladderCeiling(rung);
-        let thr = rung.thr;
-        if (thr !== "") {
-          const value = Number(thr);
-          thr = Number.isFinite(value) && value > previous && value < ceiling ? String(value) : "";
-        }
-        previous = Math.max(previous, thr !== "" ? Number(thr) : (ladderCeilingKnown(rung) ? ceiling : previous));
-        return Object.assign({}, rung, { thr });
-      });
-    }
-
-    // "" when the draft is legal, else why not.
-    function ladderDraftProblem(list) {
-      if (list.length > ladderMaxResolutions)
-        return "At most " + ladderMaxResolutions + " resolutions.";
-      let previous = 0;
-      for (let i = 0; i < list.length; i++) {
-        const rung = list[i];
-        const cannot = ladderCannotRecord(rung);
-        if (cannot)
-          return rung.clear_hdr && rung.comp.indexOf("lossy") === 0
-            ? cannot : "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") cannot record: " + cannot;
-        const ceiling = ladderCeiling(rung);
-        if (ceiling <= previous)
-          return "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") would never be used: the ones above already reach " + previous + " fps.";
-        previous = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
-      }
-      return "";
-    }
-
-    // Per resolution: its ceiling, what it serves and what is wrong with it, as the rows show it.
-    // open: its top is a ceiling nobody knows (empty max); the ones below it start above that
-    // resolution (after = its number, from = a lower bound).
-    function ladderRowStates(list) {
-      let previous = 0;
-      let after = 0;
-      return list.map((rung, index) => {
-        const ceiling = ladderCeiling(rung);
-        const threshold = rung.thr === "" ? ceiling : Number(rung.thr);
-        let problem = ladderCannotRecord(rung);
-        if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
-          problem = "Lossy DNG cannot record Clear HDR. Pick Uncompressed or Lossless JPEG.";
-        else if (problem)
-          problem = "Cannot record: " + problem;
-        else if (!Number.isFinite(threshold) || threshold <= 0)
-          problem = "Enter an FPS, or leave it empty for " + ceiling + ".";
-        else if (threshold > ceiling)
-          problem = "Above this mode’s ceiling of " + ceiling + " fps.";
-        else if (ceiling <= previous)
-          problem = "Never used: the resolutions above already cover up to " + previous + " fps.";
-        else if (threshold <= previous)
-          problem = "Must be above " + previous + " fps, where the resolution above stops.";
-        const open = !problem && rung.thr === "" && !ladderCeilingKnown(rung);
-        const from = previous;
-        const fromAfter = after;
-        const top = problem || open ? from : Math.max(previous, threshold);
-        previous = Math.max(previous, top);
-        if (open)
-          after = index + 1;
-        else if (!problem)
-          after = 0;
-        return { ceiling, from, top, problem, open, after: fromAfter };
-      });
     }
 
     // The mode's window inside the sensor's readout area (Cinemate's cropDiagram), from the probe's
@@ -9066,13 +8692,6 @@ std::string_view webControlPageHtml()
       return mode.width * mode.height * mode.bits / 8 / 1e6 * ladderCompression(comp).factor;
     }
 
-    // The media speed test's last result ("412 MB/s"); 0 when the card was not measured.
-    function ladderCardWriteSpeed() {
-      const systemState = state.snapshot && state.snapshot.system || {};
-      const match = /^([0-9.]+) MB\/s$/.exec(String(systemState.write_speed_result_text || ""));
-      return match ? Number(match[1]) : 0;
-    }
-
     function ladderSnapshotMode(snapshot) {
       return {
         width: Number(snapshot.width) || 0,
@@ -9082,7 +8701,7 @@ std::string_view webControlPageHtml()
       };
     }
 
-    // "3840×2160 · ClearHDR16 · Uncompressed": the camera's mode when the ladder does not run it.
+    // "3840×2160 · Clear HDR 16-bit · Uncompressed": the camera's mode when the ladder does not run it.
     function ladderSnapshotLine(snapshot) {
       const mode = ladderSnapshotMode(snapshot);
       const format = recordingFormatLabel(snapshot.recording_format);
@@ -9101,20 +8720,6 @@ std::string_view webControlPageHtml()
       const where = snapshot.ladder_active === true && Number(snapshot.ladder_resolution) > 0
         ? "Resolution " + snapshot.ladder_resolution + " (" + mode + ")" : mode;
       return where + " stops at " + accepted + " fps" + (snapshot.recording ? " in a take." : ".");
-    }
-
-    // The red warning when someone tries a control the ladder has greyed: "Mode Ladder" links to the card.
-    function showLadderLockWarning(withCompression) {
-      const toast = document.getElementById("toast");
-      toast.textContent = "";
-      const link = createDomElement("a", "ladder-link", "Mode Ladder");
-      link.href = "#settingsModeLadderCard";
-      link.dataset.ladderLink = "1";
-      toast.appendChild(link);
-      toast.appendChild(document.createTextNode(" on: the FPS picks the resolution" + (withCompression ? " and compression." : ".")));
-      toast.classList.add("error", "visible", "with-link");
-      clearTimeout(state.toastTimer);
-      state.toastTimer = window.setTimeout(() => toast.classList.remove("visible", "with-link"), 6000);
     }
 
     function openModeLadderCard() {
@@ -9140,7 +8745,7 @@ std::string_view webControlPageHtml()
       return result;
     }
 
-    async function fetchModeLadder(resetDraft) {
+    async function fetchModeLadder() {
       if (state.ladderFetching)
         return;
       state.ladderFetching = true;
@@ -9148,10 +8753,10 @@ std::string_view webControlPageHtml()
       const cam = state.modesCam;
       try {
         const result = await ladderRequest(Object.assign({ cmd: "get_mode_ladder" }, ladderCameraFields()));
-        applyModeLadder(result.mode_ladder, resetDraft, cam);
+        applyModeLadder(result.mode_ladder, cam);
       } catch (error) {
         if (cam === state.modesCam) {
-          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Mode Ladder unavailable: ") + error.message;
+          state.ladderError = (cam === "cam1" ? "CAM1's modes unavailable: " : "Dynamic resolution unavailable: ") + error.message;
           renderLadderEditor();
         }
       } finally {
@@ -9164,248 +8769,73 @@ std::string_view webControlPageHtml()
       return server && Array.isArray(server.aspects) ? server.aspects.map(String) : [];
     }
 
-    // A draft not yet saved survives a refetch; a refetch after a failed save replaces it. The aspect
-    // filter follows Core, except while a click on it waits to be saved, and only from a reply that has it:
-    // an older Core's reply has no aspects field and leaves the screen-only filter as it is.
-    function applyModeLadder(modeLadder, resetDraft, cam) {
+    // Core's answer is the whole truth: the enabled modes, their steps and the TDN option. The aspect filter
+    // follows Core, except while a click on it waits to be saved, and only from a reply that has it: an older
+    // Core's reply has no aspects field and leaves the screen-only filter as it is.
+    function applyModeLadder(modeLadder, cam) {
       if (!modeLadder || typeof modeLadder !== "object")
         return;
       if (cam && cam !== state.modesCam) {
-        // A reply for the camera whose ladder is stashed: keep its server copy; its draft is rebuilt when it comes back.
+        // A reply for the camera whose ladder is stashed: keep its server copy.
         if (state.ladderStash)
-          Object.assign(state.ladderStash, { server: modeLadder, draft: null, error: "" });
+          Object.assign(state.ladderStash, { server: modeLadder, error: "" });
         return;
       }
-      const keepDraft = !resetDraft && ladderDirty();
       state.ladderServer = modeLadder;
       state.ladderError = "";
-      if (!keepDraft) {
-        state.ladderDraft = ladderDraftFromServer(modeLadder);
-      }
       if (!state.ladderAspectsPending && Array.isArray(modeLadder.aspects))
         state.ladderAspects = ladderAspectsFromServer(modeLadder);
       renderLadderEditor();
     }
 
-    // The FPS where the next resolution after this one stops: its max, else its ceiling.
-    function ladderNextTop(list, index) {
-      const next = list[index + 1];
-      return next ? (next.thr !== "" ? Number(next.thr) : ladderCeiling(next)) : Infinity;
-    }
-
-    // The maxes must rise down the list: Resolution 1 serves the lowest FPS. A max at or below the
-    // one above is refused, not quietly reset.
-    function ladderOrderProblem(list) {
-      let previous = 0;
-      for (let i = 0; i < list.length; i++) {
-        const rung = list[i];
-        if (rung.thr !== "") {
-          const value = Number(rung.thr);
-          if (Number.isFinite(value) && value <= previous)
-            return "Resolution " + (i + 1) + ": max " + value + " must be above " + previous + " fps, where Resolution " + i + " stops.";
-          previous = Math.max(previous, value);
-        } else if (ladderCeilingKnown(rung)) {
-          previous = Math.max(previous, ladderCeiling(rung));
-        }
-      }
-      return "";
-    }
-
-    // Every local edit goes through here: refused (with the reason) when the result is illegal, else
-    // saved on the camera a moment later. The ladder on screen is always the saved one. A removal is never
-    // refused: it makes no rung unreachable, and a saved ladder that already breaks a rule (Core keeps one
-    // the page would refuse, e.g. Full HD rungs after a 4K one that reaches 60 fps) must be able to shrink.
-    function commitLadderDraft(next, notice, removal) {
-      if (modesIsCam1()) {
-        // No ladder rules on CAM1: mode keys, best first, at most 8.
-        state.ladderDraft = next.slice().sort(ladderQualityCompare);
-        if (notice)
-          showToast(notice, false);
-        clearTimeout(state.ladderCheckTimer);
-        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
-        renderLadderEditor();
-        return;
-      }
-      const arranged = ladderArranged(next);
-      const normalized = normalizeLadderDraft(arranged);
-      const problem = removal ? "" : (ladderOrderProblem(arranged) || ladderDraftProblem(normalized));
-      if (problem) {
-        showToast(problem, true);
-      } else {
-        state.ladderDraft = normalized;
-        if (notice)
-          showToast(notice, false);
-        clearTimeout(state.ladderCheckTimer);
-        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
-      }
-      renderLadderEditor();
-    }
-
-    function setLadderThreshold(index, raw) {
-      const list = state.ladderDraft;
-      const span = ladderSpans(normalizeLadderDraft(list))[index];
-      const text = String(raw).trim();
-      let thr = "";
-      let notice = "";
-      if (text !== "") {
-        const low = span.from + 1;
-        const high = Math.min(span.ceiling, ladderNextTop(list, index) - 1);
-        const value = Math.round(Number(text));
-        const clamped = Number.isFinite(value) ? Math.min(Math.max(value, low), high) : high;
-        if (clamped !== value)
-          notice = "Resolution " + (index + 1) + ": FPS must be between " + low + " and " + high + ". Set to " + clamped + ".";
-        thr = clamped === span.ceiling ? "" : String(clamped);
-      }
-      commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr, auto: false }) : rung)), notice);
-    }
-
-    function createLadderIconButton(icon, label, className, disabled, onClick) {
-      const button = createDomElement("button", "ladder-icon-button" + (className ? " " + className : ""));
-      button.type = "button";
-      button.innerHTML = ladderIcons[icon];
-      button.setAttribute("aria-label", label);
-      button.disabled = !!disabled;
-      button.addEventListener("click", onClick);
-      return button;
-    }
-
-    function createLadderRow(rung, index, rowState) {
-      const draft = state.ladderDraft;
-      const name = ladderModeName(rung);
-      const crop = ladderCrop(rung);
-      const ceiling = rowState.ceiling;
-      const known = ladderCeilingKnown(rung);
-      const uncompressedCeiling = ladderCeiling(Object.assign({}, rung, { comp: "none" }));
-      const megabytes = ladderFrameMB(rung, rung.comp);
-      const cardSpeed = ladderCardWriteSpeed();
-      const approx = rung.comp === "none" ? "" : "≈ ";
-      const rate = megabytes * rowState.top;
-      const locked = !!(state.snapshot && state.snapshot.recording);
-      const item = createDomElement("div", "ladder-item");
-
-      const row = createDomElement("div", "ladder-row");
+    // One step: a mode Dynamic resolution may pick, with the FPS it serves and why, as Core says it.
+    function createLadderStep(mode, step, index) {
+      const item = createDomElement("div", "ladder-row");
       const main = createDomElement("div", "ladder-row-main");
       main.appendChild(createDomElement("span", "ladder-badge", String(index + 1)));
-      const frame = fillCropFrame(createDomElement("div", "crop-frame"), crop);
+      const frame = fillCropFrame(createDomElement("div", "crop-frame"), ladderCrop(mode));
       frame.setAttribute("aria-hidden", "true");
       main.appendChild(frame);
       const text = createDomElement("div", "ladder-row-text");
-      text.appendChild(createDomElement("div", "ladder-row-name", name));
+      text.appendChild(createDomElement("div", "ladder-row-name", ladderModeName(mode)));
       text.appendChild(createDomElement("div", "ladder-row-meta",
-        ladderSizeText(rung) + " · " + ladderAspectText(rung) + " · " + rung.bits + "-bit · " + ladderClassName(rung)));
-      if (crop.desc)
-        text.appendChild(createDomElement("div", "ladder-row-desc" + (crop.cropIn ? " crop-in" : ""), crop.desc));
-      const rangeFrom = rowState.after ? "Above Resolution " + rowState.after : (rowState.from === 0 ? "Lowest FPS" : "Above " + rowState.from);
-      text.appendChild(createDomElement("div", "ladder-row-range", rowState.problem
-        ? "Not used" : rangeFrom + ", max " + (rowState.open ? "its ceiling" : rowState.top + " fps")
-          + (!rowState.open && uncompressedCeiling > 0 && uncompressedCeiling !== rowState.top ? " · sensor max " + uncompressedCeiling + " fps" : "")));
-      if (rowState.problem)
-        text.appendChild(createDomElement("div", "ladder-problem", rowState.problem));
+        ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · " + mode.bits + "-bit" + (ladderClassName(mode) ? " · " + ladderClassName(mode) : "")));
+      const cap = Number(step.cap) || 0;
+      const from = Number(step.from) || 0;
+      text.appendChild(createDomElement("div", "ladder-row-range", step.never_used === true ? "Never used here"
+        : (from > 0 ? "Above " + from + " fps, up to " + cap + " fps" : "Up to " + cap + " fps")));
+      text.appendChild(createDomElement("div", "ladder-row-meta", Number(step.fps30) > 0
+        ? "30-minute limit " + Number(step.fps30) + " fps (" + step.basis + "), limited by " + step.wall + "."
+        : "Not measured: the sensor's limit."));
+      if (step.why)
+        text.appendChild(createDomElement("div", "ladder-row-desc", step.why));
       main.appendChild(text);
-      row.appendChild(main);
-
-      const controls = createDomElement("div", "ladder-row-controls");
-      const compField = createDomElement("div", "field-stack ladder-comp");
-      const compLabel = createDomElement("label", "input-label", "Compression");
-      compLabel.htmlFor = "settingsModeLadderComp" + index;
-      const compSelect = createDomElement("select", "settings-select");
-      compSelect.id = "settingsModeLadderComp" + index;
-      ladderCompressions.forEach((entry) => {
-        const candidate = Object.assign({}, rung, { comp: entry.value });
-        const notForClearHdr = rung.clear_hdr && entry.value.indexOf("lossy") === 0;
-        const cannot = ladderCannotRecord(candidate);
-        const option = createDomElement("option", "", entry.label
-          + (notForClearHdr ? " (not for Clear HDR)" : (cannot ? " (not available)" : "")));
-        option.value = entry.value;
-        option.disabled = cannot !== "" && entry.value !== rung.comp;
-        option.title = cannot;
-        compSelect.appendChild(option);
-      });
-      compSelect.value = rung.comp;
-      compSelect.disabled = locked;
-      compSelect.addEventListener("change", () => commitLadderDraft(
-        draft.map((other, i) => (i === index ? Object.assign({}, other, { comp: compSelect.value }) : other)), ""));
-      compField.appendChild(compLabel);
-      compField.appendChild(compSelect);
-      compField.appendChild(createDomElement("span", "ladder-note", rung.comp === "none" ? "Exact, largest files"
-        : (rung.comp === "lossless_jpeg"
-          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : (rung.clear_hdr ? "Exact, smaller files" : "Smaller files (SDR is sensor-compressed)"))
-          : "Smaller files")));
-      if (rung.comp === "lossless_jpeg" && known && ceiling > 30 && sensorNameLower(state.snapshot).indexOf("imx585") !== -1)
-        compField.appendChild(createDomElement("span", "ladder-note over",
-          "Above 30 fps the lossless encoder runs close to its limit (about 69 fps measured at 4K 12-bit): watch the buffer bar."));
-      compField.appendChild(createDomElement("span", "ladder-size", approx + megabytes.toFixed(1) + " MB per frame"));
-      const over = !rowState.problem && !rowState.open && cardSpeed > 0 && rate > cardSpeed;
-      compField.appendChild(createDomElement("span", "ladder-note" + (over ? " over" : ""), rowState.problem
-        ? "Not used"
-        : (rowState.open ? "" : approx + Math.round(rate) + " MB/s at " + rowState.top + " fps" + (over ? " · above " + cardSpeed + " MB/s (card)" : ""))));
-      controls.appendChild(compField);
-
-      row.appendChild(controls);
-      item.appendChild(row);
-
-      // The max of this resolution, between it and the next one: the FPS where the next takes over
-      // (after the last one, where FPS stops). Empty = the ceiling.
-      const below = draft[index + 1];
-      const line = createDomElement("div", "ladder-transition");
-      line.innerHTML = ladderIcons.down;
-      const thrInput = createDomElement("input", "settings-input ladder-fps-input" + (rowState.problem ? " problem" : ""));
-      thrInput.id = "settingsModeLadderThr" + index;
-      thrInput.type = "number";
-      thrInput.inputMode = "numeric";
-      thrInput.step = "1";
-      thrInput.min = String(rowState.from + 1);
-      thrInput.max = String(Math.min(ceiling, ladderNextTop(draft, index) - 1));
-      thrInput.placeholder = known ? String(ceiling) : "";
-      thrInput.value = rung.thr;
-      thrInput.disabled = locked;
-      thrInput.title = "Max FPS of Resolution " + (index + 1) + ": the highest FPS it runs";
-      thrInput.setAttribute("aria-label", "Max FPS of Resolution " + (index + 1));
-      thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
-      line.appendChild(thrInput);
-      line.appendChild(createDomElement("span", "ladder-fps-unit", "fps"));
-      const ceilingText = !known ? "Ceiling: Core checks it."
-        : "Ceiling " + ceiling + (rung.comp === "lossless_jpeg" && ceiling < uncompressedCeiling ? " (lossless cap)" : " (sensor mode)") + ".";
-      let aboveText = "Above it no resolution runs: FPS stops here.";
-      if (below) {
-        const parts = [];
-        const classChange = ladderClassName(below) !== ladderClassName(rung) || below.bits !== rung.bits;
-        const sizeChange = below.width !== rung.width || below.height !== rung.height;
-        if (classChange)
-          parts.push(ladderClassName(rung) + " " + rung.bits + "-bit → " + ladderClassName(below) + " " + below.bits + "-bit");
-        if (sizeChange)
-          parts.push("picture " + ladderSizeText(rung) + " → " + ladderSizeText(below));
-        if (rung.comp !== below.comp)
-          parts.push(ladderCompression(rung.comp).label + " → " + ladderCompression(below.comp).label);
-        if (!parts.length)
-          parts.push("same class and size");
-        const stop = rowState.open ? "the max of Resolution " + (index + 1) : String(rowState.top);
-        aboveText = "Above it: " + parts.join(", ") + ". " + (classChange || sizeChange
-          ? "Switches between takes only, with a short preview blink; in a take FPS stops at " + stop + "."
-          : "Same mode: a ramp crosses without a switch, in a take too.");
-      }
-      line.appendChild(createDomElement("span", "", ceilingText + " " + aboveText));
-      item.appendChild(line);
+      item.appendChild(main);
       return item;
     }
 
-    // Rows are rebuilt only here: after Core's ladder arrives or a local edit. The 1 s poll never
-    // rebuilds them, so typing a max keeps its focus.
+    // Rebuilt only here: after Core's answer arrives. The 1 s poll never rebuilds them.
     function renderLadderRows() {
       const list = document.getElementById("settingsModeLadderList");
       if (!list)
         return;
       list.innerHTML = "";
-      if (!state.ladderServer) {
-        list.appendChild(createDomElement("div", "preset-empty", state.ladderError || "Loading the Mode Ladder…"));
+      const server = state.ladderServer;
+      if (!server) {
+        list.appendChild(createDomElement("div", "preset-empty", state.ladderError || "Loading Dynamic resolution…"));
         return;
       }
-      if (state.ladderDraft.length === 0) {
+      const steps = Array.isArray(server.steps) ? server.steps : [];
+      const modes = Array.isArray(server.resolutions) ? server.resolutions : [];
+      if (steps.length === 0 || modes.length === 0) {
         list.appendChild(createDomElement("div", "preset-empty", "No resolutions yet. Activate a mode in Activated sensor modes below."));
         return;
       }
-      const rowStates = ladderRowStates(state.ladderDraft);
-      state.ladderDraft.forEach((rung, index) => list.appendChild(createLadderRow(rung, index, rowStates[index])));
+      steps.forEach((step, index) => {
+        const entry = modes[index] || {};
+        list.appendChild(createLadderStep({ width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits),
+          clear_hdr: entry.clear_hdr === true }, step, index));
+      });
     }
 
     // Activated sensor modes: the probe's pool in collapsible groups, one column; Add puts a mode
@@ -9413,16 +8843,16 @@ std::string_view webControlPageHtml()
     function renderSensorModes() {
       const server = state.ladderServer;
       const pool = server && Array.isArray(server.pool) ? server.pool : [];
-      const draft = state.ladderDraft;
+      const enabled = server && Array.isArray(server.resolutions) ? server.resolutions : [];
       const shown = modesSnapshot();
       const sensor = (sensorNameLower(shown) || "sensor").toUpperCase();
       setText("settingsSensorModesCopy", !server ? (state.ladderError || "Waiting for Core.")
-        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder resolutions=…).")
+        : (pool.length === 0 ? (modesIsCam1() ? "CAM1's sensor probe is off: no modes to list." : "Sensor probe off: add modes with core.py (set_mode_ladder modes=…).")
           : (modesIsCam1()
             ? "From CAM1's sensor probe at start: " + pool.length + " modes on CAM1's " + sensor
               + ". CAM1 takes the activated mode closest to CAM0's. Ceilings are Core's."
             : "From the sensor probe at start: " + pool.length + " modes on this " + sensor
-              + ". Activate the ones you want on the ladder. Ceilings are Core's.")));
+              + ". Dynamic resolution uses the ones you activate. Ceilings are Core's.")));
       // Filter on aspect ratio, as Cinemate's crop list: All, then the ratios the probe offers.
       const aspects = [];
       pool.forEach((entry) => {
@@ -9462,7 +8892,7 @@ std::string_view webControlPageHtml()
           .sort(ladderQualityCompare);
         if (entries.length === 0)
           return;
-        const onLadder = entries.filter((entry) => draft.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
+        const onLadder = entries.filter((entry) => enabled.some((rung) => ladderKey(rung) === ladderKey(entry))).length;
         const open = state.ladderOpen[groupKey] === true;
         const wrapper = createDomElement("div", "field-stack");
         const head = createDomElement("button", "ladder-group-head");
@@ -9471,7 +8901,7 @@ std::string_view webControlPageHtml()
         head.innerHTML = ladderIcons.chevron;
         head.appendChild(createDomElement("span", "", title));
         head.appendChild(createDomElement("span", "ladder-group-count",
-          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + (modesIsCam1() ? " activated" : " on the ladder")));
+          entries.length + (entries.length === 1 ? " mode" : " modes") + " · " + onLadder + " activated"));
         head.addEventListener("click", () => {
           state.ladderOpen[groupKey] = !open;
           renderSensorModes();
@@ -9479,36 +8909,25 @@ std::string_view webControlPageHtml()
         wrapper.appendChild(head);
         if (open) {
           const list = createDomElement("div", "ladder-pool");
-          entries.forEach((entry) => list.appendChild(createSensorModeTile(entry, draft)));
+          entries.forEach((entry) => list.appendChild(createSensorModeTile(entry, enabled)));
           wrapper.appendChild(list);
         }
         groups.appendChild(wrapper);
       });
     }
 
-    // A new mode takes its place by quality. {list} when the ladder stays legal, else {problem}.
-    function ladderWithMode(draft, candidate) {
-      if (draft.length >= ladderMaxResolutions)
-        return { problem: "At most " + ladderMaxResolutions + " resolutions." };
-      if (modesIsCam1())
-        return { list: draft.concat([candidate]) };
-      const arranged = ladderArranged(draft.concat([candidate]));
-      const problem = ladderOrderProblem(arranged) || ladderDraftProblem(normalizeLadderDraft(arranged));
-      return problem ? { problem: problem.replace(/^Resolution \d+ \(.*?\) would never be used: /, "No FPS left for it: ") } : { list: arranged };
-    }
-
-    function createSensorModeTile(entry, draft) {
+    // A tile: Active (white) when Dynamic resolution may use the mode, else Activate (grey). A press sends one
+    // enable_mode or disable_mode; Core rebuilds the steps and the running mode follows between takes.
+    function createSensorModeTile(entry, enabled) {
       const mode = { width: Number(entry.width), height: Number(entry.height), bits: Number(entry.bits), clear_hdr: entry.clear_hdr === true };
       const name = ladderModeName(mode);
-      const index = draft.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
+      const index = enabled.findIndex((rung) => ladderKey(rung) === ladderKey(mode));
       const ceiling = Number(entry.ceilings && entry.ceilings.none) || 0;
       const crop = ladderCrop(mode);
-      const candidate = Object.assign({}, mode, { comp: "none", thr: "", auto: true });
-      const locked = !!(state.snapshot && state.snapshot.recording);
-      const placed = index >= 0 || ceiling <= 0 ? null : ladderWithMode(draft, candidate);
+      const locked = !!(state.snapshot && state.snapshot.recording) || state.ladderSaving;
       const why = index >= 0 ? ""
-        : (locked ? "Stop recording to change the ladder." : ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.")
-          : (placed.problem || ""));
+        : (state.snapshot && state.snapshot.recording ? "Stop recording to change the enabled resolutions."
+          : ceiling <= 0 ? (entry.usable === false ? "Not available in this recording format." : "Not a mode Core can record.") : "");
       const item = createDomElement("div", "ladder-pool-item" + (index >= 0 ? "" : " inactive"));
       const frame = fillCropFrame(createDomElement("div", "crop-frame small"), crop);
       frame.setAttribute("aria-hidden", "true");
@@ -9516,29 +8935,29 @@ std::string_view webControlPageHtml()
       const text = createDomElement("div", "ladder-pool-text");
       text.appendChild(createDomElement("div", "ladder-pool-name", name));
       text.appendChild(createDomElement("div", "ladder-pool-meta", ladderSizeText(mode) + " · " + ladderAspectText(mode) + " · "
-        + ladderClassName(mode) + " · " + (ceiling > 0 ? "max " + ceiling + " fps" : "cannot record")
+        + (ladderClassName(mode) ? ladderClassName(mode) + " · " : "") + (ceiling > 0 ? "sensor max " + ceiling + " fps" : "cannot record")
         + (crop.cropIn ? " · crop in" : "") + " · " + ladderFrameMB(mode, "none").toFixed(1) + " MB/frame"));
       if (why)
         text.appendChild(createDomElement("div", "ladder-pool-why", why));
       item.appendChild(text);
       if (index >= 0) {
-        // On the ladder: its number, and Remove (same list, same rules as the × on its row).
+        // Enabled: a white Active button; pressing it takes the mode out of the steps.
         const actions = createDomElement("div", "ladder-pool-actions");
-        const remove = createDomElement("button", "ladder-add remove", "Deactivate");
+        const remove = createDomElement("button", "ladder-add active", "Active");
         remove.type = "button";
         remove.disabled = locked;
         remove.setAttribute("aria-label", "Deactivate " + name);
-        remove.addEventListener("click", () => commitLadderDraft(draft.filter((other, i) => i !== index), "", true));
+        remove.addEventListener("click", () => void setModeLadder({ disable_mode: ladderKey(mode) }));
         actions.appendChild(remove);
         item.appendChild(actions);
         return item;
       }
       const add = createDomElement("button", "ladder-add", "Activate");
       add.type = "button";
-      add.disabled = why !== "";
+      add.disabled = why !== "" || locked;
       add.title = why;
       add.setAttribute("aria-label", "Activate " + name + (why ? ": " + why : ""));
-      add.addEventListener("click", () => commitLadderDraft(placed.list, ""));
+      add.addEventListener("click", () => void setModeLadder({ enable_mode: ladderKey(mode) }));
       item.appendChild(add);
       return item;
     }
@@ -9552,29 +8971,29 @@ std::string_view webControlPageHtml()
         renderModeLadder(state.snapshot);
     }
 
-    // Every snapshot (the 1 s poll too): the buttons, Running now, the draft line and the coverage.
+    // Every snapshot (the 1 s poll too): the buttons, Running now and the limit sentence.
     function renderModeLadder(snapshot) {
       if (modesIsCam1()) {
-        // CAM1's modes: only the first fetch; the ladder card is CAM0's and greyed.
+        // CAM1's modes: only the first fetch; the Dynamic resolution card is CAM0's and greyed.
         if (!state.ladderServer && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
-          void fetchModeLadder(false);
+          void fetchModeLadder();
         return;
       }
       const server = state.ladderServer;
       const enabled = typeof snapshot.ladder_enabled === "boolean" ? snapshot.ladder_enabled : !!(server && server.enabled);
       const active = snapshot.ladder_active === true;
-      const count = isFiniteNumber(snapshot.ladder_count) ? snapshot.ladder_count : (server && server.resolutions ? server.resolutions.length : 0);
       const recording = !!snapshot.recording;
 
-      // The first fetch, a retry five seconds after a failure, and a refetch when the ladder
-      // starts or stops running (Core's list of resolutions or their ceilings may have changed).
+      // The first fetch, a retry five seconds after a failure, and a refetch when the limits move (the switch,
+      // a lever, the card, the mode): Core works the steps out on every read.
+      const seen = [enabled, active, snapshot.limit_fps, snapshot.limit_why, snapshot.fps_max].join("|");
       if (!server && !state.ladderFetching && performance.now() - state.ladderFetchedMs > 5000)
-        void fetchModeLadder(false);
-      else if (server && state.ladderSeenActive !== null && state.ladderSeenActive !== active && !ladderDirty())
-        void fetchModeLadder(false);
-      state.ladderSeenActive = active;
+        void fetchModeLadder();
+      else if (server && state.ladderSeenKey !== null && state.ladderSeenKey !== seen && !state.ladderFetching)
+        void fetchModeLadder();
+      state.ladderSeenKey = seen;
       if (state.ladderRecordingSeen !== recording) {
-        // Recording starts or stops: the editor locks or unlocks (Core refuses a save in a take).
+        // Recording starts or stops: the tiles lock or unlock (Core refuses a change in a take).
         state.ladderRecordingSeen = recording;
         renderLadderEditor();
         return;
@@ -9582,21 +9001,30 @@ std::string_view webControlPageHtml()
 
       setText("settingsModeLadderValue", enabled ? "On" : "Off");
       document.getElementById("settingsModeLadderValue").classList.toggle("off", !enabled);
+      document.getElementById("settingsModeLadderCard").classList.toggle("dynres-off", !enabled);
       const busy = recording || state.ladderToggling;
+      const tdnOption = server && server.tdn === "off_in_4k" ? "off_in_4k" : "keep";
+      buildOptionButtons("settingsModeLadderTdnOptions", [
+        { label: "Keep", value: "keep", enabled: !busy && enabled },
+        { label: "Off in 4K", value: "off_in_4k", enabled: !busy && enabled },
+      ], tdnOption, (value) => void setModeLadder({ tdn: value }), 2);
+      setText("settingsModeLadderTdnNote", tdnOption === "off_in_4k"
+        ? "Off in 4K: Dynamic resolution turns it off when it picks 4K or a crop, and back on for 2K."
+        : "Keep: Dynamic resolution never touches it. While it is on, 4K is not used.");
       buildOptionButtons("settingsModeLadderOptions", [
         { label: "Off", value: "Off", enabled: !busy },
-        { label: "On", value: "On", enabled: !busy && (enabled || count > 0) },
+        { label: "On", value: "On", enabled: !busy },
       ], enabled ? "On" : "Off", (value) => setModeLadderEnabled(value === "On"), 2);
-      setText("settingsModeLadderSwitchNote", recording ? "Stop recording to turn the ladder on or off."
-        : (!enabled && count === 0 ? "Save at least one resolution first."
-          : (!enabled ? "Off: changing FPS never switches resolution."
-            : (active ? "On: changing FPS switches resolution." : "On, but not in use: the ladder works in CinemaDNG and MLV video."))));
+      setText("settingsModeLadderSwitchNote", recording ? "Stop recording to turn Dynamic resolution on or off."
+        : (!enabled ? "Off: changing FPS never switches resolution."
+          : (active ? "On: changing FPS switches resolution."
+            : "On, but not in use now: it works in CinemaDNG and MLV video, and waits for the next FPS change after you pick a mode by hand.")));
 
       const ladderLine = active ? String(snapshot.ladder_text || "") : "";
-      setText("settingsModeLadderNow", ladderLine || ladderSnapshotLine(snapshot) + (enabled ? " (ladder not in use)" : " (ladder off)"));
-      setText("settingsModeLadderNowNote", active
-        ? "Same line on the camera screen (FORMAT) and next to Frame rate in Camera settings."
-        : "FPS stays inside the current mode.");
+      setText("settingsModeLadderNow", ladderLine || ladderSnapshotLine(snapshot) + (enabled ? " (Dynamic resolution not in use)" : " (Dynamic resolution off)"));
+      const limitWhy = String(snapshot.limit_why || "");
+      setText("settingsModeLadderNowNote", (enabled ? limitWhy : ("Off: the camera keeps your mode. " + limitWhy).trim())
+        || "FPS stays inside the current mode.");
       const running = active && server && Array.isArray(server.resolutions) ? server.resolutions[Number(snapshot.ladder_resolution) - 1] : null;
       const nowMode = running
         ? { width: Number(running.width), height: Number(running.height), bits: Number(running.bits), clear_hdr: running.clear_hdr === true }
@@ -9607,27 +9035,29 @@ std::string_view webControlPageHtml()
         fillCropFrame(nowFrame, nowCrop);
         nowFrame.setAttribute("aria-label", nowCrop.title);
       }
-
-      document.getElementById("settingsModeLadderList").classList.toggle("off", !enabled);
     }
 
-    // Core applied the ladder but could not write mode_ladder.conf: its reply warns that the ladder is lost
-    // when Core restarts. That warning is shown as an error; the ladder's other warnings are left as they are.
-    function showLadderWriteWarning(modeLadder) {
-      const warnings = modeLadder && Array.isArray(modeLadder.warnings) ? modeLadder.warnings.map(String) : [];
-      const lost = warnings.find((warning) => warning.startsWith("Could not write mode_ladder.conf"));
-      if (lost)
-        showToast(lost, true);
+    // One edit of Dynamic resolution (the switch, one mode in or out): Core applies it between takes at once and
+    // answers with the enabled modes and their steps, which the card draws.
+    async function setModeLadder(fields) {
+      state.ladderSaving = true;
+      renderSensorModes();
+      try {
+        const cam = state.modesCam;
+        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder" }, fields, ladderCameraFields()));
+        applyModeLadder(result.mode_ladder, cam);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        state.ladderSaving = false;
+        renderSensorModes();
+      }
     }
 
     async function setModeLadderEnabled(enabled) {
       state.ladderToggling = true;
       try {
-        const result = await sendCommand({ cmd: "set_mode_ladder", enabled: enabled ? "true" : "false" });
-        applyModeLadder(result.mode_ladder, false);
-        showLadderWriteWarning(result.mode_ladder);
-      } catch (error) {
-        showToast(error.message, true);
+        await setModeLadder({ enabled: enabled ? "true" : "false" });
       } finally {
         state.ladderToggling = false;
         if (state.snapshot)
@@ -9635,33 +9065,8 @@ std::string_view webControlPageHtml()
       }
     }
 
-    async function saveModeLadder() {
-      if (!ladderDirty())
-        return;
-      if (state.ladderSaving) {
-        state.ladderSaveAgain = true;
-        return;
-      }
-      state.ladderSaving = true;
-      try {
-        const cam = state.modesCam;
-        const result = await sendCommand(Object.assign({ cmd: "set_mode_ladder", resolutions: ladderDraftTextFor(state.ladderDraft) }, ladderCameraFields()));
-        applyModeLadder(result.mode_ladder, false, cam);
-        showLadderWriteWarning(result.mode_ladder);
-      } catch (error) {
-        showToast(error.message, true);
-        await fetchModeLadder(true);
-      } finally {
-        state.ladderSaving = false;
-        if (state.ladderSaveAgain) {
-          state.ladderSaveAgain = false;
-          void saveModeLadder();
-        }
-      }
-    }
-
-    // The aspect filter is saved on the camera (set_mode_ladder aspects, its own line in mode_ladder.conf):
-    // a click shows at once and is sent 200 ms after the last one, as a ladder edit is. Core takes the
+    // The aspect filter is saved on the camera (set_mode_ladder aspects, dynres_aspects in camera_settings.conf):
+    // a click shows at once and is sent 200 ms after the last one. Core takes the
     // filter alone in a take too, and leaves the resolutions as they are. Only a Core whose ladder has an
     // aspects field keeps it: an older one (a tab left open while Core restarted on another branch) would
     // run the click as a ladder save, so there the filter only changes the screen.
@@ -9692,7 +9097,7 @@ std::string_view webControlPageHtml()
         if (!state.ladderAspectsSaveAgain && state.ladderAspects.join(",") === sent)
           state.ladderAspectsPending = false;   // no newer click: Core's filter is the one on screen
         // Core changed only the filter: take just that from its reply and redraw only this card, so the
-        // Mode Ladder draft is left as it is and a row being typed in is not rebuilt.
+        // steps are left as they are.
         if (result.mode_ladder && Array.isArray(result.mode_ladder.aspects)) {
           state.ladderServer = Object.assign({}, state.ladderServer, { aspects: result.mode_ladder.aspects });
           if (!state.ladderAspectsPending)
@@ -9714,7 +9119,7 @@ std::string_view webControlPageHtml()
         state.ladderAspects = ladderAspectsFromServer(state.ladderServer);
         renderSensorModes();
         showToast(error.message, true);
-        await fetchModeLadder(false);
+        await fetchModeLadder();
       } finally {
         state.ladderAspectsSaving = false;
         if (state.ladderAspectsSaveAgain) {
@@ -9722,11 +9127,6 @@ std::string_view webControlPageHtml()
           void saveLadderAspects();
         }
       }
-    }
-
-    // While the Mode Ladder is active the FPS picks the mode: mode pills show it, locked.
-    function ladderLockedOptions(options, locked) {
-      return locked ? normalizeChoiceOptions(options).map((option) => Object.assign(option, { enabled: false, locked: true })) : options;
     }
 
     // The Value Lists card (T33). Redrawn only when the lists change and never while one of its
@@ -10014,7 +9414,7 @@ std::string_view webControlPageHtml()
       ],
       10: [
         { value: "5472x3648", label: "5.5K", groups: [[25.48, "5472x3648 3648x3648 4864x3648 5016x3648"], [30.173, "5472x3076 5472x2956 5472x2880 5472x2736 5472x2488 5472x2464 5472x2328 5472x2288 5472x2188 5472x2144"]] },
-        { value: "3840x2160", label: "4K UHD", groups: [[60.16, "3840x2160"]] },
+        { value: "3840x2160", label: "4K", groups: [[60.16, "3840x2160"]] },
       ],
     };
     // Core's table order (Imx283Modes.hpp kModes): normalise() takes the nearest mode, the first row on a tie.
@@ -10166,14 +9566,14 @@ std::string_view webControlPageHtml()
     // pool (state.ladderServer.pool); the strings below are the fallback until it has arrived. Active sizes,
     // "b" = 2x2 binned, widths under 1280 left out as in Core.
     const imx585ClassModes = {
-      s12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
-      s10: "3840x2160 1920x1080b 1440x1080b 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1488x1080b 1920x1036b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
-      h12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080",
+      s12: "1920x1080b 3840x2160 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080 1488x1080b 1920x1038b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      s10: "3840x2160 1920x1080b 1440x1080b 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1488x1080b 1920x1038b 1920x1016b 1920x1012b 1920x960b 1920x872b 1920x864b 1920x816b 1920x804b 1920x768b 1920x752b",
+      h12: "3840x2160 2880x2160 2160x2160 2976x2160 3840x2076 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1040 1920x1008 1920x800 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x816 2048x800 1440x1080",
       h16: "3840x2160 2880x2160 2160x2160 2976x2160 3840x2072 3840x2032 3840x2024 3840x1920 3840x1744 3840x1728 3840x1632 3840x1608 3840x1536 3840x1504 1920x1016 1920x1008 1920x960 1920x872 1920x864 1920x816 1920x800 1920x768 1920x752 2048x1152 2048x1104 2048x1080 2048x1024 2048x928 2048x920 2048x872 2048x856 2048x800 1920x1080b",
     };
     // The resolution pills; each also has a Clear HDR version ("<key>-hdr") where the class has rows for it.
     const imx585Families = [
-      { key: "hd", label: "Full HD binned" },   // 1920 wide, 2x2 binned
+      { key: "hd", label: "Full HD" },          // 1920 wide, 2x2 binned, as 1.6.0 names it
       { key: "4k", label: "4K" },
       { key: "2k", label: "2K crop" },          // 2048 wide (and 1440x1080), 1x1
       { key: "crop", label: "HD crop" },        // 1920 wide, 1x1
@@ -10181,9 +9581,9 @@ std::string_view webControlPageHtml()
     const imx585Ratios = [[1, "1:1"], [4 / 3, "1.33:1"], [1.378, "1.38:1"], [16 / 9, "16:9"], [1.85, "1.85:1"], [1.89, "1.89:1"],
       [1.9, "1.90:1"], [2, "2.00:1"], [2.2, "2.20:1"], [2.22, "2.22:1"], [2.35, "2.35:1"], [2.39, "2.39:1"], [2.4, "2.40:1"],
       [2.5, "2.50:1"], [2.55, "2.55:1"]];
-    const imx585LadderGroups = [["4k-hdr", "4K Clear HDR"], ["4k", "4K SDR"], ["hd-hdr", "Full HD binned Clear HDR"],
-      ["hd", "Full HD binned SDR"], ["2k-hdr", "2K crop Clear HDR"], ["2k", "2K crop SDR"], ["crop-hdr", "HD crop Clear HDR"],
-      ["crop", "HD crop SDR"]];
+    const imx585LadderGroups = [["4k-hdr", "4K Clear HDR"], ["4k", "4K"], ["hd-hdr", "Full HD Clear HDR"],
+      ["hd", "Full HD"], ["2k-hdr", "2K crop Clear HDR"], ["2k", "2K crop"], ["crop-hdr", "HD crop Clear HDR"],
+      ["crop", "HD crop"]];
 
     function imx585Selected(snapshot) {
       return sensorNameLower(snapshot).indexOf("imx585") !== -1;
@@ -10280,10 +9680,21 @@ std::string_view webControlPageHtml()
       [false, true].forEach((clearHdr) => imx585Families.forEach((family) => {
         const offered = imx585FamilyRows(snapshot, imx585TargetClassKey(snapshot, clearHdr), family.key).length > 0;
         if (offered || !mono)
-          options.push({ value: family.key + (clearHdr ? "-hdr" : ""), label: family.label + (clearHdr ? " HDR" : ""),
+          options.push({ value: family.key + (clearHdr ? "-hdr" : ""), label: family.label + (clearHdr ? " Clear HDR" : ""),
             enabled: offered && (!clearHdr || hdrAllowed) });
       }));
       return options;
+    }
+
+    // The dropdowns list the IMX585 sizes best first, as the Mode Ladder groups do; the pills keep 1.6.0's order.
+    function resolutionSelectOptions(snapshot, options) {
+      if (!imx585Selected(snapshot))
+        return options;
+      const rank = (option) => {
+        const index = imx585LadderGroups.findIndex((group) => group[0] === option.value);
+        return index < 0 ? imx585LadderGroups.length : index;
+      };
+      return options.slice().sort((a, b) => rank(a) - rank(b));
     }
 
     function clearHdrAvailableForSnapshot(snapshot) {
@@ -10311,8 +9722,10 @@ std::string_view webControlPageHtml()
       return match ? match.value : "";
     }
 
-    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size; Core takes the
-    // nearest row of the new class on its own, the size sent is the one of the same ratio.
+    // Choosing a family pill switches Clear HDR when the pill's differs, then sets the size of the same ratio.
+    // Core enters Clear HDR at 3840x2160, which caps the FPS at that mode's, so turning it on sends the FPS again
+    // after the size, unless the Mode Ladder is on: it owns the FPS, and set_fps would end a Clear HDR override.
+    // Turning it off takes the nearest row of the new class on its own.
     function imx585BaseCommands(snapshot, value) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return [h264ResolutionCommandPayload(h264ResolutionFromBaseSelection(snapshot, value))];
@@ -10320,7 +9733,11 @@ std::string_view webControlPageHtml()
       const commands = clearHdr === !!snapshot.clear_hdr ? [] : [{ cmd: "set_clear_hdr", enabled: clearHdr ? "true" : "false" }];
       const current = resolutionLabelFromSnapshot(snapshot).split("x");
       const size = imx585ResolutionForBaseAndRatio(snapshot, value, imx585RatioLabel(Number(current[0]), Number(current[1])));
-      return size ? commands.concat([resolutionCommandPayload(size)]) : commands;
+      if (!size)
+        return commands;
+      const fps = Number(snapshot.fps);
+      const fpsAgain = clearHdr && !snapshot.clear_hdr && snapshot.ladder_enabled !== true && Number.isFinite(fps) && fps > 0;
+      return commands.concat([resolutionCommandPayload(size)], fpsAgain ? [{ cmd: "set_fps", value: fps }] : []);
     }
 
     // The sizes of the current class, widest picture first.
@@ -10330,14 +9747,14 @@ std::string_view webControlPageHtml()
         .map((row) => formatResolutionValue(row.width, row.height));
     }
 
-    // What Core reports, with the old driver's 1.85:1 sizes (3840x2076, 1920x1038) and the other sensors' sizes a
-    // saved preset or an old client may still send mapped to the sizes the IMX585 has.
+    // What Core reports, with the other sensors' sizes a saved preset or an old client may still send mapped
+    // to the sizes the IMX585 has.
     function imx585NormalizedResolution(snapshot, resolutionValue) {
       if (processedVideoRecordFormatForSnapshot(snapshot))
         return forcedH264CaptureResolutionForSnapshot(snapshot);
       const value = String(resolutionValue || "").trim();
       const aliases = {
-        "3840x2076": "3840x2072", "1920x1038": "1920x1036", "1928x1090": "1920x1080", "3856x2180": "3840x2160",
+        "1928x1090": "1920x1080", "3856x2180": "3840x2160",
         "1332x990": "1920x1080", "2028x1080": "1920x1080", "2028x1520": "1920x1080",
         "4056x2160": "3840x2160", "4056x3040": "3840x2160",
       };
@@ -10360,10 +9777,10 @@ std::string_view webControlPageHtml()
       return imx585LadderFamily(mode).key + (mode.clear_hdr ? "-hdr" : "");
     }
 
-    // "4K Clear HDR 16-bit", "4K SDR 2.39:1 12-bit", "Full HD binned SDR 12-bit", "HD crop SDR 2.00:1 12-bit".
+    // "4K Clear HDR 16-bit", "4K 2.39:1 12-bit", "Full HD 12-bit", "HD crop 2.00:1 12-bit".
     function imx585LadderModeName(mode) {
       const ratio = imx585RatioLabel(mode.width, mode.height);
-      return imx585LadderFamily(mode).label + (mode.clear_hdr ? " Clear HDR " : " SDR ") + (ratio === "16:9" ? "" : ratio + " ")
+      return imx585LadderFamily(mode).label + (mode.clear_hdr ? " Clear HDR " : " ") + (ratio === "16:9" ? "" : ratio + " ")
         + mode.bits + "-bit";
     }
 
@@ -10635,8 +10052,10 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 3840, height: 2160 };
       if (label === "1920x1012")
         return { cmd: "set_resolution", width: 1920, height: 1012 };
-      if (label === "1920x1036" || label === "1920x1038")
+      if (label === "1920x1036")
         return { cmd: "set_resolution", width: 1920, height: 1036 };
+      if (label === "1920x1038")
+        return { cmd: "set_resolution", width: 1920, height: 1038 };
       if (label === "1920x960")
         return { cmd: "set_resolution", width: 1920, height: 960 };
       if (label === "1920x872")
@@ -10651,8 +10070,10 @@ std::string_view webControlPageHtml()
         return { cmd: "set_resolution", width: 1920, height: 768 };
       if (label === "1920x752")
         return { cmd: "set_resolution", width: 1920, height: 752 };
-      if (label === "3840x2072" || label === "3840x2076")
+      if (label === "3840x2072")
         return { cmd: "set_resolution", width: 3840, height: 2072 };
+      if (label === "3840x2076")
+        return { cmd: "set_resolution", width: 3840, height: 2076 };
       if (label === "3840x2024")
         return { cmd: "set_resolution", width: 3840, height: 2024 };
       if (label === "3840x1920")
@@ -11061,14 +10482,30 @@ std::string_view webControlPageHtml()
     }
 
     // The UI timecode (what the screens show, UI.conf) and the file timecode (Core's timecode_mode:
-    // DNG, MLV, ProRes, H.264 and the WAV) are set apart; set_timecode_mode takes target=ui|files.
+    // DNG, MLV, ProRes, H.264 and the WAV). Mode sets both, as the single control of 1.6.0; the file
+    // timecode is set apart only after Files is given a fixed value (ui.file_timecode_separate), and then
+    // set_timecode_mode takes target=ui|files.
     function uiTimecodeLabel(snapshot) {
       const ui = (snapshot && snapshot.ui) || {};
-      return timecodeModeLabel(ui.timecode_mode || (snapshot && snapshot.timecode_mode));
+      // ui.timecode_mode is UI.conf's "Rec Run", timecode_mode is Core's "rec_run"
+      return timecodeModeLabel(String(ui.timecode_mode || (snapshot && snapshot.timecode_mode) || "").replace(" ", "_"));
     }
 
     function fileTimecodeLabel(snapshot) {
       return timecodeModeLabel(snapshot && snapshot.timecode_mode);
+    }
+
+    function fileTimecodeSeparate(snapshot) {
+      const ui = (snapshot && snapshot.ui) || {};
+      return ui.file_timecode_separate === true;
+    }
+
+    function timecodeFilesChoices() {
+      return [{ value: "Same as Mode", label: "Same as Mode", enabled: true }].concat(timecodeChoices());
+    }
+
+    function timecodeFilesLabel(snapshot) {
+      return fileTimecodeSeparate(snapshot) ? fileTimecodeLabel(snapshot) : "Same as Mode";
     }
 
     function timecodeSummaryLabel(snapshot) {
@@ -11078,7 +10515,20 @@ std::string_view webControlPageHtml()
     }
 
     function timecodeCommand(value, target) {
-      return { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run", target };
+      const command = { cmd: "set_timecode_mode", value: value === "Rec Run" ? "rec_run" : "free_run" };
+      if (target)
+        command.target = target;
+      return command;
+    }
+
+    // Mode: no target, so Core sets both; while the files are set apart it sets the UI timecode only.
+    function timecodeModeCommand(value) {
+      return timecodeCommand(value, fileTimecodeSeparate(state.snapshot) ? "ui" : "");
+    }
+
+    // Files: Same as Mode sets both again (Core writes fileTimecodeSeparate=false), a fixed value sets the files apart.
+    function timecodeFilesCommand(value) {
+      return value === "Same as Mode" ? timecodeCommand(uiTimecodeLabel(state.snapshot)) : timecodeCommand(value, "files");
     }
 
     function autofocusModeLabel(modeValue) {
@@ -11699,7 +11149,6 @@ std::string_view webControlPageHtml()
                 label: String(label),
                 enabled: option.enabled !== false,
                 system: option.system === true,
-                locked: option.locked === true,
               };
             }
             return {
@@ -11981,12 +11430,8 @@ std::string_view webControlPageHtml()
           option.label
         );
         button.type = "button";
-        button.disabled = !option.enabled && !option.locked;
+        button.disabled = !option.enabled;
         button.addEventListener("click", () => {
-          if (option.locked) {
-            showLadderLockWarning(false);
-            return;
-          }
           if (!option.enabled)
             return;
           void onSelect(option.value);
@@ -12378,25 +11823,22 @@ std::string_view webControlPageHtml()
             break;
           }
           case "format": {
-            // As the Recording format card: while the Mode Ladder is active the FPS picks the mode.
             const ladderActive = snapshot.ladder_active === true;
             const grid = createFavoriteFieldGrid();
             if (cropControlsVisible) {
-              grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionBaseOptions, resolutionBaseValue, async (value) => {
+              grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoSizeLabel(recordFormatText) : "Resolution", resolutionSelectOptions(snapshot, resolutionBaseOptions), resolutionBaseValue, async (value) => {
                 for (const command of resolutionBaseCommands(snapshot, value))
                   await dispatchFavoriteCommand(command);
-              }, false, ladderActive));
+              }, false));
               grid.appendChild(createFavoriteSelectEntryField(h264RecordFormat ? processedVideoCropLabel(recordFormatText) : "Crop Mode", cropRatioOptions, cropRatioValue, async (value) => {
                 await dispatchFavoriteCommand(cropRatioCommandPayload(snapshot, value));
-              }, false, !cropRatioEnabled || ladderActive));
+              }, false, !cropRatioEnabled));
             } else {
               grid.appendChild(createFavoriteSelectField("Resolution", resolutionOptions, resolutionLabel, async (value) => {
                 await dispatchFavoriteCommand(resolutionCommandPayload(value));
-              }, true, ladderActive));
+              }, true));
             }
             card.appendChild(grid);
-            if (ladderActive)
-              grid.querySelectorAll("label.field-stack").forEach((field) => { field.dataset.ladderLock = "1"; });
             card.appendChild(createFavoriteSelectBlock("Record Format", recordFormatText, availableRecordFormatOptions(snapshot), recordFormatText, async (value) => {
               const formatValue = recordingFormatCommandValue(value);
               await dispatchFavoriteCommand({ cmd: "set_record_format", value: formatValue });
@@ -12409,16 +11851,13 @@ std::string_view webControlPageHtml()
               const compressionField = createFavoriteSelectEntryField("Compression", availableCompressionOptions(snapshot), cdngCompressionValueForSnapshot(snapshot), async (value) => {
                 await dispatchCdngCompressionSelection(value, dispatchFavoriteCommand);
               }, true, !!snapshot.recording || !recordingFeatureSupported(snapshot, "raw_compression") || ladderActive);
-              if (ladderActive)
-                compressionField.dataset.ladderLock = "compression";
               card.appendChild(compressionField);
             }
-            const bitDepthBlock = createFavoriteSelectBlock("Bit Depth", rawBitDepthText, ladderLockedOptions(rawBitDepthSelectOptions, ladderActive), rawBitDepthText, async (value) => {
+            const bitDepthBlock = createFavoriteSelectBlock("Bit Depth", rawBitDepthText, rawBitDepthSelectOptions, rawBitDepthText, async (value) => {
               if (rawBitDepthFixedForH264)
                 return;
               await dispatchFavoriteCommand({ cmd: "set_raw_bit_depth", value: rawBitDepthNumber(value) });
             });
-            bitDepthBlock.lastChild.classList.toggle("ladder-locked", ladderActive);
             card.appendChild(bitDepthBlock);
             break;
           }
@@ -12429,12 +11868,12 @@ std::string_view webControlPageHtml()
             break;
           }
           case "timecode": {
-            card.appendChild(createFavoriteSelectBlock("UI Timecode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "ui"));
+            card.appendChild(createFavoriteSelectBlock("Mode", timecodeDisplayName(uiTimecodeLabel(snapshot)), timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeModeCommand(value));
             }));
-            card.appendChild(createFavoriteSelectBlock("File Timecode", timecodeDisplayName(fileTimecodeLabel(snapshot)), timecodeChoices(), fileTimecodeLabel(snapshot), async (value) => {
-              await dispatchFavoriteCommand(timecodeCommand(value, "files"));
-            }));
+            card.appendChild(createFavoriteSelectBlock("Files", fileTimecodeSeparate(snapshot) ? timecodeDisplayName(fileTimecodeLabel(snapshot)) : "Same as Mode", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+              await dispatchFavoriteCommand(timecodeFilesCommand(value));
+            }, 3));
             break;
           }
           case "autofocus": {
@@ -13596,7 +13035,7 @@ std::string_view webControlPageHtml()
       document.getElementById("pbvPlay").setAttribute("aria-label", v.playing ? "Pause" : "Play");
     }
 
-    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone, stale.
+    // Outcomes of a frame request: ok, hold (409), busy (503 or a failed fetch), gone (410), stale (404).
     async function pbvFetchFrame(number, width) {
       const v = state.pb.viewer;
       const url = "/api/media/frame?kind=folder&id=" + encodeURIComponent(v.item.id) + "&n=" + number + "&w=" + width
@@ -13612,10 +13051,10 @@ std::string_view webControlPageHtml()
         return { outcome: "hold" };
       if (response.status === 503)
         return { outcome: "busy" };
-      if (response.status === 404) {
-        const body = await response.json().catch(() => ({}));
-        return { outcome: body.gone ? "gone" : "stale" };
-      }
+      if (response.status === 410)
+        return { outcome: "gone" };
+      if (response.status === 404)
+        return { outcome: "stale" };
       if (!response.ok)
         return { outcome: "busy" };
       try {
@@ -14056,7 +13495,16 @@ std::string_view webControlPageHtml()
         const response = await fetch("/api/media/clip?kind=folder&id=" + encodeURIComponent(item.id), { cache: "no-store" });
         clip = await response.json();
         if (response.status === 409) {
-          pbvApplyHold(clip.hold || state.pb.snapshotHold || "recording");
+          // The poll may be a second old: ask Core which hold it is (GET /api/state takes no lock).
+          let hold = "recording";
+          try {
+            const snapshot = await (await fetch("/api/state", { cache: "no-store" })).json();
+            hold = String(snapshot.playback_hold || "") || hold;
+          } catch (error) {
+            hold = state.pb.snapshotHold || hold;
+          }
+          if (state.pb.viewer === v)
+            pbvApplyHold(hold);
           return;
         }
         if (!response.ok || !clip.ok)
@@ -14247,7 +13695,6 @@ std::string_view webControlPageHtml()
       const toast = document.getElementById("toast");
       toast.textContent = message;
       toast.classList.toggle("error", !!isError);
-      toast.classList.remove("with-link");
       toast.classList.add("visible");
       clearTimeout(state.toastTimer);
       state.toastTimer = window.setTimeout(() => {
@@ -15001,23 +14448,15 @@ std::string_view webControlPageHtml()
     }
 
     // ---- Dual sensor: "active", and this browser's own view -------------------------------------------------
-    // "Active" = snapshot.cam1 exists (Core sends it only when cam1 is configured and the Dual sensor switch is on).
-    // While cam1 is absent from the state the old test stands in: the switch on and config.txt naming both sensors
-    // (config.txt not read yet: the switch alone).
+    // "Active" = snapshot.cam1 exists. Core sends it only with the Dual sensor switch on and a sensor on cam0 and on
+    // cam1 (or cam1's Core answering); with one sensor the page is the single-camera page, whatever config.txt names.
     function dualCam1(snapshot) {
       const cam1 = snapshot && snapshot.cam1;
       return cam1 && typeof cam1 === "object" ? cam1 : null;
     }
 
     function dualActive(snapshot) {
-      if (!snapshot)
-        return false;
-      if (dualCam1(snapshot))
-        return true;
-      if (!(snapshot.ui && snapshot.ui.dual_sensor_enabled === true))
-        return false;
-      const ports = dualSensorPorts();
-      return !ports || (ports.cam0 !== "none" && ports.cam1 !== "none");
+      return !!dualCam1(snapshot);
     }
 
     // The WebUI's own view: the six labels of previewSource, per browser (a viewer's choice that changes nothing on
@@ -15535,6 +14974,10 @@ std::string_view webControlPageHtml()
         snapshot.frames_per_folder = source.frames_per_folder;
       if (typeof source.frames_per_folder_env === "boolean")
         snapshot.frames_per_folder_env = source.frames_per_folder_env;
+      if (typeof source.split_mode === "string")
+        snapshot.split_mode = source.split_mode;
+      if (typeof source.split_effective === "boolean")
+        snapshot.split_effective = source.split_effective;
       if (typeof source.clip_merge_enabled === "boolean")
         snapshot.clip_merge_enabled = source.clip_merge_enabled;
       if (typeof source.clip_merge_env_off === "boolean")
@@ -15593,14 +15036,14 @@ std::string_view webControlPageHtml()
         snapshot.ladder_resolution = Number(source.ladder_resolution);
       if (typeof source.ladder_enabled === "boolean")
         snapshot.ladder_enabled = source.ladder_enabled;
-      if (isFiniteNumber(source.ladder_count))
-        snapshot.ladder_count = Number(source.ladder_count);
       if (typeof source.ladder_text === "string")
         snapshot.ladder_text = source.ladder_text;
       if (Array.isArray(source.ladder_tops))
         snapshot.ladder_tops = source.ladder_tops.map(Number);
-      if (typeof source.ladder_ramp_ready === "boolean")
-        snapshot.ladder_ramp_ready = source.ladder_ramp_ready;
+      if (isFiniteNumber(source.limit_fps))
+        snapshot.limit_fps = Number(source.limit_fps);
+      if (typeof source.limit_why === "string")
+        snapshot.limit_why = source.limit_why;
       if (isFiniteNumber(source.fps_take_max))
         snapshot.fps_take_max = Number(source.fps_take_max);
       if (isFiniteNumber(source.fps_max))
@@ -15717,9 +15160,16 @@ std::string_view webControlPageHtml()
         case "set_storage_preroll":
           snapshot.storage_preroll_auto = payload.value === "on";
           break;
-        case "set_frames_per_folder":
-          snapshot.frames_per_folder = Number(payload.value) || 0;
+        case "set_frames_per_folder": {
+          const partSize = Number(payload.value) || 0;
+          if (partSize > 0)
+            snapshot.frames_per_folder = partSize;
+          if (typeof payload.mode === "string")
+            snapshot.split_mode = payload.mode;
+          else if (payload.value !== undefined)
+            snapshot.split_mode = partSize === 0 ? "off" : (snapshot.split_mode === "auto" ? "auto" : "on");
           break;
+        }
         case "set_clip_merge":
           snapshot.clip_merge_enabled = payload.enabled === true;
           break;
@@ -15765,6 +15215,10 @@ std::string_view webControlPageHtml()
             snapshot.timecode_mode = mode;
           if (payload.target !== "files")
             uiState.timecode_mode = timecodeModeLabel(mode);
+          if (payload.target === "ui" || payload.target === "files")
+            uiState.file_timecode_separate = true;
+          else if (uiState.file_timecode_separate)
+            uiState.file_timecode_separate = false;
           break;
         }
         case "set_af_mode":
@@ -16206,7 +15660,8 @@ std::string_view webControlPageHtml()
     const clipUi = {
       items: [], savedTemplate: null, dirty: false, saveTimer: 0, seq: 0, dragging: false, editing: -1,
       ptype: "mouse", dropHandled: false, src: null, lastDrag: null, suppressClickUntil: 0,
-      example: "", error: "", statusText: "", statusKind: "", statusTimer: 0, recording: false, sig: "", bound: false
+      example: "", error: "", statusText: "", statusKind: "", statusTimer: 0, recording: false, sig: "", bound: false,
+      custom: false   // the Custom pill was chosen: it stays active until a preset is picked, even if the name equals one
     };
 
     function clipParse(template) {
@@ -16701,20 +16156,22 @@ std::string_view webControlPageHtml()
         camNote.classList.toggle("hidden", !dualNames);
       // The presets match with a trailing _{cam} taken off while two sensors are in use.
       let activeIndex = CLIP_PRESETS.findIndex((preset) => preset.value === (dualNames ? current.replace(/_\{cam\}$/, "") : current));
+      if (clipUi.custom)
+        activeIndex = -1;
       setText("settingsClipNamesValue", activeIndex >= 0 ? CLIP_PRESETS[activeIndex].label : "Custom");
       const options = CLIP_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, enabled: !clipUi.recording }));
-      options.push({ value: "", label: "Custom", enabled: false });
+      options.push({ value: "", label: "Custom", enabled: !clipUi.recording });
       buildOptionButtons("clipNamePresets", options, activeIndex >= 0 ? CLIP_PRESETS[activeIndex].value : "", (value) => {
+        // Custom keeps the name as it is; the pills below are its composer.
+        clipUi.custom = value === "";
+        if (clipUi.custom) {
+          clipRenderComposer();
+          return;
+        }
         clipUi.items = clipEnsureCam(clipParse(value));
         clipUi.editing = -1;
         clipChanged();
       }, 4);
-      const customButton = document.getElementById("clipNamePresets").lastElementChild;
-      if (customButton) {
-        customButton.disabled = true;
-        customButton.classList.remove("disabled");
-        customButton.classList.toggle("active", activeIndex < 0);
-      }
       row.innerHTML = "";
       if (!clipUi.items.length) {
         const hint = document.createElement("span");
@@ -16763,6 +16220,7 @@ std::string_view webControlPageHtml()
       if (!clipUi.dirty && clipUi.savedTemplate !== template) {
         clipUi.savedTemplate = template;
         clipUi.items = clipEnsureCam(clipParse(template));
+        clipUi.custom = false;
         rebuild = true;
       }
       if (rebuild) {
@@ -16789,12 +16247,8 @@ std::string_view webControlPageHtml()
           + (option.enabled ? "" : " disabled")
           + (option.system ? " system-value" : "");
         button.textContent = option.label;
-        button.disabled = !option.enabled && !option.locked;
+        button.disabled = !option.enabled;
         button.addEventListener("click", () => {
-          if (option.locked) {
-            showLadderLockWarning(false);
-            return;
-          }
           if (!option.enabled)
             return;
           onClick(option.value);
@@ -17033,7 +16487,7 @@ std::string_view webControlPageHtml()
       if (systemFields) {
         for (const key of Object.keys(systemFields)) {
           if ((key.startsWith("buffer_") || key.startsWith("storage_preroll_") || key.startsWith("frames_per_folder")
-               || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
+               || key.startsWith("split_mode") || key.startsWith("clip_merge_")) && snapshot[key] === undefined)
             snapshot[key] = systemFields[key];
         }
       }
@@ -17274,6 +16728,8 @@ std::string_view webControlPageHtml()
       }
       const ladderActive = snapshot.ladder_active === true;
       setElementDisabled("settingsCdngCompressionSelect", isRecording || !rawCompressionSupported || ladderActive);
+      document.getElementById("settingsCdngCompressionSelect").title = ladderActive
+        ? "Dynamic resolution sets the compression. Pick a resolution by hand or turn it off to choose it." : "";
       const cdngLogAvailable = snapshot.cdng_log_available === true;
       const cdngLogSetting = String(snapshot.cdng_log || "off");
       const cdngLogBits = Number(snapshot.cdng_log_bits) || 0;
@@ -17289,7 +16745,7 @@ std::string_view webControlPageHtml()
         }
       }, 2);
       setText("settingsCdngLogNote", cdngLogBits > 0 && snapshot.cdng_log_applied === false
-        ? "Not applied: in SDR the sensor chip already compresses the raw stream, so Log works in Clear HDR (16-bit). The files stay linear."
+        ? "Not applied: outside Clear HDR the sensor chip already compresses the raw stream, so Log works in Clear HDR (16-bit). The files stay linear."
         : cdngLogBits > 0
         ? "Stores " + cdngLogBits + "-bit (from " + snapshot.raw_bit_depth + "-bit sensor data)."
         : (cdngLogSetting !== "off"
@@ -17416,7 +16872,7 @@ std::string_view webControlPageHtml()
       setText("settingsStillBurstLabel", uiState.photo_bracketing_enabled ? "EV Offset" : "Burst");
       ensureSelectOptions("settingsStillTimelapseSelect", [...stillTimelapseIntervalOptions,
         ...(stillTimelapseIntervalOptions.includes(stillTimelapseIntervalValue) ? [] : [stillTimelapseIntervalValue]), "Custom..."]);
-      ensureSelectEntries("settingsRecordResolutionSelect", resolutionBaseOptions);
+      ensureSelectEntries("settingsRecordResolutionSelect", resolutionSelectOptions(snapshot, resolutionBaseOptions));
       ensureSelectEntries("settingsRecordCropSelect", cropRatioOptions);
       ensureSelectOptions("settingsH264ResolutionSelect", h264ResolutionOptions.filter(value => {
         const maxWidth = Number(snapshot.recording_capabilities && snapshot.recording_capabilities.h264_max_width) || 2560;
@@ -17504,8 +16960,7 @@ std::string_view webControlPageHtml()
       setElementDisabled("settingsStillTimerSelect", stillTimelapseArmed);
       setElementDisabled("settingsStillBurstSelect", stillTimelapseArmed);
       setElementDisabled("settingsStillTimelapseSelect", !stillTimelapseArmed);
-      setElementDisabled("settingsRecordResolutionSelect", ladderActive);
-      setElementDisabled("settingsRecordCropSelect", !cropRatioEnabled || ladderActive);
+      setElementDisabled("settingsRecordCropSelect", !cropRatioEnabled);
       const recordResolutionField = document.getElementById("settingsRecordResolutionField");
       const recordCropField = document.getElementById("settingsRecordCropField");
       const h264ResolutionField = document.getElementById("settingsH264ResolutionField");
@@ -17698,14 +17153,15 @@ std::string_view webControlPageHtml()
         clipSplitRow.hidden = !splitKnown;
         if (splitKnown) {
           const perFolder = snapshot.frames_per_folder;
+          const splitOff = typeof snapshot.split_mode === "string" ? snapshot.split_mode === "off" : perFolder === 0;
           // Off, the presets, and a value from the config file that is not a preset (Core takes 0 or 100-100000).
           const presets = [1000, 2000, 5000, 10000];
           if (perFolder > 0 && !presets.includes(perFolder))
             presets.push(perFolder), presets.sort((a, b) => a - b);
           const splitContainer = document.getElementById("clipSplitOptions");
-          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 ? String(perFolder) : "Off", async (value) => {
+          buildOptionButtonsInto(splitContainer, ["Off"].concat(presets.map(String)), perFolder > 0 && !splitOff ? String(perFolder) : "Off", async (value) => {
             const wanted = value === "Off" ? 0 : Number(value);
-            if (wanted === perFolder)
+            if (wanted === (splitOff ? 0 : perFolder))
               return;
             try {
               await sendCommand({ cmd: "set_frames_per_folder", value: wanted });
@@ -17718,10 +17174,10 @@ std::string_view webControlPageHtml()
             for (const button of splitContainer.querySelectorAll("button"))
               button.disabled = true;
           const fps = Number(snapshot.fps);
-          const perFolderTime = perFolder > 0 && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
+          const perFolderTime = perFolder > 0 && !splitOff && fps > 0 ? " (" + formatFolderDuration(perFolder / fps) + " at " + fps + " fps)" : "";
           setText("clipSplitNote", (splitFromEnv ? "Set by APERTAR_CDNG_FRAMES_PER_FOLDER. " : "")
-            + (perFolder > 0
-              ? "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
+            + (perFolder > 0 && !splitOff
+              ? (snapshot.split_mode === "auto" ? "Automatic: above 32 fps on exFAT or FAT, " : "") + "CinemaDNG frames go into folders of " + perFolder + perFolderTime + ", so long takes keep their write speed. From the next take."
               : "All frames of a take in one folder. On exFAT, writing slows down as the folder grows, and long takes can drop frames."));
         }
       }
@@ -17836,22 +17292,9 @@ std::string_view webControlPageHtml()
       markPrerollFps(frameBufferBar.preroll === true);
       const fpsLadderLine = document.getElementById("fpsLadderLine");
       setText("fpsLadderLine", state.fpsSwitchingTo > 0
-        ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : (ladderActive ? String(snapshot.ladder_text || "") : ""));
+        ? "Switching to Resolution " + state.fpsSwitchingTo + "…" : String(snapshot.limit_why || ""));
       fpsLadderLine.classList.toggle("switching", state.fpsSwitchingTo > 0);
       document.getElementById("quickLadderPill").classList.toggle("hidden", !ladderActive);
-      // Greyed selects ignore clicks: the fields say why when someone tries.
-      for (const [id, kind] of [["settingsRecordResolutionField", "1"], ["settingsRecordCropField", "1"], ["settingsCdngCompressionLockField", "compression"]]) {
-        const field = document.getElementById(id);
-        if (!field)
-          continue;
-        if (ladderActive)
-          field.dataset.ladderLock = kind;
-        else
-          delete field.dataset.ladderLock;
-      }
-      document.getElementById("resolutionOptions").classList.toggle("ladder-locked", ladderActive);
-      document.getElementById("cropRatioOptions").classList.toggle("ladder-locked", ladderActive);
-      document.getElementById("settingsRawBitDepthOptions").classList.toggle("ladder-locked", ladderActive);
 
       buildOptionButtons("isoOptions", availableIsoOptionsForSnapshot(snapshot), snapshot.iso_auto ? "Auto" : String(snapshot.iso), async (value) => {
         try {
@@ -17894,7 +17337,7 @@ std::string_view webControlPageHtml()
         }
       });
 
-      buildOptionButtons("resolutionOptions", ladderLockedOptions(resolutionBaseOptions, ladderActive), resolutionBaseValue, async (value) => {
+      buildOptionButtons("resolutionOptions", resolutionBaseOptions, resolutionBaseValue, async (value) => {
         try {
           for (const command of resolutionBaseCommands(snapshot, value))
             await sendCommand(command);
@@ -17906,7 +17349,7 @@ std::string_view webControlPageHtml()
       const cropRatioBlock = document.getElementById("cropRatioBlock");
       if (cropRatioBlock)
         cropRatioBlock.classList.toggle("hidden", !cropControlsVisible);
-      buildOptionButtons("cropRatioOptions", ladderLockedOptions(cropRatioOptions, ladderActive), cropRatioValue, async (value) => {
+      buildOptionButtons("cropRatioOptions", cropRatioOptions, cropRatioValue, async (value) => {
         try {
           await sendCommand(cropRatioCommandPayload(snapshot, value));
         } catch (error) {
@@ -17930,8 +17373,7 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsRawBitDepthOptions", rawBitDepthOptions.map((value) => ({
         value,
         label: value,
-        enabled: rawBitDepthOptionEnabled(snapshot, value, rawBitDepthFixedForH264) && !ladderActive,
-        locked: ladderActive,
+        enabled: rawBitDepthOptionEnabled(snapshot, value, rawBitDepthFixedForH264),
       })), rawBitDepthText, async (value) => {
         try {
           if (rawBitDepthFixedForH264)
@@ -18005,17 +17447,21 @@ std::string_view webControlPageHtml()
         await applyStillTimelapseToggle(value === "On");
       }, 2);
 
-      for (const [id, target, current] of [["settingsTimecodeOptions", "ui", uiTimecodeLabel(snapshot)],
-                                           ["settingsFileTimecodeOptions", "files", fileTimecodeLabel(snapshot)]]) {
-        buildOptionButtons(id, timecodeChoices(),
-          current, async (value) => {
-            try {
-              await sendCommand(timecodeCommand(value, target));
-            } catch (error) {
-              showToast(error.message, true);
-            }
-          }, 2);
-      }
+      buildOptionButtons("settingsTimecodeOptions", timecodeChoices(), uiTimecodeLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeModeCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 2);
+
+      buildOptionButtons("settingsFileTimecodeOptions", timecodeFilesChoices(), timecodeFilesLabel(snapshot), async (value) => {
+        try {
+          await sendCommand(timecodeFilesCommand(value));
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      }, 3);
 
       buildOptionButtons("settingsAutofocusModeOptions", autofocusModeOptions, autofocusModeText, async (value) => {
         try {
@@ -18074,7 +17520,7 @@ std::string_view webControlPageHtml()
           showToast(error.message, true);
         }
       });
-      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled !== false), async (value) => {
+      buildOptionButtons("settingsAudioRecordedOutlineOptions", toggleOptions, formatToggleLabel(uiState.audio_recorded_outline_enabled === true), async (value) => {
         try {
           await sendCommand({ cmd: "set_audio_recorded_outline_enabled", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
@@ -18092,6 +17538,13 @@ std::string_view webControlPageHtml()
       buildOptionButtons("settingsFpsPhaseLockOptions", toggleOptions, formatToggleLabel(!!snapshot.fps_phase_lock), async (value) => {
         try {
           await sendCommand({ cmd: "set_fps_phase_lock", enabled: value === "On" ? "true" : "false" });
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+      buildOptionButtons("settingsStopOnDroppedFrameOptions", toggleOptions, formatToggleLabel(!!snapshot.stop_on_dropped_frame), async (value) => {
+        try {
+          await sendCommand({ cmd: "set_stop_on_dropped_frame", enabled: value === "On" ? "true" : "false" });
         } catch (error) {
           showToast(error.message, true);
         }
@@ -18123,6 +17576,24 @@ std::string_view webControlPageHtml()
         fpfApply.disabled = framesPerFolderEnv;
       if (fpfEnvNote)
         fpfEnvNote.hidden = !framesPerFolderEnv;
+      // Off, On or Automatic ([storage] split). An old Core has no split_mode: a part size above 0 is On.
+      const splitMode = typeof systemState.split_mode === "string" ? systemState.split_mode : (framesPerFolder > 0 ? "on" : "off");
+      const splitOptions = document.getElementById("settingsSplitModeOptions");
+      buildOptionButtonsInto(splitOptions, [{ label: "Off", value: "off" }, { label: "On", value: "on" }, { label: "Automatic", value: "auto" }],
+        splitMode, async (value) => {
+          try {
+            await sendCommand({ cmd: "set_frames_per_folder", mode: value });
+          } catch (error) {
+            showToast(error.message, true);
+          }
+        }, 3);
+      if (framesPerFolderEnv && splitOptions)
+        for (const button of splitOptions.querySelectorAll("button"))
+          button.disabled = true;
+      const splitEffective = snapshot.split_effective === true;
+      setText("settingsSplitModeNote", splitMode === "off" ? "Off: every frame of a take goes into one folder."
+        : (splitMode === "on" ? (splitEffective ? "On: parts of " + framesPerFolder + " frames." : "On, but this recording format writes one file per take: no parts.")
+          : (splitEffective ? "Automatic: this take splits, above 32 fps on exFAT or FAT." : "Automatic: this take does not split.")));
       const clipMergeEnvOff = !!systemState.clip_merge_env_off;
       const clipMergeNote = document.getElementById("settingsClipMergeNote");
       if (clipMergeNote)
@@ -18615,10 +18086,13 @@ std::string_view webControlPageHtml()
       const editor = document.getElementById("settingsConfigEditor");
       const reloadButton = document.getElementById("reloadConfigButton");
       const saveButton = document.getElementById("saveConfigButton");
+      const checkButton = document.getElementById("checkConfigButton");
       if (reloadButton)
         reloadButton.disabled = loading || saving;
       if (saveButton)
         saveButton.disabled = loading || saving || !state.configDirty;
+      if (checkButton)
+        checkButton.disabled = !state.configRevision;
       if (editor)
         editor.disabled = loading || saving;
 
@@ -18648,7 +18122,8 @@ std::string_view webControlPageHtml()
       buses: [],             // the Pi's I2C buses: { bus, name }
       scans: {},             // bus -> { loading } or { found } or { error }: the Hardware card's Scan
       dpiLines: [],          // config.txt lines that load a DPI display
-      apply: null,           // get_controls apply: { state, detail, pending }
+      gpioChips: [],         // the GPIO chips there are: { path, label, lines, header }; header = the one chip=auto means
+      apply: null,           // /api/config apply: { state, detail, pending }
       history: [],           // saved versions, newest first
       listening: false,
     };
@@ -19191,6 +18666,42 @@ std::string_view webControlPageHtml()
       return null;
     }
 
+    // The GPIO chip a section's pins are on, as the page has it now (an unsaved edit first). "auto" is the Pi's
+    // own header; anything else is the path of another chip (an expander, a microcontroller).
+    function controlsGpioChipSetting(section) {
+      const edit = controlsState.settingEdits.get(section + "|chip");
+      if (edit)
+        return String(edit.value || "").trim() || "auto";
+      const peripheral = controlsState.peripherals.find((candidate) => candidate.section === section);
+      const setting = peripheral && (peripheral.settings || []).find((candidate) => candidate.key === "chip");
+      return (setting && String(setting.value).trim()) || "auto";
+    }
+    function controlsGpioChipInfo(chip) {
+      return controlsState.gpioChips.find((candidate) => chip === "auto" ? candidate.header : candidate.path === chip) || null;
+    }
+    function controlsGpioChipOnHeader(chip) {
+      const info = controlsGpioChipInfo(chip);
+      return chip === "auto" || (!!info && info.header);
+    }
+    // Buttons, encoders and switches share one chip: the GPIO input's, [gpio_buttons] chip=.
+    function controlsInputGpioChip() {
+      return controlsGpioChipSetting("gpio_buttons");
+    }
+    // The lines of a chip a control can sit on: on the Pi's header the model's list (it leaves out the I2C, power
+    // and reserved pins), on another chip every line it has.
+    function controlsGpioLines(chipSetting) {
+      if (controlsGpioChipOnHeader(chipSetting))
+        return (controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [];
+      const chip = controlsGpioChipInfo(chipSetting);
+      return Array.from({ length: chip ? chip.lines : 0 }, (unused, line) => line);
+    }
+    // Is the tally's GPIO line on the chip the buttons are on? Only then can the two collide.
+    function controlsTallyOnInputChip() {
+      const input = controlsInputGpioChip();
+      const tally = controlsGpioChipSetting(controlsTallySection);
+      return input === tally || (controlsGpioChipOnHeader(input) && controlsGpioChipOnHeader(tally));
+    }
+
     // Pins something else holds: held outside Core, picked by another row (new or moved here), or the tally's
     // GPIO. skipRow / skipTally leave out the row asking.
     function controlsPinsTaken(skipRow, skipTally) {
@@ -19198,16 +18709,16 @@ std::string_view webControlPageHtml()
       controlsState.peripherals.forEach((peripheral) => {
         ((peripheral.status && peripheral.status.pins) || []).forEach((line) => { if (!line.core) taken.add(line.pin); });
       });
-      if (controlsState.dpiLines.length > 0)
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
-          taken.add(pin);                                // the DPI display holds them
+          taken.add(pin);                                // the DPI display holds the header's
       (((controlsState.model && controlsState.model.rows) || [])).forEach((row) => {
         const info = row === skipRow ? null : controlsRowPinInfo(row);
         if (info)
           info.now.forEach((pin) => { if (pin !== null) taken.add(pin); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !skipTally && tallyShown(tally, "target") === "gpio") {
+      if (tally && !skipTally && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0)
           taken.add(pin);
@@ -19260,8 +18771,9 @@ std::string_view webControlPageHtml()
             owners.set(line.pin, { kind: "outside", text: line.consumer || "another program" });
         });
       });
-      // A DPI display (a Hyperpixel) holds GPIO 0 to 27: greyed and not to be picked, like a pin held outside Core.
-      if (controlsState.dpiLines.length > 0)
+      // A DPI display (a Hyperpixel) holds the header's GPIO 0 to 27: greyed and not to be picked, like a pin held
+      // outside Core. Another chip's lines are free of it.
+      if (controlsState.dpiLines.length > 0 && controlsGpioChipOnHeader(controlsInputGpioChip()))
         for (let pin = 0; pin <= 27; ++pin)
           if (!owners.has(pin))
             owners.set(pin, { kind: "outside", text: "the DPI display" });
@@ -19275,7 +18787,7 @@ std::string_view webControlPageHtml()
           entry.pins.forEach((pin) => { if (pin !== null && !owners.has(pin)) owners.set(pin, { kind: "entry", entry: entry, text: controlsNewTitles[entry.kind] + " (not saved)" }); });
       });
       const tally = controlsState.peripherals.find((peripheral) => peripheral.id === controlsTallySection);
-      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio") {
+      if (tally && !(self && self.tally) && tallyShown(tally, "target") === "gpio" && controlsTallyOnInputChip()) {
         const pin = parseInt(tallyShown(tally, "line"), 10);
         if (pin >= 0 && !owners.has(pin))
           owners.set(pin, { kind: "tally", tally: tally, text: "Tally light" });
@@ -19283,11 +18795,13 @@ std::string_view webControlPageHtml()
       return owners;
     }
     // Every pin a dropdown lists: the model's free and used pins, whoever holds one now, and the extra pins asked for.
-    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones).
-    function controlsPinChoices(owners, extra) {
-      const pins = ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.free) || [])
-        .concat((((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || [])).map((used) => used.pin))
-        .concat(Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
+    // Left out on purpose: pins the model lists as neither (I2C, power, reserved ones). chipSetting is the chip the
+    // dropdown is for: the GPIO input's when not given.
+    function controlsPinChoices(owners, extra, chipSetting) {
+      const setting = chipSetting || controlsInputGpioChip();
+      const used = controlsGpioChipOnHeader(setting)
+        ? ((controlsState.model && controlsState.model.gpio_pins && controlsState.model.gpio_pins.used) || []).map((entry) => entry.pin) : [];
+      const pins = controlsGpioLines(setting).concat(used, Array.from(owners.keys()), extra.filter((pin) => pin !== null && pin >= 0));
       return Array.from(new Set(pins)).filter((pin) => Number.isFinite(pin)).sort((a, b) => a - b);
     }
     // Remote only: a GPIO button with no pin, saved as remote<N> in [gpio_buttons] (Core: ControlsModel.hpp). The
@@ -19430,13 +18944,12 @@ std::string_view webControlPageHtml()
       renderControls();
     }
 
-    // The pins a new row may take: free on the header, not held outside Core, not picked by another new row
-    // or by a row moved here.
+    // The pins a new row may take: free on the GPIO input's chip, not held outside Core, not picked by another
+    // new row or by a row moved here.
     function controlsFreePins(entry) {
-      const model = controlsState.model;
       const taken = controlsPinsTaken(null, false);
       controlsState.added.forEach((other) => { if (other !== entry) other.pins.forEach((pin) => { if (pin !== null) taken.add(pin); }); });
-      return ((model && model.gpio_pins && model.gpio_pins.free) || []).filter((pin) => !taken.has(pin));
+      return controlsGpioLines(controlsInputGpioChip()).filter((pin) => !taken.has(pin));
     }
 
     // A row added here: its pins are chosen in the row; a three-way switch has two.
@@ -19674,6 +19187,14 @@ std::string_view webControlPageHtml()
         info.textContent = status.info;
         text.appendChild(info);
       }
+      if (withSettings && status.chip) {                      // the GPIO chip Core reads the buttons on
+        const chip = document.createElement("div");
+        chip.className = "controls-row-detail";
+        chip.textContent = status.chip.ok
+          ? "Chip " + status.chip.path + " (" + status.chip.label + "), " + status.chip.lines + " lines"
+          : "Chip: " + (status.chip.error || "not found");
+        text.appendChild(chip);
+      }
       head.appendChild(text);
       const pill = document.createElement("div");
       pill.className = "online-pill";
@@ -19727,6 +19248,20 @@ std::string_view webControlPageHtml()
             option.textContent = optionText;
             control.appendChild(option);
           });
+        } else if (setting.key === "chip") {
+          // The GPIO chips there are. Auto is the Pi's own header; a chip the file names that is not there stays listed.
+          control = document.createElement("select");
+          control.className = "settings-select";
+          const chips = [["auto", "Auto (the Pi's own pins)"], ...controlsState.gpioChips.map((chip) =>
+            [chip.path, chip.path + " · " + chip.label + " · " + chip.lines + " lines" + (chip.header ? " (the Pi's own pins)" : "")])];
+          if (!chips.some(([optionValue]) => optionValue === value))
+            chips.push([value, value + " (not found)"]);
+          chips.forEach(([optionValue, optionText]) => {
+            const option = document.createElement("option");
+            option.value = optionValue;
+            option.textContent = optionText;
+            control.appendChild(option);
+          });
         } else if (setting.key === "pcf_pin") {
           // An expander has eight pins; -1 is none.
           control = document.createElement("select");
@@ -19744,6 +19279,13 @@ std::string_view webControlPageHtml()
           if (setting.type === "number") {
             control.min = String(setting.min);
             control.max = String(setting.max);
+            if (setting.key === "line" && !controlsGpioChipOnHeader(controlsGpioChipSetting(peripheral.section))) {
+              const chip = controlsGpioChipInfo(controlsGpioChipSetting(peripheral.section));   // another chip: its own lines
+              if (chip)
+                control.max = String(chip.lines - 1);
+              else
+                control.removeAttribute("max");
+            }
           }
         }
         control.value = value;
@@ -19831,9 +19373,11 @@ std::string_view webControlPageHtml()
       const shownPin = parseInt(tallyShown(peripheral, viaPcf ? "pcf_pin" : "line"), 10);
       const current = Number.isFinite(shownPin) && shownPin >= 0 ? (viaPcf ? "p:" : "g:") + shownPin : "none";
       const self = { tally: true };
-      const owners = controlsPinOwners(self);
+      // The buttons' pins matter here only when the tally's chip= is the chip they are on.
+      const owners = controlsTallyOnInputChip() ? controlsPinOwners(self) : new Map();
       const fileGpio = parseInt(tallyRaw(peripheral, "line"), 10);
-      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null]);
+      const gpioPins = controlsPinChoices(owners, [fileGpio >= 0 ? fileGpio : null, current.startsWith("g:") ? shownPin : null],
+        controlsGpioChipSetting(peripheral.section));
       const options = [["none", "None"], ...gpioPins.map((pin) => controlsPinOption(pin, "", owners.get(pin), "g:" + pin))];
       if (controlsExpanderAttached() || current.startsWith("p:")) {      // PCF8574 pins only with an expander detected
         const used = controlsPcfPinsInUse();
@@ -20209,7 +19753,7 @@ std::string_view webControlPageHtml()
         if (controlsState.dpiLines.length > 0) {
           const dpi = document.createElement("div");
           dpi.className = "controls-scan";
-          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds GPIO 0 to 27, so buttons and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot.";
+          dpi.textContent = "config.txt line " + controlsState.dpiLines.join(", ") + " loads a DPI display: it holds the Pi's GPIO 0 to 27, so buttons on those pins and I2C bus 1 cannot use them. Change it in System, Boot Config (Display), then reboot, or put the buttons on another GPIO chip.";
           buses.appendChild(dpi);
         }
         host.appendChild(buses);
@@ -20232,10 +19776,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your settings stay on the page. Press Reload to see the newer file." : "";
-          showHardwareMessage((result.error || "Could not save the settings.") + kept, found, false);
+          showHardwareMessage(result.error || "Could not save the settings.", [], false);
           showToast(result.error || "Could not save the settings.", true);
           return;
         }
@@ -20263,23 +19804,24 @@ std::string_view webControlPageHtml()
       controlsState.loading = true;
       updateControlsButtons();
       try {
-        const [controls, catalog] = await Promise.all([
-          controlsCall({ cmd: "get_controls" }),
+        const [payload, catalog] = await Promise.all([
+          fetch("/api/config", { cache: "no-store" }).then((response) => response.json()),
           controlsState.catalog ? Promise.resolve(null) : controlsCall({ cmd: "list_actions" }),
         ]);
-        if (!controls.ok)
-          throw new Error(controls.error || "Could not load the controls.");
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not load the controls.");
         if (catalog) {
           if (!catalog.ok)
             throw new Error(catalog.error || "Could not load the list of actions.");
           controlsState.catalog = catalog;
         }
-        controlsState.revision = String(controls.controls.revision || "");
-        controlsState.model = controls.controls.model || null;
-        controlsState.peripherals = controls.controls.peripherals || [];
-        controlsState.buses = controls.controls.i2c_buses || [];
-        controlsState.dpiLines = controls.controls.dpi_lines || [];
-        controlsState.apply = controls.controls.apply || null;
+        controlsState.revision = String(payload.revision || "");
+        controlsState.model = payload.model || null;
+        controlsState.peripherals = payload.peripherals || [];
+        controlsState.buses = payload.i2c_buses || [];
+        controlsState.dpiLines = payload.dpi_lines || [];
+        controlsState.gpioChips = payload.gpio_chips || [];
+        controlsState.apply = payload.apply || null;
         controlsChipLines.clear();
         controlsSeparateTurns.clear();
         controlsReplaced.clear();
@@ -20298,7 +19840,7 @@ std::string_view webControlPageHtml()
               suffix: line.key.slice(row.base.length), value: line.raw, orig: line.key, raw: line.raw, removed: false,
             })) });
         });
-        const found = controls.controls;
+        const found = payload;
         if (found.errors > 0)
           showControlsMessage("The file has " + found.errors + (found.errors === 1 ? " error" : " errors") + ". Config shows where.", found.issues.filter((issue) => issue.error), false);
         else if (found.replaced && found.replaced.replaced)
@@ -20518,12 +20060,13 @@ std::string_view webControlPageHtml()
     // A moment after a save, read the file's state again: what Core restarted, and what still needs a restart.
     function controlsRecheckSoon() {
       window.setTimeout(async () => {
-        const reply = await controlsCall({ cmd: "get_controls" });
-        if (!reply.ok)
+        const response = await fetch("/api/config", { cache: "no-store" });
+        const payload = await response.json();
+        if (!payload.ok)
           return;
-        controlsState.apply = reply.controls.apply || null;
+        controlsState.apply = payload.apply || null;
         if (!controlsDirty() && !hardwareDirty()) {
-          controlsState.peripherals = reply.controls.peripherals || controlsState.peripherals;
+          controlsState.peripherals = payload.peripherals || controlsState.peripherals;
           renderControls();
           renderHardware();
         }
@@ -20554,10 +20097,21 @@ std::string_view webControlPageHtml()
       });
     }
 
+    async function fetchConfigHistory(name) {
+      const response = await fetch("/api/config/history" + (name ? "?name=" + encodeURIComponent(name) : ""), { cache: "no-store" });
+      const payload = await response.json();
+      if (!payload.ok)
+        throw new Error(payload.error || "Could not read that version.");
+      return payload;
+    }
+
     // T42 Undo last save: put back the version the last save replaced (it is in the file's history).
     async function loadControlsHistory() {
-      const reply = await controlsCall({ cmd: "controls_history" });
-      controlsState.history = reply.ok ? reply.history || [] : [];
+      try {
+        controlsState.history = (await fetchConfigHistory("")).history || [];
+      } catch (error) {
+        controlsState.history = [];
+      }
       const undo = document.getElementById("undoControlsButton");
       if (undo)
         undo.disabled = !controlsState.history.some((entry) => entry.by !== "adopted");
@@ -20583,14 +20137,16 @@ std::string_view webControlPageHtml()
         return;
       if (!window.confirm("Put back the file as it was before the save at " + last.saved_at + "? Unsaved changes on this page are dropped."))
         return;
-      const version = await controlsCall({ cmd: "controls_history", name: last.name });
-      if (!version.ok) {
-        showToast(version.error || "Could not read that version.", true);
+      let version;
+      try {
+        version = await fetchConfigHistory(last.name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const result = await controlsCall({ cmd: "set_controls", base: controlsState.revision, text: version.text, by: "webui_undo" });
       if (!result.ok) {
-        showControlsMessage(result.error || "Could not undo.", result.issues, false);
+        showControlsMessage(result.error || "Could not undo.", [], false);
         return;
       }
       await loadControls(true);
@@ -20603,6 +20159,7 @@ std::string_view webControlPageHtml()
     // T42 Listen: press a button or turn a knob and its row lights up.
     let controlsListenTimer = 0;
     let controlsListenSeq = -1;
+    let controlsListenStarted = 0;
     function controlsRowForKey(section, key) {
       const rows = (controlsState.model && controlsState.model.rows) || [];
       return rows.findIndex((row) => row.source === section && (row.lines.some((line) => line.key === key) || (row.keys || []).includes(key) ||
@@ -20619,17 +20176,21 @@ std::string_view webControlPageHtml()
         note.textContent = "Listening: press a button, flip a switch or turn a knob, and its row lights up.";
         note.hidden = !on;
       }
-      window.clearInterval(controlsListenTimer);
+      window.clearTimeout(controlsListenTimer);
       if (!on)
         return;
       controlsListenSeq = -1;
       const started = Date.now();
-      controlsListenTimer = window.setInterval(async () => {
+      // Ask again only after the reply: the command waits for the command lock, so at most one is ever waiting.
+      const listen = async () => {
         if (Date.now() - started > 120000 || !document.getElementById("controlsRows").offsetParent) {
           setControlsListening(false);
           return;
         }
-        const reply = await controlsCall({ cmd: "controls_last_input" });
+        const reply = await controlsCall({ cmd: "controls_last_input" }).catch(() => ({ ok: false }));
+        if (!controlsState.listening || controlsListenStarted !== started)
+          return;
+        controlsListenTimer = window.setTimeout(listen, 300);
         if (!reply.ok)
           return;
         if (controlsListenSeq < 0) {
@@ -20648,7 +20209,9 @@ std::string_view webControlPageHtml()
           element.scrollIntoView({ block: "center", behavior: "smooth" });
           window.setTimeout(() => element.classList.remove("heard"), 2000);
         }
-      }, 300);
+      };
+      controlsListenStarted = started;
+      controlsListenTimer = window.setTimeout(listen, 300);
     }
 
     async function saveControls() {
@@ -20660,10 +20223,7 @@ std::string_view webControlPageHtml()
       try {
         const result = await controlsCall(payload);
         if (!result.ok) {
-          const found = result.new_errors && result.new_errors.length > 0 ? result.new_errors : result.issues;
-          const kept = result.code === "stale" || result.code === "conflict"
-            ? " Your choices stay on the page. Press Reload to see the newer file." : "";
-          showControlsMessage((result.error || "Could not save the controls.") + kept, found, false);
+          showControlsMessage(result.error || "Could not save the controls.", [], false);
           showToast(result.error || "Could not save the controls.", true);
           return;
         }
@@ -20795,10 +20355,10 @@ std::string_view webControlPageHtml()
     // T43 Check: Core reads the text without saving it and says what it finds, with line numbers.
     async function checkConfigFile() {
       const editor = document.getElementById("settingsConfigEditor");
-      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision || "h", text: editor ? editor.value : "", dry_run: "true", by: "webui" });
+      const result = await controlsCall({ cmd: "set_controls", base: state.configRevision, text: editor ? editor.value : "", dry_run: "true", by: "webui" });
       const found = Array.isArray(result.issues) ? result.issues : [];
-      if (!result.ok && found.length === 0) {
-        showConfigIssues(result.error || "Could not check the text.", result.new_errors || []);
+      if (!result.ok) {
+        showConfigIssues(result.error || "Could not check the text.", []);
         return;
       }
       if (found.length === 0) {
@@ -20808,7 +20368,7 @@ std::string_view webControlPageHtml()
       }
       const errors = found.filter((issue) => issue.error).length;
       showConfigIssues("Checked: " + errors + (errors === 1 ? " error" : " errors") + ", " + (found.length - errors) +
-        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save is refused until the errors are fixed." : "."), found);
+        (found.length - errors === 1 ? " warning" : " warnings") + (errors ? ". Save writes the file anyway; the readers skip what they cannot use." : "."), found);
     }
 
     // T43: the lines that differ between the loaded file and the editor (a longest-common-subsequence line diff),
@@ -20895,9 +20455,11 @@ std::string_view webControlPageHtml()
         return;
       if (state.configDirty && !window.confirm("Replace the unsaved text in the editor with that version?"))
         return;
-      const reply = await controlsCall({ cmd: "controls_history", name: name });
-      if (!reply.ok) {
-        showToast(reply.error || "Could not read that version.", true);
+      let reply;
+      try {
+        reply = await fetchConfigHistory(name);
+      } catch (error) {
+        showToast(error.message, true);
         return;
       }
       const editor = document.getElementById("settingsConfigEditor");
@@ -20919,7 +20481,7 @@ std::string_view webControlPageHtml()
       state.configSaveInFlight = true;
       updateConfigEditorControls();
       try {
-        // The revision the text was loaded at: Core refuses a save over a newer file, and an old tab without one.
+        // The revision the text was loaded at: Core refuses a save over a newer file.
         const headers = { "Content-Type": "text/plain; charset=utf-8" };
         if (state.configRevision)
           headers["X-Apertar-Revision"] = state.configRevision;
@@ -20929,11 +20491,8 @@ std::string_view webControlPageHtml()
           body: text,
         });
         const payload = await response.json();
-        if (!payload.ok) {
-          const failure = new Error(payload.error || "Could not save config.");
-          failure.payload = payload;
-          throw failure;
-        }
+        if (!payload.ok)
+          throw new Error(payload.error || "Could not save config.");
         state.configDirty = false;
         const backupNote = payload.backup_display_path ? " Backup: " + payload.backup_display_path + "." : "";
         showToast("Config saved." + backupNote, false);
@@ -20945,13 +20504,7 @@ std::string_view webControlPageHtml()
           showConfigIssues("Saved. Core found " + found.length + (found.length === 1 ? " thing" : " things") + " to look at:", found);
       } catch (error) {
         // A refused save leaves the text in the box (no reload), so nothing typed is lost.
-        const payload = error && error.payload;
-        if (payload) {
-          const found = payload.new_errors && payload.new_errors.length > 0 ? payload.new_errors : payload.issues;
-          const kept = payload.code === "stale" || payload.code === "conflict" || payload.code === "merge_review"
-            ? " Your text stays in the box. Press Reload Config to see the newer file." : "";
-          showConfigIssues(error.message + kept, found);
-        }
+        showConfigIssues(error.message || "Could not save config.", []);
         showToast(error.message || "Could not save config.", true);
       } finally {
         state.configSaveInFlight = false;
@@ -21875,13 +21428,13 @@ std::string_view webControlPageHtml()
       }
     }
 
-    // ---- Boot Config card (System pane): /boot/firmware/config.txt through /api/boot-config ----------------------
+    // ---- Boot Config card (System pane): /boot/firmware/config.txt, read by /api/boot-config, saved by set_boot_config --
     // Core reads the file into a state (sensor per connector, link frequency, buses, RP1 clock, DPI display) and edits
     // the lines already there; this card shows that state, asks Core what a change would do (dry_run) before saving,
     // and after "Save & Reboot" waits for the camera to answer again. Port of Cinemate's settings-editor config.txt tab.
     const bootConfig = {
       linkNote: "",           // the two IMX585 lines differed in config.txt: Save writes Camera 0's rate on both
-      payload: null,          // the last GET: path, revision, state, drm, text, helper
+      payload: null,          // the last GET: path, revision, state, text, helper, text_editable (Edit file is offered)
       form: null,             // the card's choices: { sensors, links, toggles, rp1, display }
       loading: false,
       saving: false,
@@ -22056,15 +21609,13 @@ std::string_view webControlPageHtml()
       return Object.assign(body, extra || {});
     }
 
+    // set_boot_config through /api/command, like every other setter. A refusal comes back as { ok: false, error }.
     async function bootConfigPost(body, revision) {
-      const headers = { "Content-Type": "application/json" };
+      const payload = Object.assign({ cmd: "set_boot_config" }, body);
       if (revision)
-        headers["X-Apertar-Revision"] = revision;
+        payload.revision = revision;
       try {
-        const response = await fetch("/api/boot-config", { method: "POST", headers, body: JSON.stringify(body), cache: "no-store" });
-        const result = await response.json();
-        result.httpStatus = response.status;
-        return result;
+        return await sendCommand(payload);
       } catch (error) {
         return { ok: false, error: (error && error.message) || "Could not reach the camera." };
       }
@@ -22134,11 +21685,13 @@ std::string_view webControlPageHtml()
       if (current !== "none" && !bootConfigSensorInfo(current))
         bootConfigOption(select, current, current + " (as in config.txt)");
       select.value = current;
-      select.disabled = !editable || bootConfigBusy();
+      select.disabled = !editable || bootConfigBusy() || !!bootState.camera_problem;
 
       const camera = (bootState.cameras && bootState.cameras[port]) || {};
       const note = document.getElementById(prefix + "Note");
-      if (current === loaded.sensors[port])
+      if (bootState.camera_problem)
+        note.textContent = bootState.camera_problem;
+      else if (current === loaded.sensors[port])
         note.textContent = camera.line ? "config.txt line " + camera.line + "." : "No sensor line is active for this connector.";
       else
         note.textContent = current === "none" ? "Save comments its line out." : "Save turns this sensor's line on.";
@@ -22166,7 +21719,7 @@ std::string_view webControlPageHtml()
       linkSelect.value = String(effective);
       const pi5 = bootState.board && bootState.board.family === "pi5";
       const rp1Gates = pi5 && bootConfigRp1Available();
-      linkSelect.disabled = !editable || bootConfigBusy() || (rp1Gates && !form.rp1);
+      linkSelect.disabled = !editable || bootConfigBusy() || !!bootState.camera_problem || (rp1Gates && !form.rp1);
       const linkNote = document.getElementById(prefix + "LinkNote");
       if (rp1Gates && !form.rp1)
         linkNote.textContent = effective !== info.link.default_hz
@@ -22597,7 +22150,10 @@ std::string_view webControlPageHtml()
       const differ = configured && !!ports && ports.cam0 !== sensor1;
       // The switch: off (the default) runs CAM0 only, even with two cameras connected and configured.
       const switchedOn = uiState.dual_sensor_enabled === true;
+      // Switch on, config.txt naming both and still no cam1 from Core: one of the two sensors did not answer.
+      const oneAnswered = !cam1 && switchedOn && configured;
       setText("dualSensorNote", cam1 && cam1.state === "not_found" ? "Camera 1 is set in Boot Config, but no sensor answered."
+        : oneAnswered ? "Boot Config names two sensors, but only one answered: one camera."
         : !ports && !cam1 ? "Reading config.txt..."
         : !configured ? (ports.cam1 === "none" ? "One sensor found. Set Camera 1 in Boot Config, then reboot."
           : "With no Camera 0, the main Core takes Camera 1's sensor; dual sensor does not run.")
@@ -22682,6 +22238,7 @@ std::string_view webControlPageHtml()
       const bootState = payload ? payload.state : null;
       const editable = !!(bootState && bootState.editable);
       const dirty = bootConfigDirty();
+      document.getElementById("editBootConfigButton").classList.toggle("hidden", !(payload && payload.text_editable));
       setText("bootConfigStatePill", bootConfig.loading ? "Loading" : bootConfig.saving ? "Saving" : bootConfig.waiting ? "Rebooting"
         : !payload ? "Not Loaded" : !editable ? "Read Only" : dirty ? "Unsaved" : bootConfig.savedPendingReboot ? "Reboot to Apply" : "Ready");
       document.getElementById("saveBootConfigButton").disabled = !editable || !dirty || bootConfigBusy();
@@ -22693,8 +22250,6 @@ std::string_view webControlPageHtml()
         return;
 
       const notes = [];
-      if (bootState.board && !bootState.board.detected)
-        notes.push("No Raspberry Pi device tree here: the card reads config.txt as a Pi 5 would.");
       (bootState.warnings || []).forEach((warning) => notes.push(warning));
       if (bootConfig.linkNote)
         notes.push(bootConfig.linkNote);
@@ -22792,13 +22347,6 @@ std::string_view webControlPageHtml()
       return line;
     }
 
-    function drmSummary(drm) {
-      if (!Array.isArray(drm) || drm.length === 0)
-        return "";
-      return "DRM now: " + drm.map((c) => c.name + " " + (c.status || "?") + " (" + c.modes + " mode" + (c.modes === 1 ? "" : "s") + ")").join(", ")
-        + ". A DPI overlay reports its connector connected even with no panel attached.";
-    }
-
     // Save shows what changes first: the lines Core would write, then Save and Reboot / Save Only / Back.
     async function reviewBootConfig() {
       if (!bootConfig.form)
@@ -22826,7 +22374,6 @@ std::string_view webControlPageHtml()
         }
       });
 
-      let gate = null;
       if (result.display_changed) {
         const loaded = bootConfigFormFrom(bootConfig.payload.state);
         const leavingDpi = loaded.display !== "hdmi";
@@ -22837,16 +22384,6 @@ std::string_view webControlPageHtml()
         if (toDpi)
           bootConfigDiffLine(box, "diff-note", "With DPI overlays loaded, GPIO 0-27 belong to the panel: I2C bus 1 (GPIO 2/3) and buttons on those pins stop working, "
             + "and the touch UI moves to the panel.");
-        const drm = drmSummary(result.drm);
-        if (drm)
-          bootConfigDiffLine(box, "diff-info", drm);
-        const row = document.createElement("label");
-        row.className = "diff-confirm";
-        gate = document.createElement("input");
-        gate.type = "checkbox";
-        row.appendChild(gate);
-        row.appendChild(document.createTextNode(" Change the display anyway"));
-        box.appendChild(row);
       }
       if (state.snapshot && state.snapshot.recording)
         bootConfigDiffLine(box, "diff-note", "A take is recording: Save and Reboot stops it.");
@@ -22865,14 +22402,8 @@ std::string_view webControlPageHtml()
       const saveReboot = makeButton("Save and Reboot", true, () => { void saveBootConfig(true); });
       const saveOnly = makeButton("Save Only", false, () => { void saveBootConfig(false); });
       makeButton("Back", false, hideBootConfigPanels);
-      const syncGate = () => {
-        const blocked = changes.length === 0 || (gate && !gate.checked);
-        saveReboot.disabled = blocked;
-        saveOnly.disabled = blocked;
-      };
-      if (gate)
-        gate.addEventListener("change", syncGate);
-      syncGate();
+      saveReboot.disabled = changes.length === 0;
+      saveOnly.disabled = changes.length === 0;
       box.appendChild(actions);
       box.hidden = false;
     }
@@ -22881,14 +22412,16 @@ std::string_view webControlPageHtml()
       if (!bootConfig.payload || bootConfigBusy())
         return;
       const review = bootConfig.review;
+      const displayChanged = !!(review && review.display_changed);
+      if (displayChanged && !window.confirm("Change the display overlays and save? A DPI panel that is the camera's only screen stays dark without them."))
+        return;
       bootConfig.saving = true;
       renderBootConfig();
-      const result = await bootConfigPost(bootConfigRequestBody({ confirm_display: !!(review && review.display_changed) }), bootConfig.payload.revision);
+      const result = await bootConfigPost(bootConfigRequestBody({ confirm_display: displayChanged }), bootConfig.payload.revision);
       bootConfig.saving = false;
       if (!result.ok) {
         hideBootConfigPanels();
-        if (result.code === "stale" || result.code === "old_page")
-          await loadBootConfig(true, false, true);   // the card keeps its choices; Save asks again against the new file
+        await loadBootConfig(true, false, true);   // the card keeps its choices; Save asks again against the file as it is now
         showBootConfigMessage(result.error || "Could not save config.txt.");
         renderBootConfig();
         return;
@@ -23255,14 +22788,9 @@ std::string_view webControlPageHtml()
       });
       document.addEventListener("click", (event) => {
         const link = event.target.closest ? event.target.closest("[data-ladder-link]") : null;
-        if (!link) {
-          const field = event.target.closest ? event.target.closest("[data-ladder-lock]") : null;
-          if (field)
-            showLadderLockWarning(field.dataset.ladderLock === "compression");
+        if (!link)
           return;
-        }
         event.preventDefault();
-        document.getElementById("toast").classList.remove("visible", "with-link");
         openModeLadderCard();
       });
       document.addEventListener("keydown", (event) => {

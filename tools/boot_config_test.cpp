@@ -139,7 +139,21 @@ int main()
 {
     const Board board5 = pi5();
     check(board5.family == "pi5" && board5.detected && !board5.computeModule, "bcm2712 is a Pi 5");
-    check(boardFromDeviceTree("", "").family == "pi5" && !boardFromDeviceTree("", "").detected, "no device tree reads as an undetected Pi 5");
+    check(!boardFromDeviceTree("", "").detected && boardFromDeviceTree("", "").family.empty(), "no device tree: an unknown board");
+    const Board zero2 = boardFromDeviceTree(std::string("raspberrypi,model-zero-2-w\0brcm,bcm2837\0", 40), "Raspberry Pi Zero 2 W Rev 1.0");
+    check(zero2.family == "pi3" && zero2.detected, "bcm2837 is the Pi 3 family");
+    check(boardFromDeviceTree(std::string("brcm,bcm2835\0", 13), "").family.empty(), "bcm2835 is not a board the card knows");
+    check(!boardFromDeviceTree(std::string("vendor,not-brcm,bcm2712-x\0", 26), "").detected, "a compatible entry is compared whole, not searched");
+    {
+        const Board unknown = boardFromDeviceTree("", "");
+        const State u = readState(parseDocument(kApertar, unknown), unknown);
+        check(!u.editable && u.problem.find("not one the Boot Config card knows") != std::string::npos &&
+              u.cameras.at("cam0").sensor == "none", "an unknown board is read-only and the [pi5] lines do not apply");
+        const auto r = applyRequest(kApertar, Request{}, facts(unknown));
+        check(!r.ok && r.text.empty(), "an unknown board: a request is refused");
+    }
+    check(linkOptionsFor(*findSensor("imx477"), pi5()).size() == 8 && linkOptionsFor(*findSensor("imx477"), pi4()).size() == 1 &&
+          linkOptionsFor(*findSensor("imx477"), zero2).size() == 1, "the IMX477 link list ends at 500 MHz on every board that is not a Pi 5");
     check(boardFromDeviceTree(std::string("raspberrypi,5-compute-module\0brcm,bcm2712\0", 42), "Raspberry Pi Compute Module 5 Rev 1.0").computeModule,
           "a CM5 is a compute module");
 
@@ -269,6 +283,18 @@ int main()
         q.linkFrequencies["cam1"] = 891000000ull;
         const auto bad = applyRequest(two, q, facts(cm5));
         check(!bad.ok && bad.text.empty() && bad.error.find("891000000") != std::string::npos, "IMX283 at 891 MHz is refused");
+    }
+    {
+        // DB-79: the owner's commented #dtoverlay=imx283,always-on is reused with always-on kept, when it sits in the
+        // same section as the other sensor lines; one in another section is not reused (the firmware reads sections apart).
+        const std::string cam0Line = "\ndtoverlay=imx585,cam0,link-frequency=891000000\n";
+        std::string same_section = kApertar;
+        same_section.replace(same_section.find(cam0Line), cam0Line.size(), cam0Line + "#dtoverlay=imx283,always-on\n");
+        Request q = same(s);
+        q.sensors["cam1"] = "imx283";
+        const auto r = applyRequest(same_section, q, facts(board5));
+        check(r.ok && r.changes.size() == 1 && lineOf(r.text, 43) == "dtoverlay=imx283,always-on",
+              "IMX283 on cam1: the commented line in the board section is reused, always-on kept");
     }
     {
         Request q = same(s);
@@ -451,6 +477,39 @@ int main()
         check(displayDiffers(s, dpi), "a DPI overlay uncommented by hand: a display change");
         check(textProblem(kApertar).empty() && !textProblem("").empty() && !textProblem(std::string(65537, '#')).empty() &&
                   !textProblem(std::string("a\0b", 3)).empty(), "text: empty, over 64 KiB and NUL are refused");
+    }
+
+    // ---- an include line loads the sensor (the stock image's include camera-selection.txt): the sensor rows are read-only ----
+    {
+        std::string inc = kApertar;
+        inc.replace(inc.find("\ndtoverlay=imx585,cam0"), 1, "\ninclude camera-selection.txt\n#");   // the include line, the IMX585 line commented out
+        const State t = readState(parseDocument(inc, board5), board5);
+        check(lineFrom("include camera-selection.txt").key == "include" && lineFrom("include camera-selection.txt").value == "camera-selection.txt",
+              "lineFrom: an include line has key include and the file name as value");
+        check(t.cameraProblem == "config.txt includes camera-selection.txt: the sensor comes from that file." && t.editable &&
+              t.cameras.at("cam0").sensor == "none", "include: the card says where the sensor comes from, the file stays editable");
+        const auto kept = applyRequest(inc, same(t), facts(board5));
+        check(kept.ok && kept.changes.empty() && kept.text == inc, "include: a request that keeps the sensors changes nothing");
+        Request q = same(t);
+        q.toggles["i2s"] = true;
+        const auto bus = applyRequest(inc, q, facts(board5));
+        check(bus.ok && bus.changes.size() == 1 && lineOf(bus.text, 31) == "dtparam=i2s=on", "include: the buses are still editable");
+        q = same(t);
+        q.sensors["cam0"] = "imx585";
+        const auto sensor = applyRequest(inc, q, facts(board5));
+        check(!sensor.ok && sensor.text.empty() && sensor.error == t.cameraProblem, "include: a sensor change is refused with that sentence");
+        q = same(t);
+        q.sensors["cam1"] = "imx477";
+        check(!applyRequest(inc, q, facts(board5)).ok, "include: a sensor on the other port is refused too");
+        std::string commented = kApertar;
+        commented.replace(commented.find("\ndtoverlay=imx585,cam0"), 1, "\n#include camera-selection.txt\n");
+        check(readState(parseDocument(commented, board5), board5).cameraProblem.empty(), "a commented include is no problem");
+        std::string other = kApertar;
+        other.insert(other.find("[pi4]\n") + 6, "include camera-selection.txt\n");
+        check(readState(parseDocument(other, board5), board5).cameraProblem.empty() &&
+              !readState(parseDocument(other, pi4()), pi4()).cameraProblem.empty(), "an include under [pi4] counts on a Pi 4 only");
+        check(stateJson(t, facts(board5)).find("\"camera_problem\":\"config.txt includes camera-selection.txt:") != std::string::npos,
+              "JSON: camera_problem");
     }
 
     // ---- JSON and revision ----

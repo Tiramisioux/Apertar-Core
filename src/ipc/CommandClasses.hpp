@@ -272,7 +272,8 @@ inline bool takesCameraField(std::string_view name)
 // An aspects-only set_mode_ladder (the WebUI's filter click): each Core's own, accepted in a take, never forwarded.
 inline bool isAspectsOnlyLadder(const Fields &fields)
 {
-    return fields.count("aspects") && !fields.count("resolutions") && !fields.count("enabled") && !fields.count("ramp_ready");
+    return fields.count("aspects") && !fields.count("resolutions") && !fields.count("modes") &&
+           !fields.count("enable_mode") && !fields.count("disable_mode") && !fields.count("enabled") && !fields.count("tdn");
 }
 
 // The refusal for a `camera` field, or nullopt to carry on. `cam1Configured` is the relay's configured test (§4.1); `ties`
@@ -294,7 +295,7 @@ inline std::optional<std::string> cameraFieldRefusal(std::string_view name, std:
     if (name == "set_mode_ladder") {
         const auto enabled = fields.find("enabled");
         if (enabled != fields.end() && (enabled->second == "true" || enabled->second == "1"))
-            return std::string("The Mode Ladder runs on CAM0 only.");   // cam1's ladder is off by rule
+            return std::string("Dynamic resolution runs on CAM0 only.");   // cam1's ladder is off by rule
         if (isAspectsOnlyLadder(fields) || !ties.resolution) return std::nullopt;   // the filter is each Core's own
     }
     if (control == Control::None) return std::nullopt;

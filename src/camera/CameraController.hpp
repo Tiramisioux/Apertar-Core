@@ -2,6 +2,7 @@
 
 #include "camera/FramePhaseLock.hpp"
 #include "camera/ModeLadder.hpp"
+#include "camera/SustainedFps.hpp"
 #include <apertar/core/Types.hpp>
 #include "util/ClipName.hpp"
 #include "util/RecordingDropWarning.hpp"
@@ -14,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -136,6 +138,9 @@ public:
     // The name the NEXT clip would get with `value` (the saved template when empty), real counter and clock.
     // No side effects; false with `error` set when the template is invalid.
     bool previewClipName(const std::string &value, std::string *example, std::string *error) const;
+    // The names in the media root, as the media watcher last listed them. The clip_name_example field is
+    // computed from these, so settings() never touches the medium.
+    void setClipFolderNames(std::set<std::string> names);
     // The two names of a take with cam1 configured (dual-sensor design 6.2 step 2): one clip number, the lowest free under
     // both, with {cam} in both. `partner` is cam1's side (cam1names::partnerFrom), `wallMicros` the take's wall-clock
     // instant. With `templateText` empty the saved template is used. No side effects.
@@ -144,19 +149,25 @@ public:
     bool setFpsPhaseLock(bool enabled);
     bool setMediaTrimEnabled(bool enabled);
     bool setPreviewTdn(bool enabled);
+    bool setStopOnDroppedFrame(bool enabled);
+    // Called once per take, at the first dropped frame, from the writer or copy thread: lock-free and quick. Set before any take.
+    void setDroppedFrameHook(std::function<void()> hook) { droppedFrameHook_ = std::move(hook); }
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
-    // T34: the mode ladder. Any of rungs / enabled / rampReady / aspects; dryRun only validates. Fills the
+    // Dynamic resolution. Any of modes / enable_mode / disable_mode / enabled / tdn (keep or off_in_4k) / aspects; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
     // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
-    // saved in a take too, with no check or apply, by replacing the file's aspects= line and putting it last, or
-    // writing the whole file when it is missing or empty (a filter unchanged from Core's copy writes nothing);
-    // refused for a bad label, a file that cannot be read whole, or a failed write.
+    // saved in a take too, with no check or apply (a filter unchanged from Core's copy saves nothing);
+    // refused for a bad label. The ladder is saved in camera_settings.conf with the other settings.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
-                       std::optional<bool> rampReady, const std::optional<std::string> &aspects, bool dryRun,
-                       std::string *json, std::string *error);
+                       const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
+                       const std::optional<std::string> &aspects, const std::optional<std::string> &tdn,
+                       bool dryRun, std::string *json, std::string *error);
     std::string modeLadderJson() const;
+    // The storage and the switches the known limits depend on, pushed by the application when they change
+    // (the camera itself reads TDN, phase lock, Log and the split). An event goes out when they change.
+    void setLadderContext(const sustained::Context &context);
     // A preset that names a mode (namesMode) must be the one the ladder would pick for its FPS;
     // one that names none follows the ladder. False with *error otherwise.
     bool applyLadderToPreset(CaptureSettings &settings, bool namesMode, std::string *error) const;
@@ -242,14 +253,19 @@ private:
     std::vector<ladder::RungState> ladderStatesLocked(const ladder::Ladder &ladder, const CaptureSettings &base) const;
     bool ladderActiveForLocked(const CaptureSettings &base) const;
     bool ladderRewriteLocked(CaptureSettings &next) const;
+    bool ladderReapplyLocked();
     void fillLadderFieldsLocked(CaptureSettings &out) const;
+    void fillLimitFieldsLocked(CaptureSettings &out) const;
+    // The probe's entry for a mode in Core's identity (the active picture); false in simulation or before the probe.
+    uint32_t modeBinningLocked(const ladder::Rung &rung) const;
+    sustained::Mode limitModeLocked(const ladder::Rung &rung) const;
+    sustained::Context limitContextLocked(const CaptureSettings &settings) const;
+    std::vector<ladder::Rung> poolModesLocked() const;
+    std::vector<ladder::Rung> enabledModesLocked(const ladder::Ladder &list) const;
+    std::vector<ladder::Candidate> candidatesLocked(const ladder::Ladder &list, const CaptureSettings &base) const;
+    bool probedModeLocked(const ladder::Rung &rung, SensorMode *mode) const;
     void fillClipNameExampleLocked(CaptureSettings &out) const;
     std::string clipNameSensorLocked() const;
-    bool saveModeLadderLocked() const;   // false (and logged) when atomicWrite failed, also after its rename
-    // The aspect filter's own save: the aspects= line of mode_ladder.conf replaced and put last (a missing or
-    // empty file is written whole). True when the file holds aspects; false with *error when the file could not
-    // be read whole or the write did not reach it.
-    bool saveModeLadderAspectsLocked(const std::vector<std::string> &aspects, std::string *error) const;
     void fillRungExtrasLocked(ladder::RungState &state, const ladder::Rung &rung) const;
     std::string modeLadderJsonLocked(const ladder::Ladder &ladder, const std::vector<std::string> &errors,
                                      const std::vector<std::string> &warnings) const;
@@ -278,11 +294,13 @@ private:
     EventCallback eventCallback_;
     PreviewCallback previewCallback_;
     RecordingDropWarning recordingDropWarning_;
+    std::function<void()> droppedFrameHook_;
     CameraState state_ = CameraState::Offline;
     CaptureSettings settings_{};
     std::map<RecordingFormat, CaptureSettings> formatSettings_;
     std::optional<CaptureSettings> stillSettings_;
     std::string mediaRoot_;
+    std::set<std::string> clipFolderNames_;                 // the media root's names (setClipFolderNames; mutex_)
     std::string lastError_;
     bool simulateCamera_ = false;
     bool recording_ = false;
@@ -310,7 +328,8 @@ private:
     uint32_t rampNominalShutterUs_ = 0;
     double rampTakeBaseFps_ = 0.0;
     bool rampTakeChanged_ = false;
-    ladder::Ladder modeLadder_;   // T34, from mode_ladder.conf
+    sustained::Context ladderContext_;   // the application's half of the known limits' inputs
+    ladder::Ladder modeLadder_;   // T34, parsed from the settings_.modeLadder* text; set only where those are written
     bool ladderOverride_ = false; // an explicit set_clear_hdr over an active ladder; ends on fps/resolution/format/bit depth/ramp/ladder change; not persisted (mutex_)
     TakeInfo takeInfo_;
     std::unique_ptr<CameraSession> session_;

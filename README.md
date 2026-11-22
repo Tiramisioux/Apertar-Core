@@ -57,6 +57,30 @@ Assign the matching input colour space and gamma in your editor when needed.
 
 CinemaDNG has a separate preview colour-profile setting. It changes monitoring, not the recorded RAW samples or their colour-space interpretation.
 
+## Dynamic Resolution
+
+On by default. Between takes, the frame rate picks the sensor mode: the camera records the best enabled mode that holds that fps for a 30-minute take. Core keeps one table of known limits for this, `src/camera/SustainedFps.hpp`: per storage type (NVMe card, USB SSD), board (Pi 5 and CM5), resolution, bit depth and Clear HDR it gives the fps a mode holds on a hot drive, with a label (measured, derived, probable, unconfirmed) and a source for every number. Steps are 25, 30, 33, 50, 60, 70, 80 and so on (10 apart above 60); a limit is rounded down to a step, below 25 to a whole number, so 24 stays usable.
+
+- **Order:** Clear HDR before SDR, then the deeper bit depth, then a full-frame mode before a crop-in, then more pixels. The first enabled mode whose cap reaches the fps is used. If none does, the mode with the highest cap runs and the fps is clamped to it. A step keeps the running mode's aspect ratio.
+- **Enabled modes:** `dynres_modes` in `camera_settings.conf` (empty: every full-frame mode the sensor offers; crop-ins are opt-in). `set_mode_ladder enable_mode=3840x2160:12:sdr`, `disable_mode=...` or `modes=<list>` edit it at any time outside a take; `enabled=true|false` is the switch.
+- **Levers** shift the numbers: preview temporal denoise (an unbinned mode holds nothing while it is on), frame-rate phase lock, CineMate Log, the aids, and the clip split. `set_mode_ladder tdn=off_in_4k` lets Dynamic resolution turn TDN off for 4K and back on for 2K; the default `keep` never touches it.
+- **Compression** in cDNG comes from the table's cell (Clear HDR uncompressed, SDR lossless JPEG on the NVMe card). Lossy DNG and MLV keep your setting; H.264, ProRes and stills are not covered.
+- **Storage Core has no column for** (SD card, USB stick) uses the USB SSD column, labelled unconfirmed. A write speed test (`run_media_speed_test`) of that card lowers drive-limited cells to what it measured. Other boards than Pi 5 and CM5 have the sensor's own limits only.
+- **Never in a take.** A change of the fps, a lever, the storage or the enabled list applies at the next idle moment; a change made in a take applies at its stop, and the limit line says so. A manual `set_resolution`, `set_raw_bit_depth` or `set_clear_hdr` pins that mode until the next fps change.
+
+`get_mode_ladder` lists the enabled modes as `steps`, best first: label, `cap`, `from` (the step starts above this fps), the table's `fps30` and `fps_short`, `basis`, `wall`, `never_used` and a sentence in `why`. The state carries `limit_fps`, `limit_short_fps`, `limit_basis`, `limit_by` and `limit_why` for the running mode (also with the switch off), `ladder_enabled`, `ladder_active`, `ladder_override`, `fps_max` (the highest cap while active) and `fps_take_max` (the running mode's). The fps ceiling under all of it is the lower of the sensor probe and Core's table; `APERTAR_FPS_LIMIT=probe` gives the probe alone.
+
+An older Core's `mode_ladder.conf` and `mode_ladder_*` keys are read and taken over as the enabled list and the switch; Core writes only the `dynres_*` keys and never touches the old file.
+
+### Updating the known limits
+
+The numbers come from the owner's take campaigns (Apertar knowledge base `working/drop-frames/estimator-campaign/`). To change one:
+
+1. Edit its row in `kCells` (or `kPixelRates`): `fps30`, `fpsShort`, `label` and `source`, and nothing else in the header.
+2. Run `g++ -std=c++20 -O2 -Wall -Wextra -I src -I include tools/sustained_fps_test.cpp -o /tmp/sft && /tmp/sft`. It pins every cell, cap and sentence on purpose, so it fails until the expected numbers in `tools/sustained_fps_test.cpp` change with the row, in the same commit.
+3. Run `tools/mode_ladder_test.cpp` the same way: it pins which mode each fps picks on the NVMe card and the USB SSD.
+4. Cells that still wait for data (labelled unconfirmed, or a placeholder in `source`): 4K Clear HDR 16-bit and 12-bit on the NVMe card (20 fps is a placeholder until 30-minute hot takes at 24, 22 and 20 fps), the lossless and lossy takes at 4K, 2K at 30 minutes, the T7 at 4K, MLV, lossy and ProRes rows, a second NVMe model and other boards.
+
 ## Which Raspberry Pi Can I Use?
 
 | Board Family | Available Clip Recording |
@@ -162,6 +186,8 @@ Hardware mappings are configured in:
 /home/pi/apertar-hardware.conf
 ```
 
+When no hardware file exists (and Core has no record of an earlier one), Core writes its template to `~/apertar-hardware.conf` (`$APERTAR_HARDWARE_CONFIG` if set) at start, also with `--simulate`. It never replaces a file that exists, here or under `/boot`.
+
 Depending on the connected hardware, you can configure GPIO/PCF8574 buttons, rotary controls, recording LEDs, motion sensors and other supported accessories.
 
 Buttons can step settings, jump to specific values, toggle monitoring tools, trigger standby or launch configured scripts. A button can run up to six actions, for example:
@@ -174,13 +200,15 @@ P2=capture
 
 These are mapping examples, not a complete hardware configuration. Use the correct section, pin numbering and wiring for your device. Grouped toggles flip independently; they do not force every option into the same state.
 
-The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust.
+A GPIO or PCF8574 button that is already pressed when Core starts does nothing until you release it. If your buttons are normally closed (they read pressed at rest), set `invert_on_start=true` in `[gpio_buttons]` or `[pcf8574]`: a button that reads pressed at start is then taken as wired the other way round, and the journal names it. Restart Core after a change.
+
+The `run_script` action can run up to five configured scripts. Scripts run as the Core service user, without automatic administrator privileges. Only use scripts you trust. Anyone who can reach the WebUI can change the script paths in `[run_script]`, as in Apertar 1.6.0. With `APERTAR_SCRIPT_PATHS=ssh` in Core's environment (a systemd drop-in with `Environment=`) the WebUI refuses a save that sets a new path, so a path can only be set over ssh; Undo, History and restore may still put back a version the camera saved earlier, with the paths that version had.
 
 ## Boot Config (config.txt)
 
 The WebUI's **System** pane has a **Boot Config** card for `/boot/firmware/config.txt`: the sensor on each camera connector, the IMX477/IMX585 link frequency, the RP1 overclock, the I²C, I²S, SPI and onboard-audio switches, and the display (HDMI only, Waveshare 4" or Hyperpixel 4" DPI).
 
-The card edits the file the way its own comments say: it comments and uncomments the lines already there, in their `[pi5]`, `[pi4]` or `[all]` section, and adds a line next to its kind only when none exists. Every other line, the fan block included, stays byte for byte.
+The card edits the file the way its own comments say: it comments and uncomments the lines already there, in their `[pi5]`, `[pi4]` or `[all]` section, and adds a line next to its kind only when none exists. Every other line, the fan block included, stays byte for byte. The card knows the board from the SoC string in the device tree (Pi 5 and CM5, Pi 4 and CM4, Pi 3 and Zero 2 W); on a board it does not know it only reads the file. The link frequency list of an IMX477 or IMX585 is capped on every board that is not a Pi 5. When `config.txt` has an active `include` line (the stock image's `include camera-selection.txt` loads the sensor), the card leaves the sensor and link rows alone and says where the sensor comes from; the buses, the RP1 clock and the display stay editable.
 
 **Save & Reboot** first shows the lines that change. Core then reads the result back and refuses a save that would not do what you asked, for example when a line it does not edit still decides it, naming that line. The previous file is kept as `config.txt.apertar.bak`.
 
@@ -192,9 +220,9 @@ The card edits the file the way its own comments say: it comments and uncomments
 | Onboard audio | `dtparam=audio=on` in `[all]` |
 | Display | the DPI overlays at the end of the file |
 
-**Edit file** opens the whole file as text, for the lines the card has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup.
+Core writes only the lines the card's controls generate. Editing the whole file as text is off, as in Apertar 1.6.0, which has no such card: a `text` request is refused with "config.txt is edited as text over ssh, not here." With `APERTAR_BOOT_CONFIG_TEXT=on` in Core's environment (a systemd drop-in with `Environment=`, so it is set over ssh only) the card adds **Edit file**, for the lines it has no control for. **Use This Text** reads it back onto the card. Save then applies the card's choices on top of your text and shows every line that changes, removed lines included, against the file on disk, with the same read-back, display confirmation and backup. With the switch on, anyone who can reach the WebUI can write any `config.txt` as root (`kernel=`, `cmdline=`, `initramfs` included); leave it off on a camera others can reach.
 
-A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included.
+A display change asks you to confirm first: without its overlays a DPI panel stays dark after the reboot, and with them the panel holds GPIO 0-27, I²C bus 1 included. The page asks with a confirmation box; Core refuses a display change that does not send `confirm_display=true`, so a script cannot darken a DPI camera by forgetting it.
 
 `/boot/firmware` belongs to root. Install the small root helper the card and the fan mode write through:
 
@@ -208,7 +236,9 @@ Without it, Core falls back to `sudo -n install`, as the fan mode always has.
 
 If the camera does not come back after a change, put the card in a reader and copy `config.txt.apertar.bak` over `config.txt` on the boot partition.
 
-Socket commands: `get_boot_config`, and `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and optionally `text` (the whole file as edited; the other fields go on top of it).
+The card saves with the `set_boot_config` command through `POST /api/command`, the same door as every other setting; `GET /api/boot-config` reads the file.
+
+Socket command: `set_boot_config` with `cam0_sensor`, `cam1_sensor`, `cam0_link_frequency`, `cam1_link_frequency`, `i2c`, `i2s`, `spi`, `audio`, `rp1`, `display`, plus `dry_run`, `revision` and `confirm_display`, and, only with `APERTAR_BOOT_CONFIG_TEXT=on`, `text` (the whole file as edited; the other fields go on top of it).
 
 ## Building From Source
 
@@ -277,6 +307,21 @@ sudo systemctl stop apertar-core.service
 
 Run this from the Core repository folder. For a source-only setup without the service, skip the service command. Press `Ctrl+C` to stop the manual process; restart the service afterward if you normally use it.
 
+### Two sensors (a second Core for cam1)
+
+A camera with a second sensor on cam1 runs a second Core for it, `apertar-core-cam1.service`, beside `apertar-core.service`. Nothing changes for a camera that does not install it. Install it once, from the Core repository folder:
+
+```bash
+install -m 0755 scripts/start-apertar-core.sh /home/pi/start-apertar-core.sh
+[[ -f /home/pi/apertar-hardware-cam1.conf ]] || install -m 0644 config/apertar-hardware-cam1.conf /home/pi/apertar-hardware-cam1.conf
+mkdir -p /home/pi/.config-cam1
+sudo install -m 0644 config/apertar-core-cam1.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable apertar-core-cam1
+```
+
+The start script is the one `apertar-core.service` runs; without `APERTAR_CAMERA` it starts the main Core exactly as before. From the next boot on, the second Core starts with the main one, using the same binary. Before it starts, `apertar-core --camera cam1 --check-dual` looks for a sensor on cam0 and another on cam1; with one sensor or none, systemd skips the unit (`systemctl status apertar-core-cam1` says the condition failed) and no second Core runs. The second Core uses its own socket (`/tmp/apertar-core-cam1.sock`), WebUI port 8001, settings in `/home/pi/.config-cam1` and the hardware file `/home/pi/apertar-hardware-cam1.conf`, which turns every input off; without that file it does not start. The **Dual sensor** switch in the WebUI's Dual Sensor card decides whether the main Core uses it. To remove it: `sudo systemctl disable apertar-core-cam1`.
+
 Before recording, make sure the intended media is actually mounted at the selected path. An existing folder by itself does not prove that an external drive is mounted there.
 
 ### Launch Options
@@ -287,6 +332,8 @@ Before recording, make sure the intended media is actually mounted at the select
 | `--media PATH` | Recording destination. Default: `/media/RAW`. |
 | `--web-bind ADDR` | WebUI listening address. Default: `0.0.0.0`. |
 | `--web-port PORT` | WebUI port. Default: `8000`; `0` disables it. |
+| `--camera PORT` | Camera by port: `cam0` (default), `cam1`, or an I2C node such as `i2c@88000`. Any value but `cam0` runs a second Core for a second sensor. |
+| `--check-dual` | Exit 0 when a sensor is on `cam0` and another on the `--camera` port, else 1, and start nothing. Reads sysfs and config.txt only, waiting up to 20 s for a sensor config.txt names. The cam1 unit runs it before it starts. |
 | `--simulate` | Run without opening a physical camera, for interface development. |
 | `--help` | Show command-line help. |
 
@@ -314,19 +361,23 @@ sudo -n /usr/local/libexec/apertar-media-trim /media/RAW
 
 ### Preview temporal denoise
 
-The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). **It is off by default**, because it is the most expensive step of the ISP back end. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on.
+The preview (HDMI, touch UI, WebUI, peaking, zebra) comes from the ISP, which blends every frame with the previous one (temporal denoise, `tdn` in the tuning file's `rpi.denoise`). It is on by default, as in Apertar 1.6.0: the tuning file is loaded as it is. Switching it off removes the most expensive step of the ISP back end while the camera records raw. The recorded DNGs are the raw sensor frames and do not change either way; spatial denoise stays on. H.264 and ProRes record the ISP output, so with those formats Core always loads the tuning file as it is and the switch has no effect; changing the record format restarts the pipeline on the right file. Photos are developed from the raw frame, so photo mode follows the switch.
 
-At 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
+With the switch off at 4K Clear HDR 16-bit the ISP back end's job drops from about 37 ms to about 6 ms per frame, and 25 fps takes went from 39-116 lost frames per 3 minutes to 0-2 (measured 2026-11-04, probable).
 
-Turn it on in the WebUI (Settings, System, Performance, "Preview temporal denoise") or with the command `set_preview_tdn enabled=true|false`; the choice is saved in `camera_settings.conf` (`preview_tdn=`) and the state reports `preview_tdn`. Changing it restarts the camera pipeline (no reboot) and is refused while recording.
+Switch it in the WebUI (Settings, System, Performance, "Preview temporal denoise") or with the command `set_preview_tdn enabled=true|false`; the choice is saved in `camera_settings.conf` (`preview_tdn=`) and the state reports `preview_tdn`. Changing it restarts the camera pipeline (no reboot) and is refused while recording.
 
 Core does not edit your tuning files. With the switch off it resolves the tuning file as before (the automatic default and its Clear HDR variant, or the file you picked) and hands libcamera a copy without the `tdn` members, kept in `~/.cache/apertar-core/tuning/<name>_notdn.json` and renewed when the source file changes. If the file has no `tdn` member, or the copy fails its checks, the original is used and the journal says so (`ApertarCore preview tdn: ...`). `tuning_file` in the state stays your selection; `tuning_file_active` is the file libcamera loaded, and the journal line `ApertarCore tuning file:` ends in `preview_tdn=off active=<path>`.
 
 `c++ -std=c++20 -I src tools/tuning_tdn_strip_test.cpp $(pkg-config --cflags --libs yaml-0.1)` builds the host test of the strip.
 
+### Stop on Dropped Frame
+
+Off by default. With the switch on, a take ends at its first dropped frame, as if you had pressed stop; the journal has `ApertarCore recording: Recording stopped: a frame was dropped.` Switch it in the WebUI (Settings, "Stop on Dropped Frame") or with `set_stop_on_dropped_frame enabled=true|false` (refused while recording); it is saved in `camera_settings.conf` (`stop_on_dropped_frame=`) and the state reports `stop_on_dropped_frame`. A storage pre-roll is never stopped by it.
+
 ### Split clips (frames per folder)
 
-On exFAT every new file walks all entries of its folder under the filesystem's lock, so a frame file costs more to create the fuller its clip folder is: about 14 ms at 45,000 frames (a 30-minute take at 25 fps), 35 % of the frame period (measured 2026-11-08, Apertar knowledge base `working/drop-frames/nvme-campaign/probe-exfat-dir.md`). `[storage] frames_per_folder=N` in `apertar-hardware.conf` (0, the default, keeps every frame in the clip folder; 100 to 100000) starts a new `part_NNN` folder inside the clip every N frames: frame f goes to `<clip>/part_<f / N>/` under its usual name, the numbering runs on across parts, and the WAV, `fps-ramp.txt` and the other sidecars stay in the clip folder, next to a `.parts` marker. Set it in the WebUI (Settings, System, Performance, "Frames per folder"), in the Config pane, or with `set_frames_per_folder value=N`; `APERTAR_CDNG_FRAMES_PER_FOLDER` wins over the file. It applies at the next take; the journal's `recording clip:` line ends in `frames_per_folder=N`. The storage pre-roll and MLV takes are never split. Core's clip list, playback, delete and download read both layouts.
+On exFAT every new file walks all entries of its folder under the filesystem's lock, so a frame file costs more to create the fuller its clip folder is: about 14 ms at 45,000 frames (a 30-minute take at 25 fps), 35 % of the frame period (measured 2026-11-08, Apertar knowledge base `working/drop-frames/nvme-campaign/probe-exfat-dir.md`). `[storage] split=` in `apertar-hardware.conf` decides whether a take is split: `on` (the default) splits every cDNG and lossy DNG take, `auto` only where a flat folder would not last a 30-minute take (exFAT or FAT above 32 fps), `off` keeps every frame in the clip folder. A split take starts a new `part_NNN` folder inside the clip every `frames_per_folder=N` frames (100 to 100000, 5000 by default): frame f goes to `<clip>/part_<f / N>/` under its usual name, the numbering runs on across parts, and the WAV, `fps-ramp.txt` and the other sidecars stay in the clip folder, next to a `.parts` marker. An older file with only `frames_per_folder=0` means `off`, one with a number means `on`. Set it in the WebUI (Settings, System, Performance, "Frames per folder"), in the Config pane, or with `set_frames_per_folder mode=on|auto|off` or `value=N` (0 = off); `APERTAR_CDNG_FRAMES_PER_FOLDER` wins over the file. It applies at the next take; the journal's `recording clip:` line ends in `split=<mode> frames_per_folder=N`, and the state shows `split_mode` and `split_effective` (the next take at this fps and format is split). The storage pre-roll and MLV takes are never split. The split is on by default in this version; Apertar 1.6.0 has no split, so on a card where the default matters set `split=off` (or `auto`) to keep one folder per clip. Core's clip list, playback, delete and download read both layouts.
 
 **Resolve and Premiere import one folder as one clip**, so a split clip is flattened before import. Core does it by itself while the camera is idle (below); on a computer, `python3 -I tools/flatten_clip.py <clip>` shows what it would move and `--apply` moves `part_*/*.dng` into the clip folder in frame order (it refuses if a name already exists, removes the emptied part folders and `.parts` last, and can be run again after an interruption). `--unflatten N --apply` splits a flat clip again, for tests.
 
@@ -345,14 +396,15 @@ Environment variables of the Core service (a systemd drop-in with `Environment=`
 | `APERTAR_DNG_PAYLOAD_COPY=1` | off | Copies every frame's rows into the writer's scratch buffer before writing, even when the copy changes nothing (the behaviour before the direct write of 16-bit and 8-bit payloads). | - |
 | `APERTAR_DNG_WRITE_ROWS=N` | 64 | Rows per `write()` when the payload goes through the scratch buffer (packed 10/12-bit, PiSP-compressed and CineMate Log frames). | - |
 | `APERTAR_RAW_POOL_WARM=0` | on | Restores the old raw-copy pool: no copies allocated before a take starts, and at most workers + 2 kept while it runs. | - |
-| `APERTAR_DNG_DONTNEED=writer` or `off` | sync | When a written DNG's pages leave the page cache: `sync` on the once-a-second sync thread after the file's `fsync`, when the pages are clean (cDNG only; lossy DNG then behaves as `off`); `writer` right after the write (the old default: the pages are still dirty then, so the call frees nothing and costs a cross-CPU LRU drain per frame, and the page cache fills until the kernel reclaims during the take); `off` never. | `dontneed` |
+| `APERTAR_DNG_DONTNEED=writer` or `off` | sync | When a written DNG's pages leave the page cache: `sync` on the once-a-second sync thread after the file's `fsync`, when the pages are clean (cDNG; lossy DNG files have no sync thread and drop right after the write, as in `writer`); `writer` right after the write (the old default: the pages are still dirty then, so the call frees nothing and costs a cross-CPU LRU drain per frame, and the page cache fills until the kernel reclaims during the take); `off` never. | `dontneed` |
 | `APERTAR_DNG_WRITEBACK=0` | on | No `sync_file_range` per written DNG (the kernel's own writeback only). | `writeback` |
 | `APERTAR_MEDIA_SYNC_MS=0` | 1000 | No once-a-second `fsync` of the finished DNGs and the clip folder during a take; the stop-time `syncfs` stays. Also stops the default page-cache drop (`APERTAR_DNG_DONTNEED=sync` runs on this thread). | `sync_ms` |
 | `APERTAR_RAW_CAMERA_BUFFERS=N` | 4 (8 in Clear HDR) plus the filesystem's extra | Number of raw camera buffers (3 to 16), each with its own libcamera request. | `raw_buffers` (absolute count); `extra_raw_buffers` (0 to 8) adds to the built-in count instead |
 | `APERTAR_WEB_PREVIEW_RECORDING_FPS=N` | 30 | The WebUI live preview's frame rate while a raw take runs (`0` pauses it). Its downsample runs on libcamera's completion thread, inside the per-frame cycle, whenever a browser shows the preview (about 0.2 to 0.5 ms per frame). | - |
 | `APERTAR_RT_CAPTURE_PRIORITY=N` | off | `SCHED_FIFO` priority N (1 to 99) for libcamera's completion thread alone, set from Core when the first frame arrives; the writers and the WebUI keep their normal priorities. Needs `LimitRTPRIO` on the unit (the capture-priority drop-in). The preferred shape of the scheduling A/B. | - |
+| `APERTAR_PIPELINE_CONFIG=/path/file.yaml` | off | The start script exports the file as `LIBCAMERA_RPI_CONFIG_FILE`, libcamera's pipeline-handler config (for example the front-end queue depth). Give the full path; libcamera does not find a bare file name. Unset: libcamera's own defaults. An exported `LIBCAMERA_RPI_CONFIG_FILE` wins. | - |
 | `APERTAR_RT=1` | off | The start script runs the whole Core process under `SCHED_FIFO` priority 70 on cores 1 to 3 with the best-effort I/O class (`APERTAR_RT_PRIORITY`, `APERTAR_RT_CPUS` adjust it), as cinemate runs cinepi-raw. An A/B instrument, not a recommendation: equal-priority FIFO threads never preempt each other, so the capture thread can wait behind FIFO writers. Needs `LimitRTPRIO` on the unit: install `config/apertar-core-capture-priority.conf` as a drop-in (`sudo install -m 0644 config/apertar-core-capture-priority.conf /etc/systemd/system/apertar-core.service.d/` and `daemon-reload`). | - |
-| `APERTAR_CDNG_FRAMES_PER_FOLDER=N` | 0 | Frames per `part_NNN` folder inside the clip (100 to 100000; 0 = one folder); see "Split clips". Wins over the hardware file's `[storage] frames_per_folder`. | - |
+| `APERTAR_CDNG_FRAMES_PER_FOLDER=N` | unset | Frames per `part_NNN` folder inside the clip (100 to 100000; 0 = one folder, the split off); see "Split clips". Wins over the hardware file's `[storage] split` and `frames_per_folder`. | - |
 | `APERTAR_CLIP_MERGE=0` | on | The merge worker leaves split clips split (the NVMe campaign's A/B and collect step need them as recorded). Wins over `[storage] clip_merge`. | - |
 | `APERTAR_MEDIA_TUNE=1` | off | Kernel-side knobs for the recording drive through the `apertar-media-tune` root helper (dirty-page cushion, scheduler, queue depth). | `kernel_tune` (`on` / `off`) |
 

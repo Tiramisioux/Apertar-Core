@@ -17,14 +17,14 @@ inline constexpr int kBusyDropMs = 10000;   // after this long busy, a record_st
 
 struct ConfiguredInputs {
     bool switchOn = false;          // UI.conf dualSensorEnabled
-    bool configNamesBoth = false;   // config.txt names a sensor on cam0 and on cam1
+    bool dualSensors = false;       // sysfs has a sensor on cam0 and on cam1: the cam1 unit's --check-dual, no wait
     bool socketAccepted = false;    // cam1's socket has accepted a connection since the switch went on (sticky)
     bool socketIsOurs = false;      // the socket path is our own socket (same inode): refused, but it counts
 };
 
 inline bool configured(const ConfiguredInputs &in)
 {
-    return in.switchOn && (in.configNamesBoth || in.socketAccepted || in.socketIsOurs);
+    return in.switchOn && (in.dualSensors || in.socketAccepted || in.socketIsOurs);
 }
 
 // ---- the state word (§4.5) ----------------------------------------------------------------------------------------

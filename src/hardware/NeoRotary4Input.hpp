@@ -14,8 +14,9 @@ namespace apertar {
 class NeoRotary4Input {
 public:
     using ActionCallback = std::function<void(const std::string &)>;
+    using PressCallback = std::function<bool(const std::string &)>;   // true: the press woke the camera, nothing else follows
 
-    explicit NeoRotary4Input(ActionCallback actionCallback, ActionCallback rotationCallback = {});
+    explicit NeoRotary4Input(PressCallback actionCallback, ActionCallback rotationCallback = {});
     ~NeoRotary4Input();
 
     bool start();
@@ -63,10 +64,10 @@ private:
     bool readEncoderDelta(int fd, int encoder, int32_t *delta) const;
     bool readButtonMask(int fd, uint32_t *mask) const;
     void closeDevice(int *fd) const;
-    void emitAction(const std::string &action);
+    bool emitAction(const std::string &action);
     void setLastError(const std::string &error);
 
-    ActionCallback actionCallback_;
+    PressCallback actionCallback_;
     ActionCallback rotationCallback_;
     ActionCallback seenCallback_;
     Config config_;
