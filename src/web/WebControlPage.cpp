@@ -1720,48 +1720,10 @@ std::string_view webControlPageHtml()
       gap: 10px;
     }
 
-    .ladder-list.off .ladder-row {
-      opacity: 0.55;
-    }
-
     .ladder-item {
       display: flex;
       flex-direction: column;
       gap: 8px;
-    }
-
-    .ladder-transition {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 2px 10px 2px 44px;
-      font-size: 13px;
-      color: #d4d4d8;
-    }
-
-    .ladder-transition .ladder-fps-input {
-      flex: 0 0 auto;
-      width: 84px;
-      min-height: 40px;
-      border-radius: 999px;
-      text-align: center;
-      font-size: 15px;
-      font-weight: 700;
-    }
-
-    .ladder-transition .ladder-fps-input.problem {
-      border-color: var(--danger);
-    }
-
-    .ladder-fps-unit {
-      flex: 0 0 auto;
-      margin-left: -4px;
-      font-weight: 700;
-      color: #f4f4f5;
-    }
-
-    .ladder-transition svg {
-      flex: 0 0 auto;
     }
 
     .ladder-row {
@@ -1775,14 +1737,6 @@ std::string_view webControlPageHtml()
       background: #202024;
     }
 
-    .ladder-row.dragging {
-      background: #111113;
-    }
-
-    .ladder-row.drop-target {
-      border: 1px dashed rgba(255, 255, 255, 0.7);
-    }
-
     .ladder-row-main {
       display: flex;
       flex-wrap: wrap;
@@ -1790,18 +1744,6 @@ std::string_view webControlPageHtml()
       gap: 14px;
       flex: 1 1 360px;
       min-width: 0;
-    }
-
-    .ladder-handle {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      min-height: 44px;
-      color: var(--muted);
-      cursor: grab;
-      touch-action: none;
-      user-select: none;
     }
 
     .ladder-badge {
@@ -1835,100 +1777,15 @@ std::string_view webControlPageHtml()
       color: var(--muted);
     }
 
-    .ladder-row-desc.crop-in {
-      color: #fbbf24;
-    }
-
-    .ladder-row-range,
-    .ladder-problem {
+    .ladder-row-range {
       margin-top: 6px;
       font-size: 13px;
       color: #d4d4d8;
     }
 
-    .ladder-problem {
-      color: #fca5a5;
-    }
-
-    .ladder-row-controls {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: flex-start;
-      gap: 12px;
-      flex: 0 1 auto;
-      min-width: 0;
-    }
-
-    .ladder-row-controls .field-stack {
-      gap: 4px;
-    }
-
-    .ladder-row-controls .input-label {
-      font-size: 11px;
-    }
-
-    .ladder-row-controls .settings-input,
-    .ladder-row-controls .settings-select {
-      min-height: 44px;
-      border-radius: 14px;
-      padding-left: 12px;
-    }
-
-    .ladder-row-controls .settings-input.problem {
-      border-color: var(--danger);
-    }
-
-    .ladder-thr {
-      flex: 0 0 120px;
-      width: 120px;
-    }
-
-    .ladder-comp {
-      flex: 0 0 190px;
-      width: 190px;
-    }
-
     .ladder-note {
       font-size: 12px;
       color: var(--muted);
-    }
-
-    .ladder-size {
-      font-size: 13px;
-      font-weight: 600;
-      color: #e4e4e7;
-    }
-
-    .ladder-note.over {
-      color: #fbbf24;
-    }
-
-    .ladder-row-buttons {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding-top: 19px;
-    }
-
-    .ladder-icon-button {
-      width: 44px;
-      height: 44px;
-      border-radius: 14px;
-      border: 1px solid #27272a;
-      background: rgba(9, 9, 11, 0.72);
-      color: #f4f4f5;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .ladder-icon-button.remove {
-      color: #fca5a5;
-    }
-
-    .ladder-icon-button:disabled {
-      color: #52525b;
-      cursor: default;
     }
 
     .pill-grid.ladder-pair {
@@ -2054,20 +1911,6 @@ std::string_view webControlPageHtml()
       gap: 10px;
     }
 
-    .ladder-pool-number {
-      color: var(--muted);
-      font-size: 14px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .ladder-add.on-ladder {
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      opacity: 1;
-    }
-
     .section-head .online-pill {
       margin-left: auto;
     }
@@ -2084,11 +1927,6 @@ std::string_view webControlPageHtml()
     .select-note.switching {
       font-weight: 700;
       color: #fbbf24;
-    }
-
-    .select-note.ladder-on {
-      font-weight: 600;
-      color: var(--ok);
     }
 
     .pill-sub {
@@ -2116,17 +1954,6 @@ std::string_view webControlPageHtml()
       background: #3f3f46;
       color: #a1a1aa;
       box-shadow: none;
-    }
-
-    @media (max-width: 560px) {
-      .ladder-comp {
-        flex: 1 1 100%;
-        width: auto;
-      }
-
-      .ladder-transition {
-        padding-left: 10px;
-      }
     }
 
     .ladder-line {
@@ -7649,16 +7476,13 @@ std::string_view webControlPageHtml()
       ladderStash: null,
       ladderServer: null,      // Core's last mode_ladder reply
       ladderError: "",
-      ladderDraft: [],         // the resolutions being edited: {width, height, bits, clear_hdr, comp, thr}
-      ladderSaveAgain: false,
       ladderRecordingSeen: null,
-      ladderCheckTimer: 0,
       ladderSaving: false,
       ladderToggling: false,
       ladderFetching: false,
       ladderFetchedMs: -10000,
       ladderSeenKey: null,     // what the limits looked like at the last snapshot: a change fetches the steps again
-      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (mode_ladder.conf) when Core keeps it; empty = All
+      ladderAspects: [],       // the aspect filter of Activated sensor modes, saved on the camera (camera_settings.conf) when Core keeps it; empty = All
       ladderAspectsPending: false,   // a filter click not saved yet: Core's replies leave ladderAspects alone
       ladderAspectsTimer: 0,
       ladderAspectsSaving: false,
@@ -8605,20 +8429,16 @@ std::string_view webControlPageHtml()
 
     // iso_max is Core's ISO ceiling for the current mode (Clear HDR, lossless cDNG), 0 = none. No
     // Auto in Clear HDR, where Core runs on manual ISO; Lock while auto runs.
-    // ---- Mode Ladder (T34) -----------------------------------------------------------------------
-    // The FPS picks the sensor mode: resolution 1 serves the lowest rates, the next takes over above
-    // its max. Core owns the ladder (get_mode_ladder, set_mode_ladder). The editor keeps a draft of
-    // the resolutions, refuses a change that would make it illegal and saves it on the camera
-    // 200 ms after the last edit. A resolution: Core's mode identity (width, height,
-    // bits, clear_hdr), its compression (comp) and its max FPS (thr, "" = its ceiling).
+    // ---- Dynamic resolution ------------------------------------------------------------------------
+    // The FPS picks the sensor mode from Core's table of known limits (get_mode_ladder, set_mode_ladder). The
+    // page shows Core's steps and sends one edit at a time: the switch, one mode in or out, the TDN option.
+    // A mode is Core's identity: width, height, bits, clear_hdr.
     const ladderCompressions = [
       { value: "none", label: "Uncompressed", factor: 1 },
       { value: "lossless_jpeg", label: "Lossless JPEG", factor: 0.6 },
       { value: "lossy_3to1", label: "Lossy 3:1", factor: 1 / 3 },
       { value: "lossy_5to1", label: "Lossy 5:1", factor: 1 / 5 },
     ];
-    const ladderMaxResolutions = 8;
-    const ladderUnknownCeiling = 280;
     const ladderCropArea = { width: 3840, height: 2160 };
     // The readout area a crop is measured against: the IMX283's is its 5472-wide active area.
     function ladderCropAreaFor() {
@@ -8751,10 +8571,6 @@ std::string_view webControlPageHtml()
         note.textContent = "CAM1 has no Dynamic resolution of its own: it runs on CAM0 only. CAM1 takes the activated mode closest to CAM0's.";
     }
     const ladderIcons = {
-      handle: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
-      up: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>',
-      down: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>',
-      remove: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>',
       chevron: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>',
     };
 
@@ -8842,57 +8658,6 @@ std::string_view webControlPageHtml()
       return ladderCropIn(info) || ladderAspectText(mode) !== "16:9" ? "crop" : "4k";
     }
 
-    // Known when the probe gave a ceiling for some compression, or the mode is usable in this
-    // format (then a zero is real). Otherwise nobody knows here: Core's dry run checks it.
-    function ladderCeilingKnown(rung) {
-      const info = ladderModeInfo(rung);
-      if (!info || !info.ceilings)
-        return false;
-      return Object.keys(info.ceilings).some((key) => Number(info.ceilings[key]) > 0) || info.usable === true;
-    }
-
-    // The highest FPS a resolution records in its compression (0: it cannot).
-    function ladderCeiling(rung) {
-      if (!ladderCeilingKnown(rung))
-        return ladderUnknownCeiling;
-      return Number(ladderModeInfo(rung).ceilings[rung.comp]) || 0;
-    }
-
-    // Why a resolution cannot record in its compression; "" when it can, or when nobody knows.
-    function ladderCannotRecord(rung) {
-      if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
-        return "Lossy DNG cannot record Clear HDR.";
-      if (!ladderCeilingKnown(rung) || ladderCeiling(rung) > 0)
-        return "";
-      return "This mode cannot record in " + ladderCompression(rung.comp).label + ".";
-    }
-
-    // Core's ladder as a draft, normalised as edits write it (a max at the ceiling is empty);
-    // as saved when Core finds errors in it, so the rows show them.
-    function ladderDraftFromServer(server) {
-      const draft = (server && Array.isArray(server.resolutions) ? server.resolutions : []).map((rung) => ({
-        width: Number(rung.width),
-        height: Number(rung.height),
-        bits: Number(rung.bits),
-        clear_hdr: rung.clear_hdr === true,
-        comp: ladderCompression(rung.compression).value,
-        thr: Number(rung.threshold) > 0 ? String(Number(rung.threshold)) : "",
-      }));
-      const result = server && Array.isArray(server.errors) && server.errors.length > 0 ? draft : normalizeLadderDraft(draft);
-      // A max that is what the arrangement gives that place follows the place; any other was set by hand.
-      const reference = ladderArranged(result.map((rung) => Object.assign({}, rung, { auto: true })));
-      result.forEach((rung) => {
-        const same = reference.find((other) => ladderKey(other) === ladderKey(rung) && other.comp === rung.comp);
-        rung.auto = !!same && same.thr === rung.thr;
-      });
-      return result;
-    }
-
-    // The default max of the n-th resolution: 25, 33, 50, then 25 more for each.
-    function ladderDefaultMax(index) {
-      return index < 3 ? [25, 33, 50][index] : 50 + 25 * (index - 2);
-    }
-
     // Resolution 1 is the best picture (it serves the lowest FPS). The order of the array: the
     // picture size first, then Clear HDR before SDR, then the deeper bit depth.
     function ladderQualityCompare(a, b) {
@@ -8905,128 +8670,9 @@ std::string_view webControlPageHtml()
       return b.bits - a.bits;
     }
 
-    // In quality order. A row whose max was not set by hand gets the default of its place (25, 33,
-    // 50, +25 ...), cut to the mode's ceiling and to one under the max of the row below, so that
-    // every row keeps FPS of its own.
-    function ladderArranged(list) {
-      const sorted = list.slice().sort(ladderQualityCompare);
-      const out = new Array(sorted.length);
-      let nextTop = Infinity;
-      for (let index = sorted.length - 1; index >= 0; index--) {
-        let rung = sorted[index];
-        if (rung.auto !== false) {
-          const ceiling = ladderCeiling(rung);
-          // The last resolution has none below it: it runs to its own ceiling (no default max to collide with the one above).
-          const top = index === sorted.length - 1 ? ceiling : Math.min(ladderDefaultMax(index), ceiling, nextTop - 1);
-          rung = Object.assign({}, rung, { auto: true, thr: top >= ceiling ? "" : String(top) });
-        }
-        nextTop = rung.thr !== "" ? Number(rung.thr) : ladderCeiling(rung);
-        out[index] = rung;
-      }
-      return out;
-    }
-
-    // Core's text: WIDTHxHEIGHT:BITS:hdr|sdr[:FPS[:COMPRESSION]], joined by ",".
-    function ladderDraftText(list) {
-      return list.map((rung) => ladderKey(rung) + (rung.thr !== "" || rung.comp ? ":" + rung.thr : "")
-        + (rung.comp ? ":" + rung.comp : "")).join(",");
-    }
-
-    // CAM1 keeps mode keys only (no max, no compression: its ladder is off, the activated modes are closest()'s candidates).
-    function ladderDraftTextFor(list) {
-      return modesIsCam1() ? list.map(ladderKey).join(",") : ladderDraftText(list);
-    }
-
-    function ladderDirty() {
-      return !!state.ladderServer && ladderDraftTextFor(state.ladderDraft) !== ladderDraftTextFor(ladderDraftFromServer(state.ladderServer));
-    }
-
     // The camera field of get_mode_ladder / set_mode_ladder: cam1 only on the CAM1 side.
     function ladderCameraFields() {
       return modesIsCam1() ? { camera: "cam1" } : {};
-    }
-
-    // Each resolution serves (from, top]: from = where the ones above stop. An empty max at a
-    // ceiling nobody knows moves nothing: from is then only a lower bound.
-    function ladderSpans(list) {
-      let previous = 0;
-      return list.map((rung) => {
-        const ceiling = ladderCeiling(rung);
-        const threshold = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
-        const from = previous;
-        const top = Math.max(previous, Math.min(threshold, ceiling));
-        previous = top;
-        return { from, top, ceiling };
-      });
-    }
-
-    // Every max into its legal range; one out of range is cleared (= the mode's ceiling).
-    function normalizeLadderDraft(list) {
-      let previous = 0;
-      return list.map((rung) => {
-        const ceiling = ladderCeiling(rung);
-        let thr = rung.thr;
-        if (thr !== "") {
-          const value = Number(thr);
-          thr = Number.isFinite(value) && value > previous && value < ceiling ? String(value) : "";
-        }
-        previous = Math.max(previous, thr !== "" ? Number(thr) : (ladderCeilingKnown(rung) ? ceiling : previous));
-        return Object.assign({}, rung, { thr });
-      });
-    }
-
-    // "" when the draft is legal, else why not.
-    function ladderDraftProblem(list) {
-      if (list.length > ladderMaxResolutions)
-        return "At most " + ladderMaxResolutions + " resolutions.";
-      let previous = 0;
-      for (let i = 0; i < list.length; i++) {
-        const rung = list[i];
-        const cannot = ladderCannotRecord(rung);
-        if (cannot)
-          return rung.clear_hdr && rung.comp.indexOf("lossy") === 0
-            ? cannot : "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") cannot record: " + cannot;
-        const ceiling = ladderCeiling(rung);
-        if (ceiling <= previous)
-          return "Resolution " + (i + 1) + " (" + ladderModeName(rung) + ") would never be used: the ones above already reach " + previous + " fps.";
-        previous = rung.thr !== "" ? Number(rung.thr) : (ladderCeilingKnown(rung) ? ceiling : previous);
-      }
-      return "";
-    }
-
-    // Per resolution: its ceiling, what it serves and what is wrong with it, as the rows show it.
-    // open: its top is a ceiling nobody knows (empty max); the ones below it start above that
-    // resolution (after = its number, from = a lower bound).
-    function ladderRowStates(list) {
-      let previous = 0;
-      let after = 0;
-      return list.map((rung, index) => {
-        const ceiling = ladderCeiling(rung);
-        const threshold = rung.thr === "" ? ceiling : Number(rung.thr);
-        let problem = ladderCannotRecord(rung);
-        if (rung.clear_hdr && rung.comp.indexOf("lossy") === 0)
-          problem = "Lossy DNG cannot record Clear HDR. Pick Uncompressed or Lossless JPEG.";
-        else if (problem)
-          problem = "Cannot record: " + problem;
-        else if (!Number.isFinite(threshold) || threshold <= 0)
-          problem = "Enter an FPS, or leave it empty for " + ceiling + ".";
-        else if (threshold > ceiling)
-          problem = "Above this mode’s ceiling of " + ceiling + " fps.";
-        else if (ceiling <= previous)
-          problem = "Never used: the resolutions above already cover up to " + previous + " fps.";
-        else if (threshold <= previous)
-          problem = "Must be above " + previous + " fps, where the resolution above stops.";
-        const open = !problem && rung.thr === "" && !ladderCeilingKnown(rung);
-        const from = previous;
-        const fromAfter = after;
-        const top = problem || open ? from : Math.max(previous, threshold);
-        previous = Math.max(previous, top);
-        if (open)
-          after = index + 1;
-        else if (!problem)
-          after = 0;
-        return { ceiling, from, top, problem, open, after: fromAfter };
-      });
     }
 
     // The mode's window inside the sensor's readout area (Cinemate's cropDiagram), from the probe's
@@ -9071,13 +8717,6 @@ std::string_view webControlPageHtml()
 
     function ladderFrameMB(mode, comp) {
       return mode.width * mode.height * mode.bits / 8 / 1e6 * ladderCompression(comp).factor;
-    }
-
-    // The media speed test's last result ("412 MB/s"); 0 when the card was not measured.
-    function ladderCardWriteSpeed() {
-      const systemState = state.snapshot && state.snapshot.system || {};
-      const match = /^([0-9.]+) MB\/s$/.exec(String(systemState.write_speed_result_text || ""));
-      return match ? Number(match[1]) : 0;
     }
 
     function ladderSnapshotMode(snapshot) {
@@ -9188,208 +8827,6 @@ std::string_view webControlPageHtml()
       if (!state.ladderAspectsPending && Array.isArray(modeLadder.aspects))
         state.ladderAspects = ladderAspectsFromServer(modeLadder);
       renderLadderEditor();
-    }
-
-    // The FPS where the next resolution after this one stops: its max, else its ceiling.
-    function ladderNextTop(list, index) {
-      const next = list[index + 1];
-      return next ? (next.thr !== "" ? Number(next.thr) : ladderCeiling(next)) : Infinity;
-    }
-
-    // The maxes must rise down the list: Resolution 1 serves the lowest FPS. A max at or below the
-    // one above is refused, not quietly reset.
-    function ladderOrderProblem(list) {
-      let previous = 0;
-      for (let i = 0; i < list.length; i++) {
-        const rung = list[i];
-        if (rung.thr !== "") {
-          const value = Number(rung.thr);
-          if (Number.isFinite(value) && value <= previous)
-            return "Resolution " + (i + 1) + ": max " + value + " must be above " + previous + " fps, where Resolution " + i + " stops.";
-          previous = Math.max(previous, value);
-        } else if (ladderCeilingKnown(rung)) {
-          previous = Math.max(previous, ladderCeiling(rung));
-        }
-      }
-      return "";
-    }
-
-    // Every local edit goes through here: refused (with the reason) when the result is illegal, else
-    // saved on the camera a moment later. The ladder on screen is always the saved one. A removal is never
-    // refused: it makes no rung unreachable, and a saved ladder that already breaks a rule (Core keeps one
-    // the page would refuse, e.g. Full HD rungs after a 4K one that reaches 60 fps) must be able to shrink.
-    function commitLadderDraft(next, notice, removal) {
-      if (modesIsCam1()) {
-        // No ladder rules on CAM1: mode keys, best first, at most 8.
-        state.ladderDraft = next.slice().sort(ladderQualityCompare);
-        if (notice)
-          showToast(notice, false);
-        clearTimeout(state.ladderCheckTimer);
-        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
-        renderLadderEditor();
-        return;
-      }
-      const arranged = ladderArranged(next);
-      const normalized = normalizeLadderDraft(arranged);
-      const problem = removal ? "" : (ladderOrderProblem(arranged) || ladderDraftProblem(normalized));
-      if (problem) {
-        showToast(problem, true);
-      } else {
-        state.ladderDraft = normalized;
-        if (notice)
-          showToast(notice, false);
-        clearTimeout(state.ladderCheckTimer);
-        state.ladderCheckTimer = window.setTimeout(saveModeLadder, 200);
-      }
-      renderLadderEditor();
-    }
-
-    function setLadderThreshold(index, raw) {
-      const list = state.ladderDraft;
-      const span = ladderSpans(normalizeLadderDraft(list))[index];
-      const text = String(raw).trim();
-      let thr = "";
-      let notice = "";
-      if (text !== "") {
-        const low = span.from + 1;
-        const high = Math.min(span.ceiling, ladderNextTop(list, index) - 1);
-        const value = Math.round(Number(text));
-        const clamped = Number.isFinite(value) ? Math.min(Math.max(value, low), high) : high;
-        if (clamped !== value)
-          notice = "Resolution " + (index + 1) + ": FPS must be between " + low + " and " + high + ". Set to " + clamped + ".";
-        thr = clamped === span.ceiling ? "" : String(clamped);
-      }
-      commitLadderDraft(list.map((rung, i) => (i === index ? Object.assign({}, rung, { thr, auto: false }) : rung)), notice);
-    }
-
-    function createLadderIconButton(icon, label, className, disabled, onClick) {
-      const button = createDomElement("button", "ladder-icon-button" + (className ? " " + className : ""));
-      button.type = "button";
-      button.innerHTML = ladderIcons[icon];
-      button.setAttribute("aria-label", label);
-      button.disabled = !!disabled;
-      button.addEventListener("click", onClick);
-      return button;
-    }
-
-    function createLadderRow(rung, index, rowState) {
-      const draft = state.ladderDraft;
-      const name = ladderModeName(rung);
-      const crop = ladderCrop(rung);
-      const ceiling = rowState.ceiling;
-      const known = ladderCeilingKnown(rung);
-      const uncompressedCeiling = ladderCeiling(Object.assign({}, rung, { comp: "none" }));
-      const megabytes = ladderFrameMB(rung, rung.comp);
-      const cardSpeed = ladderCardWriteSpeed();
-      const approx = rung.comp === "none" ? "" : "≈ ";
-      const rate = megabytes * rowState.top;
-      const locked = !!(state.snapshot && state.snapshot.recording);
-      const item = createDomElement("div", "ladder-item");
-
-      const row = createDomElement("div", "ladder-row");
-      const main = createDomElement("div", "ladder-row-main");
-      main.appendChild(createDomElement("span", "ladder-badge", String(index + 1)));
-      const frame = fillCropFrame(createDomElement("div", "crop-frame"), crop);
-      frame.setAttribute("aria-hidden", "true");
-      main.appendChild(frame);
-      const text = createDomElement("div", "ladder-row-text");
-      text.appendChild(createDomElement("div", "ladder-row-name", name));
-      text.appendChild(createDomElement("div", "ladder-row-meta",
-        ladderSizeText(rung) + " · " + ladderAspectText(rung) + " · " + rung.bits + "-bit" + (ladderClassName(rung) ? " · " + ladderClassName(rung) : "")));
-      if (crop.desc)
-        text.appendChild(createDomElement("div", "ladder-row-desc" + (crop.cropIn ? " crop-in" : ""), crop.desc));
-      const rangeFrom = rowState.after ? "Above Resolution " + rowState.after : (rowState.from === 0 ? "Lowest FPS" : "Above " + rowState.from);
-      text.appendChild(createDomElement("div", "ladder-row-range", rowState.problem
-        ? "Not used" : rangeFrom + ", max " + (rowState.open ? "its ceiling" : rowState.top + " fps")
-          + (!rowState.open && uncompressedCeiling > 0 && uncompressedCeiling !== rowState.top ? " · sensor max " + uncompressedCeiling + " fps" : "")));
-      if (rowState.problem)
-        text.appendChild(createDomElement("div", "ladder-problem", rowState.problem));
-      main.appendChild(text);
-      row.appendChild(main);
-
-      const controls = createDomElement("div", "ladder-row-controls");
-      const compField = createDomElement("div", "field-stack ladder-comp");
-      const compLabel = createDomElement("label", "input-label", "Compression");
-      compLabel.htmlFor = "settingsModeLadderComp" + index;
-      const compSelect = createDomElement("select", "settings-select");
-      compSelect.id = "settingsModeLadderComp" + index;
-      ladderCompressions.forEach((entry) => {
-        const candidate = Object.assign({}, rung, { comp: entry.value });
-        const notForClearHdr = rung.clear_hdr && entry.value.indexOf("lossy") === 0;
-        const cannot = ladderCannotRecord(candidate);
-        const option = createDomElement("option", "", entry.label
-          + (notForClearHdr ? " (not for Clear HDR)" : (cannot ? " (not available)" : "")));
-        option.value = entry.value;
-        option.disabled = cannot !== "" && entry.value !== rung.comp;
-        option.title = cannot;
-        compSelect.appendChild(option);
-      });
-      compSelect.value = rung.comp;
-      compSelect.disabled = locked;
-      compSelect.addEventListener("change", () => commitLadderDraft(
-        draft.map((other, i) => (i === index ? Object.assign({}, other, { comp: compSelect.value }) : other)), ""));
-      compField.appendChild(compLabel);
-      compField.appendChild(compSelect);
-      compField.appendChild(createDomElement("span", "ladder-note", rung.comp === "none" ? "Exact, largest files"
-        : (rung.comp === "lossless_jpeg"
-          ? (known && ceiling < uncompressedCeiling ? "Capped at " + ceiling + " fps" : (rung.clear_hdr ? "Exact, smaller files" : "Smaller files (the sensor compresses outside Clear HDR)"))
-          : "Smaller files")));
-      if (rung.comp === "lossless_jpeg" && known && ceiling > 30 && sensorNameLower(state.snapshot).indexOf("imx585") !== -1)
-        compField.appendChild(createDomElement("span", "ladder-note over",
-          "Above 30 fps the lossless encoder runs close to its limit (about 69 fps measured at 4K 12-bit): watch the buffer bar."));
-      compField.appendChild(createDomElement("span", "ladder-size", approx + megabytes.toFixed(1) + " MB per frame"));
-      const over = !rowState.problem && !rowState.open && cardSpeed > 0 && rate > cardSpeed;
-      compField.appendChild(createDomElement("span", "ladder-note" + (over ? " over" : ""), rowState.problem
-        ? "Not used"
-        : (rowState.open ? "" : approx + Math.round(rate) + " MB/s at " + rowState.top + " fps" + (over ? " · above " + cardSpeed + " MB/s (card)" : ""))));
-      controls.appendChild(compField);
-
-      row.appendChild(controls);
-      item.appendChild(row);
-
-      // The max of this resolution, between it and the next one: the FPS where the next takes over
-      // (after the last one, where FPS stops). Empty = the ceiling.
-      const below = draft[index + 1];
-      const line = createDomElement("div", "ladder-transition");
-      line.innerHTML = ladderIcons.down;
-      const thrInput = createDomElement("input", "settings-input ladder-fps-input" + (rowState.problem ? " problem" : ""));
-      thrInput.id = "settingsModeLadderThr" + index;
-      thrInput.type = "number";
-      thrInput.inputMode = "numeric";
-      thrInput.step = "1";
-      thrInput.min = String(rowState.from + 1);
-      thrInput.max = String(Math.min(ceiling, ladderNextTop(draft, index) - 1));
-      thrInput.placeholder = known ? String(ceiling) : "";
-      thrInput.value = rung.thr;
-      thrInput.disabled = locked;
-      thrInput.title = "Max FPS of Resolution " + (index + 1) + ": the highest FPS it runs";
-      thrInput.setAttribute("aria-label", "Max FPS of Resolution " + (index + 1));
-      thrInput.addEventListener("change", () => setLadderThreshold(index, thrInput.value));
-      line.appendChild(thrInput);
-      line.appendChild(createDomElement("span", "ladder-fps-unit", "fps"));
-      const ceilingText = !known ? "Ceiling: Core checks it."
-        : "Ceiling " + ceiling + (rung.comp === "lossless_jpeg" && ceiling < uncompressedCeiling ? " (lossless cap)" : " (sensor mode)") + ".";
-      let aboveText = "Above it no resolution runs: FPS stops here.";
-      if (below) {
-        const parts = [];
-        const classChange = ladderClassName(below) !== ladderClassName(rung) || below.bits !== rung.bits;
-        const sizeChange = below.width !== rung.width || below.height !== rung.height;
-        if (classChange)
-          parts.push((ladderClassName(rung) + " " + rung.bits + "-bit").trim() + " → " + (ladderClassName(below) + " " + below.bits + "-bit").trim());
-        if (sizeChange)
-          parts.push("picture " + ladderSizeText(rung) + " → " + ladderSizeText(below));
-        if (rung.comp !== below.comp)
-          parts.push(ladderCompression(rung.comp).label + " → " + ladderCompression(below.comp).label);
-        if (!parts.length)
-          parts.push("same class and size");
-        const stop = rowState.open ? "the max of Resolution " + (index + 1) : String(rowState.top);
-        aboveText = "Above it: " + parts.join(", ") + ". " + (classChange || sizeChange
-          ? "Switches between takes only, with a short preview blink; in a take FPS stops at " + stop + "."
-          : "Same mode: a ramp crosses without a switch, in a take too.");
-      }
-      line.appendChild(createDomElement("span", "", ceilingText + " " + aboveText));
-      item.appendChild(line);
-      return item;
     }
 
     // One step: a mode Dynamic resolution may pick, with the FPS it serves and why, as Core says it.
