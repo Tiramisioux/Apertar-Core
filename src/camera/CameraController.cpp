@@ -11807,6 +11807,16 @@ void CameraController::restoreFpsAfterRampLocked()
             emitSettingsEventLocked();
             return;
         }
+        if (rungChange && state_ == CameraState::Ready) {   // not on the shutdown path
+            // Dynamic resolution: the FPS the ramp ended on belongs to another mode (a ramp down ends where a
+            // better resolution holds it). Keep the FPS and move to that mode now, between takes, as setFps would.
+            std::cerr << "ApertarCore fps ramp: take ended at " << settings_.fps
+                      << " fps, keeping it in the mode Dynamic resolution picks for it\n";
+            ladderOverride_ = false;
+            if (applyFpsStepLocked(probe.fps, false, true, &probe))
+                return;
+            std::cerr << "ApertarCore fps ramp: mode change failed: " << lastError_ << "\n";
+        }
         std::cerr << "ApertarCore fps ramp: take ended at " << settings_.fps
                   << " fps, not valid for the mode, restoring " << rampTakeBaseFps_ << "\n";
     }
