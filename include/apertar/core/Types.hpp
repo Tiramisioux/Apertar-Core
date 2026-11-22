@@ -140,8 +140,8 @@ struct CaptureSettings {
     bool mediaTrimEnabled = true; // Trim the recording drive after big deletes and when it is mounted (APERTAR_MEDIA_TRIM=0 overrides).
     bool stopOnDroppedFrame = false; // End a take at its first dropped frame (a storage pre-roll is never stopped).
     // Speed ramping (T31): FPS may change during a cDNG/MLV take. Frames are then
-    // numbered by count and the clip keeps the FPS it started with as its timeline rate.
-    bool fpsSpeedRamp = false;
+    // numbered by count and the clip keeps the FPS it started with as its timeline rate. On by default.
+    bool fpsSpeedRamp = true;
     // true: an FPS change keeps the exposure time (brightness); false: keeps the
     // shutter angle (motion blur) through Core's existing rescale.
     bool fpsSpeedRampKeepExposure = false;
