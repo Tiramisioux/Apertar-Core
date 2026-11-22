@@ -30,6 +30,7 @@ inline std::string effectiveCompression(const Rung &r)
 
 struct Ladder {
     bool enabled = false;     // Dynamic resolution is on: Core honours the table
+    bool tdnOff = false;      // dynres_tdn=off_in_4k: turn preview temporal denoise off for an unbinned mode, back on for a binned one
     std::vector<Rung> rungs;  // the enabled modes, empty = the default list; the order of use is tryOrder's
     // The WebUI's aspect filter on Activated sensor modes, the ratios as the card labels them ("16:9",
     // "2.39:1"); empty = All. Kept here so the camera remembers it; it never changes which mode runs.
@@ -223,6 +224,7 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
         top = std::max(top, ceilingOf(s[i]));
     std::string out = "{\"enabled\":" + std::string(l.enabled ? "true" : "false") +
+        ",\"tdn\":" + (l.tdnOff ? "\"off_in_4k\"" : "\"keep\"") +
         ",\"resolutions_text\":" + quote(modesText(l.rungs)) +
         ",\"aspects\":" + list(l.aspects) +
         ",\"ceiling\":" + number(top) + ",\"running_resolution\":" + std::to_string(running + 1) +
@@ -269,11 +271,12 @@ inline void validateModes(const Ladder &l, const std::vector<RungState> &s,
 // The ladder from the text of its settings (camera_settings.conf keys): the switch, the enabled modes and the
 // aspect filter. A modes text that does not parse is an empty list, which means the default list; a bad filter
 // is All.
-inline Ladder fromText(bool enabled, const std::string &modes, const std::string &aspects)
+inline Ladder fromText(bool enabled, const std::string &modes, const std::string &aspects, bool tdnOff = false)
 {
     Ladder l;
     std::string error;
     l.enabled = enabled;
+    l.tdnOff = tdnOff;
     if (!modes.empty() && !parseModes(modes, l.rungs, error))
         l.rungs.clear();
     if (!parseAspects(aspects, l.aspects, error))
@@ -325,6 +328,22 @@ inline std::vector<size_t> tryOrder(const std::vector<Candidate> &c)
         return uint64_t(x.width) * x.height > uint64_t(y.width) * y.height;
     });
     return order;
+}
+
+// The TDN option (dynres_tdn=off_in_4k): preview temporal denoise goes off when an unbinned mode (4K, a crop) is
+// chosen, and comes back on for a binned one, but only if the option turned it off (restore). Off: nothing changes.
+struct TdnChoice {
+    bool tdn;
+    bool restore;
+};
+
+inline TdnChoice tdnForMode(bool optionOn, bool unbinned, bool tdn, bool restore)
+{
+    if (optionOn && unbinned && tdn)
+        return { false, true };
+    if (optionOn && !unbinned && restore)
+        return { true, false };
+    return { tdn, restore };
 }
 
 // The first usable mode in that order whose cap reaches targetFps (upper bound inclusive). If none does, the

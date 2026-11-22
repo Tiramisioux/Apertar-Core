@@ -930,6 +930,10 @@ CaptureSettings loadPersistedCaptureSettings(std::map<RecordingFormat, CaptureSe
                 settings.dynresModes = value;
             else if (key == "dynres_aspects" || key == "mode_ladder_aspects")
                 settings.dynresAspects = value;
+            else if (key == "dynres_tdn")
+                settings.dynresTdnOff = value == "off_in_4k";
+            else if (key == "dynres_tdn_restore")
+                settings.dynresTdnRestore = (value == "true" || value == "1");
             else if (key == "raw_bit_depth")
                 settings.rawBitDepth = normalizeRawBitDepth(static_cast<uint32_t>(std::stoul(value)));
             else if (key == "clear_hdr")
@@ -1043,6 +1047,8 @@ void writeCaptureSettings(std::ostream &output, const CaptureSettings &settings,
     output << prefix << "dynres_enabled=" << s.dynresEnabled << '\n';
     output << prefix << "dynres_modes=" << s.dynresModes << '\n';
     output << prefix << "dynres_aspects=" << s.dynresAspects << '\n';
+    output << prefix << "dynres_tdn=" << (s.dynresTdnOff ? "off_in_4k" : "keep") << '\n';
+    output << prefix << "dynres_tdn_restore=" << s.dynresTdnRestore << '\n';
     output << prefix << "timecode_mode=" << toString(s.timecodeMode) << '\n';
     output << prefix << "fps_phase_lock=" << s.fpsPhaseLock << '\n';
     output << prefix << "preview_tdn=" << s.previewTdn << '\n';
@@ -11432,7 +11438,7 @@ CameraController::CameraController(EventCallback eventCallback, PreviewCallback 
           }, recordingDropWarning_, eventCallback_))
 {
     settings_ = loadPersistedCaptureSettings(formatSettings_, stillSettings_);
-    modeLadder_ = ladder::fromText(settings_.dynresEnabled, settings_.dynresModes, settings_.dynresAspects);
+    modeLadder_ = ladder::fromText(settings_.dynresEnabled, settings_.dynresModes, settings_.dynresAspects, settings_.dynresTdnOff);
     if (unsupportedRecordingSettings(settings_))
         std::cerr << "ApertarCore: saved recording settings are unavailable on this board; selecting supported recording settings.\n";
     settings_ = supportedRecordingSettings(settings_);
@@ -11699,6 +11705,8 @@ bool CameraController::applyFpsStepLocked(double effectiveFps, bool rampingTake,
         next.recordingFormat = rung->recordingFormat;   // the resolution's own compression (applyRungFormat)
         next.cdngCompression = rung->cdngCompression;
         next.lossyDngRatio = rung->lossyDngRatio;
+        next.previewTdn = rung->previewTdn;             // the TDN option's choice for the mode
+        next.dynresTdnRestore = rung->dynresTdnRestore;
     }
     if (rampingTake) {
         rampTakeChanged_ = true;
@@ -11814,7 +11822,7 @@ sustained::Context CameraController::limitContextLocked(const CaptureSettings &s
     sustained::Context context = ladderContext_;
     // BCM2712 (Pi 5, CM5) is the one board measured; a simulated camera stands for it.
     context.board = simulateCamera_ || recordingCapabilities().rawCompression ? sustained::Board::Pi5 : sustained::Board::Other;
-    context.tdn = settings.previewTdn;
+    context.tdn = settings.previewTdn && !(modeLadder_.tdnOff && !recording_);   // with the option on, TDN goes off before a 4K mode runs
     context.lock = settings.fpsPhaseLock;
     context.log = settings.cdngLog != CdngLog::Off;
     return context;
@@ -11890,8 +11898,13 @@ bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
         return false;
     const ladder::Candidate &pick = candidates[static_cast<size_t>(index)];
     const ladder::Rung &rung = pick.mode;
-    const bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
+    bool changed = next.resolution.width != rung.width || next.resolution.height != rung.height ||
         next.rawBitDepth != rung.bits || next.clearHdr != rung.clearHdr;
+    const ladder::TdnChoice tdn = ladder::tdnForMode(modeLadder_.tdnOff, !limitModeLocked(rung).binned, next.previewTdn,
+                                                      next.dynresTdnRestore);
+    changed = changed || tdn.tdn != next.previewTdn;   // the apply then restarts the pipeline on the other tuning file
+    next.previewTdn = tdn.tdn;
+    next.dynresTdnRestore = tdn.restore;
     next.resolution = Resolution{ rung.width, rung.height };
     next.rawBitDepth = rung.bits;
     next.clearHdr = rung.clearHdr;
@@ -12036,6 +12049,8 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
             out.limitWhy = sustained::steppedDownText(context, out.fps, mode, bestMode, bestCap);
         }
     }
+    if (out.dynresTdnRestore && ladderActiveForLocked(out))
+        out.limitWhy += " Dynamic resolution turned preview temporal denoise off for this mode; it comes back on in a 2K mode.";
     if (ladderOverride_ && modeLadder_.enabled)
         out.limitWhy += " You chose this mode: Dynamic resolution waits for the next fps change.";
 }
@@ -12204,9 +12219,14 @@ void CameraController::setLadderContext(const sustained::Context &context)
 
 bool CameraController::setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
                                      const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
-                                     const std::optional<std::string> &aspects, bool dryRun, std::string *json, std::string *error)
+                                     const std::optional<std::string> &aspects, const std::optional<std::string> &tdn,
+                                     bool dryRun, std::string *json, std::string *error)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (tdn && *tdn != "keep" && *tdn != "off_in_4k") {
+        *error = "The TDN option must be keep or off_in_4k.";
+        return false;
+    }
     std::vector<std::string> aspectList;
     if (aspects) {
         std::string parseError;
@@ -12217,7 +12237,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     }
     // The aspect filter alone changes only what the WebUI lists, never the mode: no take refusal, no check
     // that could refuse it, no apply, no settings event. The reply shows the errors as get_mode_ladder does.
-    if (aspects && !rungs && !enabled && !enableMode && !disableMode) {
+    if (aspects && !rungs && !enabled && !enableMode && !disableMode && !tdn) {
         ladder::Ladder shown = modeLadder_;
         shown.aspects = aspectList;
         if (!dryRun && aspectList != modeLadder_.aspects) {
@@ -12273,6 +12293,8 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     }
     if (enabled)
         draft.enabled = *enabled;
+    if (tdn)
+        draft.tdnOff = *tdn == "off_in_4k";
     if (aspects)
         draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
@@ -12292,6 +12314,9 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     ladderOverride_ = false;      // a changed ladder ends a Clear HDR override
     const auto store = [&](CaptureSettings &target) {
         target.dynresEnabled = draft.enabled;
+        target.dynresTdnOff = draft.tdnOff;
+        if (!draft.tdnOff)
+            target.dynresTdnRestore = false;   // keep never touches TDN, so nothing is left to restore
         if (listGiven)
             target.dynresModes = ladder::modesText(draft.rungs);
         target.dynresAspects = ladder::aspectsText(draft.aspects);
@@ -12576,6 +12601,8 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             const bool dynresEnabled = next.dynresEnabled;   // one Dynamic resolution for the camera
             const std::string dynresModes = next.dynresModes;
             const std::string dynresAspects = next.dynresAspects;
+            const bool dynresTdnOff = next.dynresTdnOff;
+            const bool dynresTdnRestore = next.dynresTdnRestore;
             next = saved->second;
             next.tuningFile = tuningFile;
             next.timecodeMode = timecodeMode;
@@ -12594,6 +12621,8 @@ bool CameraController::setRecordingFormat(RecordingFormat format)
             next.dynresEnabled = dynresEnabled;
             next.dynresModes = dynresModes;
             next.dynresAspects = dynresAspects;
+            next.dynresTdnOff = dynresTdnOff;
+            next.dynresTdnRestore = dynresTdnRestore;
             if (format == RecordingFormat::Cdng)
                 format = next.recordingFormat;
         }
@@ -13175,13 +13204,22 @@ bool CameraController::setPreviewTdn(bool enabled)
         return false;
     }
     if (settings_.previewTdn == enabled) {
+        if (settings_.dynresTdnRestore) {   // the operator's own choice now: nothing left to restore
+            settings_.dynresTdnRestore = false;
+            persistSettingsLocked();
+        }
         lastError_.clear();
         emitSettingsEventLocked();
         return true;
     }
     CaptureSettings next = settings_;
     next.previewTdn = enabled;
+    next.dynresTdnRestore = false;   // the operator decided
     ladderRewriteLocked(next);   // TDN takes the unbinned modes out of the table; the apply below reconfigures
+    if (enabled && !next.previewTdn) {   // the option keeps it off for the mode the table picks
+        setErrorLocked("Dynamic resolution keeps preview temporal denoise off in 4K. Set its TDN option to keep to use both.");
+        return false;
+    }
     // The pipeline restarts on the other tuning file, the same way setTuningFile does it.
     return applySettingsLocked(next, true);
 }
@@ -13995,6 +14033,8 @@ bool CameraController::applyCapturePreset(const CaptureSettings &requested, cons
     next.dynresEnabled = settings_.dynresEnabled;
     next.dynresModes = settings_.dynresModes;
     next.dynresAspects = settings_.dynresAspects;
+    next.dynresTdnOff = settings_.dynresTdnOff;
+    next.dynresTdnRestore = next.dynresTdnRestore || settings_.dynresTdnRestore;   // the preset's own rewrite may have turned TDN off
     const CaptureSettings previous = settings_;
     const bool tuningChanged = next.tuningFile != previous.tuningFile;
     const bool reconfigure = tuningChanged || next.photoModeEnabled != previous.photoModeEnabled || next.recordingFormat != previous.recordingFormat ||

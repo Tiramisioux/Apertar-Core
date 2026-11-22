@@ -155,14 +155,15 @@ public:
     // The tuning file libcamera really loaded (the user's pick, or its copy without tdn, or a derived colour file).
     std::string activeTuningFile() const;
     bool setFpsSpeedRamp(bool enabled, bool keepExposure, bool stretchAudio, bool returnAfter);
-    // Dynamic resolution. Any of modes / enable_mode / disable_mode / enabled / aspects; dryRun only validates. Fills the
+    // Dynamic resolution. Any of modes / enable_mode / disable_mode / enabled / tdn (keep or off_in_4k) / aspects; dryRun only validates. Fills the
     // get_mode_ladder JSON in *json; false with *error when refused (in a take, or errors). aspects is the
     // WebUI's aspect filter ("16:9,2.39:1", "" = All), kept unless given. Alone it changes only that filter:
     // saved in a take too, with no check or apply (a filter unchanged from Core's copy saves nothing);
     // refused for a bad label. The ladder is saved in camera_settings.conf with the other settings.
     bool setModeLadder(const std::optional<std::string> &rungs, std::optional<bool> enabled,
                        const std::optional<std::string> &enableMode, const std::optional<std::string> &disableMode,
-                       const std::optional<std::string> &aspects, bool dryRun, std::string *json, std::string *error);
+                       const std::optional<std::string> &aspects, const std::optional<std::string> &tdn,
+                       bool dryRun, std::string *json, std::string *error);
     std::string modeLadderJson() const;
     // The storage and the switches the known limits depend on, pushed by the application when they change
     // (the camera itself reads TDN, phase lock, Log and the split). An event goes out when they change.

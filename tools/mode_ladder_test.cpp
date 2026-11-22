@@ -225,6 +225,24 @@ int main()
               "take-over: the owner's ladder becomes the enabled list, thresholds and compression dropped");
     }
 
+    // ---- the TDN option: off for an unbinned mode, back on for a binned one it turned off for ----
+    {
+        const auto same = [](TdnChoice c, bool tdn, bool restore) { return c.tdn == tdn && c.restore == restore; };
+        check(same(tdnForMode(true, true, true, false), false, true), "tdn option: 4K with TDN on turns it off and remembers");
+        check(same(tdnForMode(true, true, false, false), false, false), "tdn option: 4K with TDN already off changes nothing, nothing to restore");
+        check(same(tdnForMode(true, true, false, true), false, true), "tdn option: 4K again keeps the memory");
+        check(same(tdnForMode(true, false, false, true), true, false), "tdn option: 2K after our turn-off turns TDN back on");
+        check(same(tdnForMode(true, false, false, false), false, false), "tdn option: 2K with TDN off by the operator stays off");
+        check(same(tdnForMode(true, false, true, false), true, false), "tdn option: 2K with TDN on changes nothing");
+        check(same(tdnForMode(false, true, true, false), true, false) && same(tdnForMode(false, false, false, true), false, true),
+              "keep: TDN is never touched");
+        Ladder l = fromText(true, kModes, "", true);
+        check(l.tdnOff && contains(toJson(l, std::vector<RungState>(3), -1, {}, {}, {}, {}), "\"enabled\":true,\"tdn\":\"off_in_4k\","),
+              "toJson: tdn off_in_4k");
+        check(!fromText(true, kModes, "").tdnOff && contains(toJson(fromText(true, kModes, ""), std::vector<RungState>(3), -1, {}, {}, {}, {}), "\"tdn\":\"keep\""),
+              "toJson: tdn keep by default");
+    }
+
     std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
     return g_failed ? 1 : 0;
 }

@@ -15524,7 +15524,8 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
     if (command.name == "set_mode_ladder") {
         // Dynamic resolution: any of modes (WIDTHxHEIGHT:BITS:hdr|sdr, comma-separated; "resolutions" is the old name),
         // enable_mode or disable_mode (one mode), enabled (true|false), aspects (the WebUI's aspect filter, comma-separated: 16:9,2.39:1; "" = All; alone it is
-        // saved in a take too); dry_run=true only validates and returns the errors and warnings.
+        // saved in a take too), tdn (keep, or off_in_4k: Dynamic resolution turns preview temporal denoise off for 4K
+        // and crops and back on for 2K); dry_run=true only validates and returns the errors and warnings.
         const auto boolField = [&command](const char *name) -> std::optional<bool> {
             const auto value = command.string(name);
             if (!value)
@@ -15535,7 +15536,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
         std::string json, error;
         const auto modes = command.string("modes") ? command.string("modes") : command.string("resolutions");
         if (!camera_.setModeLadder(modes, boolField("enabled"), command.string("enable_mode"), command.string("disable_mode"),
-                                   command.string("aspects"), dryRun, &json, &error))
+                                   command.string("aspects"), command.string("tdn"), dryRun, &json, &error))
             return errorReply(command.id, error);
         return okReply(command.id, "\"mode_ladder\":" + json + (dryRun ? "" : "," + settingsBody(camera_.settings())));
     }

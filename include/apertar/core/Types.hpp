@@ -210,6 +210,8 @@ struct CaptureSettings {
     bool dynresEnabled = true;
     std::string dynresModes;
     std::string dynresAspects;
+    bool dynresTdnOff = false;       // dynres_tdn=off_in_4k: Dynamic resolution turns preview temporal denoise off for an unbinned mode (4K, crops)
+    bool dynresTdnRestore = false;   // it did, so it turns it back on for a binned mode; the operator's own switch ends this
     uint32_t rawBitDepth = 12;
     bool clearHdr = false;
     // Clear HDR merge knobs (IMX585). Blend 5 and gain adder 1 are Cinemate's measured operating point;

@@ -273,7 +273,7 @@ inline bool takesCameraField(std::string_view name)
 inline bool isAspectsOnlyLadder(const Fields &fields)
 {
     return fields.count("aspects") && !fields.count("resolutions") && !fields.count("modes") &&
-           !fields.count("enable_mode") && !fields.count("disable_mode") && !fields.count("enabled");
+           !fields.count("enable_mode") && !fields.count("disable_mode") && !fields.count("enabled") && !fields.count("tdn");
 }
 
 // The refusal for a `camera` field, or nullopt to carry on. `cam1Configured` is the relay's configured test (§4.1); `ties`
