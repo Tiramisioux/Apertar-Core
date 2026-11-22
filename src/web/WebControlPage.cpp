@@ -10277,7 +10277,7 @@ std::string_view webControlPageHtml()
       [false, true].forEach((clearHdr) => imx585Families.forEach((family) => {
         const offered = imx585FamilyRows(snapshot, imx585TargetClassKey(snapshot, clearHdr), family.key).length > 0;
         if (offered || !mono)
-          options.push({ value: family.key + (clearHdr ? "-hdr" : ""), label: family.label + (clearHdr ? " HDR" : ""),
+          options.push({ value: family.key + (clearHdr ? "-hdr" : ""), label: family.label + (clearHdr ? " Clear HDR" : ""),
             enabled: offered && (!clearHdr || hdrAllowed) });
       }));
       return options;
