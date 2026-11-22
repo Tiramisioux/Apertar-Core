@@ -11892,6 +11892,27 @@ bool CameraController::ladderRewriteLocked(CaptureSettings &next) const
     return changed;
 }
 
+// Puts the mode back in step with the table when a lever or the storage changed under the fps in use: the rewrite
+// above as one apply, between takes only. A take that is running finishes first; its stop path calls this, and the
+// limit line says so meanwhile. True when it applied (and so sent the settings event).
+bool CameraController::ladderReapplyLocked()
+{
+    if (recording_ || prerollTake_ || state_ != CameraState::Ready)
+        return false;
+    CaptureSettings next = settings_;
+    const bool modeChanged = ladderRewriteLocked(next);
+    if (!modeChanged && next.recordingFormat == settings_.recordingFormat && next.cdngCompression == settings_.cdngCompression &&
+        next.lossyDngRatio == settings_.lossyDngRatio && std::abs(next.fps - settings_.fps) < 0.0001)
+        return false;
+    std::cerr << "ApertarCore mode ladder: " << ladder::label({ next.resolution.width, next.resolution.height, next.rawBitDepth,
+                                                                next.clearHdr, "" })
+              << " at " << next.fps << " fps, the limits changed\n";
+    if (applySettingsLocked(next, modeChanged))
+        return true;
+    std::cerr << "ApertarCore mode ladder: the new mode was not applied: " << lastError_ << "\n";
+    return false;
+}
+
 // The derived state fields (never persisted): the caps in the table's order as ladder_tops, the highest as
 // fps_max, the running mode's as fps_take_max. fpsMax must already hold the mode's own ceiling.
 void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
@@ -11968,6 +11989,17 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
     out.limitWhy = sustained::whyText(context, mode, cap, ceiling);
     if (ladderActiveForLocked(out)) {   // Dynamic resolution chose this mode: say what held a better one back
         const std::vector<ladder::Candidate> candidates = candidatesLocked(modeLadder_, out);
+        if (recording_ && cap.fps < out.fps - 0.0005) {   // a lever or the storage changed in this take
+            const int pick = ladder::chooseMode(candidates, out.fps);
+            const ladder::Rung &next = pick >= 0 ? candidates[static_cast<size_t>(pick)].mode : rung;
+            if (next.width != rung.width || next.height != rung.height || next.bits != rung.bits || next.clearHdr != rung.clearHdr)
+                out.limitWhy = "The limits changed: the camera switches to " + sustained::modeName(limitModeLocked(next)) +
+                               " after this take.";
+            else
+                out.limitWhy = "The limits changed: " + sustained::modeName(mode) + " holds " + sustained::wholeFps(cap.fps) +
+                               " fps now. The camera sets that rate after this take.";
+            return;
+        }
         const ladder::Candidate *best = nullptr;   // the mode ranked before this one that came closest
         double top = 0.0;
         bool ranked = false;
@@ -11983,7 +12015,7 @@ void CameraController::fillLimitFieldsLocked(CaptureSettings &out) const
                 best = &c;
         }
         if (ranked && cap.fps >= top - 0.0005 && out.fps >= cap.fps - 0.0005) {
-            out.limitWhy = sustained::highestText(context, out.fps, mode);
+            out.limitWhy = sustained::highestText(context, cap.fps, mode);
         } else if (ranked && best && best->cap < out.fps - 0.0005) {
             ladder::Ladder single;
             single.rungs.push_back(best->mode);
@@ -12150,8 +12182,11 @@ void CameraController::setLadderContext(const sustained::Context &context)
     sustained::Context before = ladderContext_, after = context;
     const bool crossed = sustained::cardNearlyFull(before) != sustained::cardNearlyFull(after);
     before.fillFraction = after.fillFraction = 0.0;
+    const bool changed = !(before == after);
     ladderContext_ = context;
-    if (crossed || !(before == after))
+    if (changed && ladderReapplyLocked())
+        return;   // the apply sent the settings event
+    if (crossed || changed)
         emitSettingsEventLocked();
 }
 
@@ -12609,7 +12644,8 @@ bool CameraController::setCdngLog(CdngLog log)
     }
     CaptureSettings next = settings_;
     next.cdngLog = log;
-    const bool ok = applySettingsLocked(next, false);
+    const bool ladderChange = ladderRewriteLocked(next);   // Log shifts the table's numbers
+    const bool ok = applySettingsLocked(next, ladderChange);
     emitLogAppliedIfChangedLocked();
     return ok;
 }
@@ -13099,7 +13135,8 @@ bool CameraController::setFpsPhaseLock(bool enabled)
     std::lock_guard<std::mutex> lock(mutex_);
     CaptureSettings next = settings_;
     next.fpsPhaseLock = enabled;
-    return applySettingsLocked(next, false);
+    const bool ladderChange = ladderRewriteLocked(next);   // the lock shifts the table's numbers
+    return applySettingsLocked(next, ladderChange);
 }
 
 bool CameraController::setMediaTrimEnabled(bool enabled)
@@ -13132,6 +13169,7 @@ bool CameraController::setPreviewTdn(bool enabled)
     }
     CaptureSettings next = settings_;
     next.previewTdn = enabled;
+    ladderRewriteLocked(next);   // TDN takes the unbinned modes out of the table; the apply below reconfigures
     // The pipeline restarts on the other tuning file, the same way setTuningFile does it.
     return applySettingsLocked(next, true);
 }
@@ -13718,6 +13756,9 @@ bool CameraController::stopRecording(int64_t stopUs)
     recordingFailureMessage_ = lastError_;
     if (!announcedEarly || !lastError_.empty())
         emitRecordingEventLocked();
+    const std::string takeError = lastError_;
+    ladderReapplyLocked();   // a lever or the storage changed in the take: the mode follows now
+    lastError_ = takeError;
     return lastError_.empty();
 }
 
@@ -13741,6 +13782,8 @@ bool CameraController::checkRecordingFailure()
     lastError_ = error;
     recordingFailureMessage_ = error;
     emitRecordingEventLocked();
+    ladderReapplyLocked();   // a lever or the storage changed in the take: the mode follows now
+    lastError_ = error;
     return true;
 }
 

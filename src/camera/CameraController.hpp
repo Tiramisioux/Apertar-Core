@@ -252,6 +252,7 @@ private:
     std::vector<ladder::RungState> ladderStatesLocked(const ladder::Ladder &ladder, const CaptureSettings &base) const;
     bool ladderActiveForLocked(const CaptureSettings &base) const;
     bool ladderRewriteLocked(CaptureSettings &next) const;
+    bool ladderReapplyLocked();
     void fillLadderFieldsLocked(CaptureSettings &out) const;
     void fillLimitFieldsLocked(CaptureSettings &out) const;
     // The probe's entry for a mode in Core's identity (the active picture); false in simulation or before the probe.
