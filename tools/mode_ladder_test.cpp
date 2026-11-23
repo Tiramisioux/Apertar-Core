@@ -197,8 +197,8 @@ int main()
             }
             const auto pick = [&](double fps) { const int i = chooseMode(candidates, fps); return i < 0 ? std::string("none") : label(candidates[static_cast<size_t>(i)].mode); };
             if (kind == Kind::Nvme) {
-                check(pick(25) == "4K Clear HDR 16-bit" && pick(26) == "1920x1080 Clear HDR 16-bit" && pick(30) == "1920x1080 Clear HDR 16-bit",
-                      "table C NVMe: up to 25 fps 4K Clear HDR 16-bit, 26 to 30 the 2K one");
+                check(pick(23) == "4K Clear HDR 16-bit" && pick(24) == "1920x1080 Clear HDR 16-bit" && pick(30) == "1920x1080 Clear HDR 16-bit",
+                      "table C NVMe: up to 23 fps 4K Clear HDR 16-bit, 24 to 30 the 2K one");
                 check(pick(33) == "4K SDR 12-bit" && pick(34) == "1920x1080 SDR 12-bit" && pick(60) == "1920x1080 SDR 12-bit",
                       "table C NVMe: 33 fps 4K SDR 12-bit, 34 to 60 2K SDR 12-bit");
                 check(pick(80) == "1920x1080 SDR 12-bit", "table C NVMe: above 60 nothing holds it, the highest cap is used");

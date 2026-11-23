@@ -5808,7 +5808,7 @@ std::string_view webControlPageHtml()
               <div class="settings-card-head">
                 <div>
                   <h3 class="settings-card-title">Dynamic resolution</h3>
-                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera held in measured takes on a warm drive (each step names the take length). When the FPS goes up, the resolution goes down first, then the bit depth, then Clear HDR to SDR.</p>
+                  <p class="settings-card-copy">Picks the resolution, bit depth and Clear HDR from the FPS, from the limits the camera held in measured takes on a hot drive (each step names the take length). When the FPS goes up, Clear HDR 16-bit gives way to Clear HDR 12-bit, then SDR, then a lower resolution, then 10-bit. With Log on, 4K SDR is skipped: it drops frames.</p>
                 </div>
                 <div class="online-pill off" id="settingsModeLadderValue">Off</div>
               </div>
@@ -5834,7 +5834,7 @@ std::string_view webControlPageHtml()
               <div class="field-stack ladder-dim">
                 <div class="ladder-list-head">
                   <span class="input-label">Steps</span>
-                  <span class="ladder-note">Best picture first. Measured take lengths, warm drive.</span>
+                  <span class="ladder-note">Best picture first. Measured take lengths, hot drive.</span>
                 </div>
                 <div class="ladder-list" id="settingsModeLadderList"></div>
               </div>
