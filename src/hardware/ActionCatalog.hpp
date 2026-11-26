@@ -85,6 +85,11 @@ inline constexpr Spec kSpecs[] = {
     {"settings", "Screens", "Open settings", "settings,settings_page", Both, true},
     {"clip_browser", "Screens", "Open clip browser", "clip_browser,browser,playback", Both, true},
     {"quick_menu", "Screens", "Open quick menu", "quick_menu,quickmenu", Both, true},
+    {"lens_focus_up", "Lens (Pinefeat)", "Focus farther, one step", "lens_focus_up,focus_far,focus_farther"},
+    {"lens_focus_down", "Lens (Pinefeat)", "Focus nearer, one step", "lens_focus_down,focus_near,focus_nearer"},
+    {"lens_iris_up", "Lens (Pinefeat)", "Iris closes one step (higher f-number)", "lens_iris_up,iris_close,iris_closer"},
+    {"lens_iris_down", "Lens (Pinefeat)", "Iris opens one step (lower f-number)", "lens_iris_down,iris_open,iris_opener"},
+    {"lens_calibrate", "Lens (Pinefeat)", "Calibrate the lens (AF/MF switch on AF)", "lens_calibrate,calibrate_lens", Button},
     {"eject", "Media", "Eject media", "eject,unmount,eject_media,unmount_media"},
     {"standby", "System", "Standby (button only, keep it last)", "standby,standby_toggle", Button},
     {"run_script", "Scripts", "Run all scripts", "run_script,script"},
@@ -289,7 +294,7 @@ inline std::string suggestion(std::string_view token)
 // the "turn" ones start or stop something on every detent, which is almost never meant.
 inline bool isStepping(std::string_view id)
 {
-    for (const std::string_view family : {"iso", "shutter", "fps", "wb", "ev", "resolution", "preview_wipe", "preview_opacity"})
+    for (const std::string_view family : {"iso", "shutter", "fps", "wb", "ev", "resolution", "preview_wipe", "preview_opacity", "lens_focus", "lens_iris"})
         for (const std::string_view dir : {"_up", "_down"})
             if (id.size() == family.size() + dir.size() && id.substr(0, family.size()) == family &&
                 id.substr(family.size()) == dir)
@@ -300,13 +305,13 @@ inline bool isStepping(std::string_view id)
 inline bool warnOnTurn(std::string_view id)
 {
     return id == "capture" || id == "record_toggle" || id == "photo" || id == "timelapse" || id == "still_mode" ||
-        id == "eject" || id == "clear_hdr";
+        id == "eject" || id == "clear_hdr" || id == "lens_calibrate";
 }
 
 // The analog targets (Grove's normalizer also maps none/off/disabled to "no target"; App only sees its result).
 inline constexpr std::string_view kAnalogTargets[] = {"iso", "fps", "resolution", "wb", "shutter",
     "focus_peaking_threshold", "zebra_threshold", "input_volume", "headphone_volume", "camera_controls_opacity",
-    "preview_wipe", "preview_opacity"};
+    "preview_wipe", "preview_opacity", "lens_focus", "lens_iris"};
 
 inline std::string canonicalAnalogTarget(std::string_view text)
 {
@@ -321,6 +326,8 @@ inline std::string canonicalAnalogTarget(std::string_view text)
     if (target == "wipe" || target == "wipe_preview" || target == "preview_wipe_percent") return "preview_wipe";
     if (target == "opacity_preview" || target == "stack_opacity" || target == "preview_opacity_percent") return "preview_opacity";
     if (target == "res") return "resolution";
+    if (target == "focus_position" || target == "lens_focus") return "lens_focus";
+    if (target == "iris" || target == "lens_iris") return "lens_iris";
     return target;
 }
 
