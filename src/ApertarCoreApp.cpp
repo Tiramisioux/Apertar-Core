@@ -10892,13 +10892,17 @@ std::string ApertarCoreApp::handleSetLens(const ControlCommand &command)
             return errorReply(command.id, status.present ? status.error : "No Pinefeat CEF168 lens controller found.");
         int position = 0;
         if (focus) {
-            const int low = status.data->rangeValid() ? status.data->focusMin : 0;
-            const int high = status.data->rangeValid() ? status.data->focusMax : 32767;
+            // The working lens's range from Core's own run, else the board's when valid.
+            const auto range = lensns::statusFocusRange(status);
+            const int low = range ? range->first : 0;
+            const int high = range ? range->second : 65535;
             position = static_cast<int>(std::clamp<long long>(std::llround(*focus), low, high));
         } else {
-            if (!status.data->rangeValid())
+            const auto range = lensns::statusFocusRange(status);
+            if (!range)
                 return errorReply(command.id, "The lens has no focus range yet: calibrate it first.");
-            position = lensns::stepFocus(*status.data, static_cast<int>(std::clamp(std::llround(*focusStep), -100LL, 100LL)),
+            position = lensns::stepFocus(status.data->focusCurrent, range->first, range->second,
+                                         static_cast<int>(std::clamp(std::llround(*focusStep), -100LL, 100LL)),
                                          settings.focusStepPercent);
         }
         if (const std::string error = lens_.setFocus(position); !error.empty())
@@ -11076,10 +11080,12 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
     }
 
     if (target == "lens_focus") {
-        const auto data = lens_.read(false).data;
-        if (!data || !data->rangeValid())
+        const hardware::cef168::Status lensStatus = lens_.read(false);
+        const auto &data = lensStatus.data;
+        const auto range = hardware::cef168::statusFocusRange(lensStatus);
+        if (!data || !range)
             return;
-        const int position = static_cast<int>(std::llround(analogMappedValue(event, data->focusMin, data->focusMax, 1.0)));
+        const int position = static_cast<int>(std::llround(analogMappedValue(event, range->first, range->second, 1.0)));
         if (position == data->focusCurrent)
             return;
         dispatch("set_lens", { { "focus", std::to_string(position) } });

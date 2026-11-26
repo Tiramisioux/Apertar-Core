@@ -114,18 +114,14 @@ int main()
     CHECK(cef::irisAtFraction(0.0, exact) == 2.8 && cef::irisAtFraction(1.0, exact) == 8.0);
     CHECK(cef::irisAtFraction(-1.0, exact) == 2.8 && cef::irisAtFraction(2.0, exact) == 8.0);
 
-    // Focus: 1 % of the range, at least 1, kept inside the range; nothing without a calibrated range.
-    cef::Data focus;
-    focus.focusMin = 100; focus.focusMax = 1100; focus.focusCurrent = 600;
-    CHECK(cef::focusStepSize(focus, 1.0) == 10 && cef::focusStepSize(focus, 0.01) == 1 && cef::focusStepSize(focus, 5.0) == 50);
-    CHECK(cef::stepFocus(focus, 1, 1.0) == 610 && cef::stepFocus(focus, -3, 1.0) == 570);
-    focus.focusCurrent = 1095;
-    CHECK(cef::stepFocus(focus, 1, 1.0) == 1100 && cef::stepFocus(focus, 100, 1.0) == 1100);
-    focus.focusCurrent = 102;
-    CHECK(cef::stepFocus(focus, -1, 1.0) == 100);
-    CHECK(cef::focusAtFraction(0.0, focus) == 100 && cef::focusAtFraction(1.0, focus) == 1100 && cef::focusAtFraction(0.5, focus) == 600);
-    cef::Data uncalibrated;
-    CHECK(cef::focusStepSize(uncalibrated, 1.0) == 0);
+    // Focus: 1 % of the (library's) range, at least 1, kept inside the range; nothing without one.
+    CHECK(cef::focusStepSize(100, 1100, 1.0) == 10 && cef::focusStepSize(100, 1100, 0.01) == 1 && cef::focusStepSize(100, 1100, 5.0) == 50);
+    CHECK(cef::stepFocus(600, 100, 1100, 1, 1.0) == 610 && cef::stepFocus(600, 100, 1100, -3, 1.0) == 570);
+    CHECK(cef::stepFocus(1095, 100, 1100, 1, 1.0) == 1100 && cef::stepFocus(1095, 100, 1100, 100, 1.0) == 1100);
+    CHECK(cef::stepFocus(102, 100, 1100, -1, 1.0) == 100);
+    CHECK(cef::focusAtFraction(0.0, 100, 1100) == 100 && cef::focusAtFraction(1.0, 100, 1100) == 1100 && cef::focusAtFraction(0.5, 100, 1100) == 600);
+    CHECK(cef::focusStepSize(0, 0, 1.0) == 0 && cef::focusStepSize(5, 3, 1.0) == 0);
+    CHECK(cef::focusStepSize(0, 1192, 1.0) == 12);   // the calibrated Canon EF-S 10-22, not 0..65535
 
     // The JSON: absent lens, and a present one with one control.
     cef::Status absent;
@@ -181,9 +177,18 @@ int main()
         lib.selected = e.key;
     }
     st.library = lib;
-    CHECK(cef::lensState(st) == "uncalibrated");   // the board's range 0..65535
+    CHECK(cef::lensState(st) == "uncalibrated");   // the board's range 0..65535: not calibrated yet
+    st.library.working.focusMin = 0;
+    st.library.working.focusMax = 1192;            // Core's own calibration run
+    CHECK(cef::lensState(st) == "ready");
     st.data->focusMax = 1203;
     CHECK(cef::lensState(st) == "ready");
+    st.library.working.focusMax = 65535;           // a stale 0..65535 entry is no calibration ...
+    CHECK(cef::lensState(st) == "ready");          // ... but the board's valid range is
+    st.data->focusMax = 65535;
+    CHECK(cef::lensState(st) == "uncalibrated");
+    st.library.working.focusMax = 1192;
+    st.data->focusMax = 1203;
     st.data->calibrating = 2;
     CHECK(cef::lensState(st) == "calibrating");
     st.data->calibrating = 0;
@@ -260,6 +265,8 @@ int main()
     a.lastIris = 5.6;
     a.focusMin = 0; a.focusMax = 1203; a.distanceMinCm = 22; a.distanceMaxCm = cef::kInfiniteCm;
     a.capFocus = true; a.capAutofocus = false;
+    a.pwlMap = {0.00153, 964, 0.446, 1000, 4.35, 0};
+    a.stepFrames = 4;
     CHECK(a.calibrated());
     cef::Entry b;
     b.key = "b";
@@ -274,6 +281,61 @@ int main()
     CHECK(g.entries[0].name == a.name && g.entries[0].lensId == 235 && g.entries[0].lastUsed == a.lastUsed);
     CHECK(g.entries[0].apertureMin == 3.5 && g.entries[0].apertureMax == 22.6 && g.entries[0].lastIris == 5.6);
     CHECK(g.entries[0].focusMax == 1203 && g.entries[0].distanceMaxCm == cef::kInfiniteCm && g.entries[0].calibrated());
+    CHECK(g.entries[0].pwlMap == a.pwlMap && g.entries[0].stepFrames == 4u && g.working.pwlMap == a.pwlMap);
+    CHECK(g.entries[1].pwlMap.empty() && !g.entries[1].stepFrames);
+    CHECK(text.find("pwl_map=0.00153,964,0.446,1000,4.35,0\n") != std::string::npos && text.find("step_frames=4\n") != std::string::npos);
+    {   // the map and step_frames count as unsaved changes; a broken map is dropped
+        cef::Library h = g;
+        h.working.name = h.entries[0].name;
+        h.working.key = "a";
+        h.working.pwlMap = h.entries[0].pwlMap;
+        h.working.stepFrames = h.entries[0].stepFrames;
+        CHECK(!cef::unsaved(h));
+        h.working.pwlMap.push_back(0); h.working.pwlMap.push_back(5);
+        CHECK(cef::unsaved(h));
+        h.working.pwlMap = h.entries[0].pwlMap;
+        h.working.stepFrames = 5;
+        CHECK(cef::unsaved(h));
+        CHECK(cef::parse("[lens.x]\nname=X\npwl_map=1,2,3\n").entries[0].pwlMap.empty());
+        CHECK(cef::parse("[lens.x]\nname=X\npwl_map=1,zz\n").entries[0].pwlMap.empty());
+        const auto r = cef::focusRange(g.entries[0]);
+        CHECK(r && r->first == 0 && r->second == 1203 && !cef::focusRange(g.entries[1]));
+    }
+    {   // the calibration and the working lens in the JSON
+        cef::Status js;
+        js.present = true;
+        js.data = *cef::decode(real, 15);   // the board says 0..65535
+        js.library.working.focusMin = 0; js.library.working.focusMax = 1192;
+        js.library.working.pwlMap = {0.00153, 964, 4.35, 0};
+        js.library.working.stepFrames = 4;
+        js.library.working.distanceMinCm = 23; js.library.working.distanceMaxCm = cef::kInfiniteCm;
+        js.calibration.state = "done";
+        js.calibration.pwlMap = js.library.working.pwlMap;
+        js.calibration.stepFrames = 4;
+        const std::string out = cef::statusJson(js, "Manual");
+        CHECK(out.find("\"focus_calibrated\":true,\"focus_min\":0,\"focus_max\":1192,\"board_focus_min\":0,\"board_focus_max\":65535") != std::string::npos);
+        CHECK(out.find("\"distance_min_cm\":23,\"distance_max_cm\":null,\"pwl_map\":[0.00153,964,4.35,0],\"step_frames\":4") != std::string::npos);
+        CHECK(out.find("\"pwl_map\":[0.00153,964,4.35,0],\"step_frames\":4}") != std::string::npos);   // inside calibration
+        cef::Status none;
+        none.present = true;
+        none.data = *cef::decode(real, 15);
+        const std::string blank = cef::statusJson(none, "Manual");
+        {   // the board's own valid range is the fallback
+            cef::Status boardOnly = none;
+            boardOnly.data->focusMax = 1192;
+            CHECK(boardOnly.data->rangeValid());
+            const auto fallback = cef::statusFocusRange(boardOnly);
+            CHECK(fallback && fallback->second == 1192);
+            CHECK(cef::statusJson(boardOnly, "Manual").find("\"focus_calibrated\":true,\"focus_min\":0,\"focus_max\":1192") != std::string::npos);
+            cef::Entry own;
+            own.focusMin = 0; own.focusMax = 900;
+            const auto pick = cef::effectiveFocusRange(own, 0, 1192, true);
+            CHECK(pick && pick->second == 900);   // the library wins
+            CHECK(!cef::effectiveFocusRange(cef::Entry{}, 0, 65535, true) && !cef::effectiveFocusRange(cef::Entry{}, 0, 1192, false));
+        }
+        CHECK(blank.find("\"focus_calibrated\":false,\"focus_min\":0,\"focus_max\":65535") != std::string::npos);
+        CHECK(blank.find("\"pwl_map\":[],\"step_frames\":null") != std::string::npos);
+    }
     CHECK(g.entries[0].capFocus == true && g.entries[0].capAutofocus == false && !g.entries[0].capIris);
     CHECK(g.entries[1].lensId == -1 && !g.entries[1].focusMin && g.entries[1].apertureMin == 0.0 && !g.entries[1].calibrated());
     CHECK(cef::serialize(g) == text);

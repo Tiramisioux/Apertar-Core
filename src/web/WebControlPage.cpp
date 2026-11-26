@@ -23232,6 +23232,8 @@ std::string_view webControlPageHtml()
           parts.push("focus " + cal.focus_min + " to " + cal.focus_max);
         if (typeof cal.distance_min_cm === "number" || typeof cal.distance_max_cm === "number")
           parts.push("distance " + lensDistance(cal.distance_min_cm, "-") + " to " + lensDistance(cal.distance_max_cm, "∞"));
+        if (Array.isArray(cal.pwl_map) && cal.pwl_map.length >= 4)
+          parts.push((cal.pwl_map.length / 2) + " points");
         if (typeof cal.moving_time_ms === "number")
           parts.push("moving time " + (cal.moving_time_ms / 1000).toFixed(1) + " s");
         calText = "Done" + (parts.length ? ": " + parts.join(", ") : "") + "." + (cal.message ? " " + cal.message : "") +

@@ -39,7 +39,7 @@ struct Data {
     uint8_t crc = 0;
 
     int span() const { return focusMax - focusMin; }
-    // A range of 0..0, ..32767 or ..65535 is a lens the board never calibrated (it keeps the range per lens id).
+    // A range of 0..0, ..32767 or ..65535 is a lens the board has not calibrated yet; after a run it holds the real range.
     bool rangeValid() const { return focusRangeValid(focusMin, focusMax); }
 };
 
@@ -200,23 +200,24 @@ inline int irisControlValue(double fNumber)
 
 // ---- focus -------------------------------------------------------------------------------------------------------------
 
-// One focus step in motor units: focusStepPercent of the range, at least 1. 0 when the lens holds no usable range.
-inline int focusStepSize(const Data &data, double percent)
+// One focus step in motor units: focusStepPercent of the range low..high (the working lens's calibrated range), at least 1.
+// 0 when there is no range.
+inline int focusStepSize(int low, int high, double percent)
 {
-    if (!data.rangeValid()) return 0;
-    return std::max(1, static_cast<int>(std::lround(data.span() * percent / 100.0)));
+    if (high <= low) return 0;
+    return std::max(1, static_cast<int>(std::lround(static_cast<double>(high - low) * percent / 100.0)));
 }
 
-// `count` focus steps from the current position, kept inside the lens's range. Positive = farther (towards infinity).
-inline int stepFocus(const Data &data, int count, double percent)
+// `count` focus steps from `current`, kept inside low..high. Positive = farther (towards infinity).
+inline int stepFocus(int current, int low, int high, int count, double percent)
 {
-    const long target = static_cast<long>(data.focusCurrent) + static_cast<long>(count) * focusStepSize(data, percent);
-    return static_cast<int>(std::clamp<long>(target, data.focusMin, data.focusMax));
+    const long target = static_cast<long>(current) + static_cast<long>(count) * focusStepSize(low, high, percent);
+    return static_cast<int>(std::clamp<long>(target, low, high));
 }
 
-inline int focusAtFraction(double fraction, const Data &data)
+inline int focusAtFraction(double fraction, int low, int high)
 {
-    return data.focusMin + static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0) * data.span()));
+    return low + static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0) * static_cast<double>(high - low)));
 }
 
 // ---- state and its JSON ------------------------------------------------------------------------------------------------
@@ -230,7 +231,8 @@ struct Control {
     bool readOnly = false, writeOnly = false, isVolatile = false, executeOnWrite = false;
 };
 
-// One calibration run of the board (the Calibrate button control): start, then Data until `calibrating` clears.
+// One calibration run of the board (the Calibrate button control): press, then Data is polled every 0.5 ms on a worker
+// thread until `calibrating` clears (the whole run takes ~0.3 s), as Pinefeat's calibrate.cpp does. The result is Core's own.
 struct Calibration {
     std::string state = "idle";       // idle, running, done, failed
     std::string message;
@@ -238,6 +240,8 @@ struct Calibration {
     unsigned movingTimeMs = 0;
     std::optional<int> focusMin, focusMax;
     std::optional<unsigned> distanceMinCm, distanceMaxCm;
+    std::vector<double> pwlMap;       // inverse distance (m^-1), position, ...: the rpi.af "map"; empty = none
+    std::optional<unsigned> stepFrames;
 };
 
 struct Status {
@@ -278,7 +282,14 @@ inline std::string jsonNum(double value, int precision = 2)
 }
 
 // absent (no adapter), error (the board does not answer), calibrating, no_lens (lens id 0: assumed, not confirmed on
-// hardware), unknown_lens (nothing saved selected), uncalibrated (the board holds no focus range for this lens id), ready.
+// hardware), unknown_lens (nothing saved selected), uncalibrated (the working lens has no range from Core's own calibration run), ready.
+// The focus range the controls use: the working lens's (Core's own run), else the board's when valid.
+inline std::optional<std::pair<int, int>> statusFocusRange(const Status &status)
+{
+    const Data *data = status.data ? &*status.data : nullptr;
+    return effectiveFocusRange(status.library.working, data ? data->focusMin : 0, data ? data->focusMax : 0, data != nullptr);
+}
+
 inline std::string lensState(const Status &status)
 {
     if (!status.present) return "absent";
@@ -286,9 +297,17 @@ inline std::string lensState(const Status &status)
     if (status.calibration.state == "running" || status.data->calibrating != 0) return "calibrating";
     if (status.data->lensId == 0) return "no_lens";
     if (!find(status.library, status.library.selected)) return "unknown_lens";
-    if (!status.data->rangeValid()) return "uncalibrated";
+    if (!statusFocusRange(status)) return "uncalibrated";
     return "ready";
 }
+
+inline std::string pwlJson(const std::vector<double> &map)
+{
+    std::string out = "[";
+    for (size_t i = 0; i < map.size(); ++i) out += (i ? "," : "") + jsonNum(map[i], 5);
+    return out + "]";
+}
+inline std::string uintOrNull(const std::optional<unsigned> &value) { return value ? std::to_string(*value) : "null"; }
 
 inline std::string cmJson(const std::optional<unsigned> &value)
 {
@@ -320,15 +339,23 @@ inline std::string statusJson(const Status &status, const std::string &afMode)
         << ",\"subdev\":" << (status.subdev.empty() ? "null" : jsonString(status.subdev))
         << ",\"bus\":" << (status.bus >= 0 ? std::to_string(status.bus) : "null");
     const Data *data = status.data ? &*status.data : nullptr;
+    // focus_min/max: the working lens's calibrated range (Core's own run), else the board's when valid, else the board's raw
+    // values (board_focus_min/max always give those). focus_calibrated says which of the first two applies.
+    const auto range = statusFocusRange(status);
+    const bool ownRange = focusRange(library.working).has_value();
     out << ",\"lens_id\":" << (data ? std::to_string(data->lensId) : "null")
         << ",\"moving\":" << (data ? b(data->moving) : "null")
         << ",\"calibrating\":" << (data ? b(data->calibrating != 0) : "null")
-        << ",\"focus_calibrated\":" << (data ? b(data->rangeValid()) : "null")
-        << ",\"focus_min\":" << (data ? std::to_string(data->focusMin) : "null")
-        << ",\"focus_max\":" << (data ? std::to_string(data->focusMax) : "null")
+        << ",\"focus_calibrated\":" << b(range.has_value())
+        << ",\"focus_min\":" << (range ? std::to_string(range->first) : data ? std::to_string(data->focusMin) : "null")
+        << ",\"focus_max\":" << (range ? std::to_string(range->second) : data ? std::to_string(data->focusMax) : "null")
+        << ",\"board_focus_min\":" << (data ? std::to_string(data->focusMin) : "null")
+        << ",\"board_focus_max\":" << (data ? std::to_string(data->focusMax) : "null")
         << ",\"focus_position\":" << (data ? std::to_string(data->focusCurrent) : "null")
-        << ",\"distance_min_cm\":" << (data ? cmJson(data->distanceMinCm) : "null")
-        << ",\"distance_max_cm\":" << (data ? cmJson(data->distanceMaxCm) : "null")
+        << ",\"distance_min_cm\":" << (ownRange ? cmJson(library.working.distanceMinCm) : data ? cmJson(data->distanceMinCm) : "null")
+        << ",\"distance_max_cm\":" << (ownRange ? cmJson(library.working.distanceMaxCm) : data ? cmJson(data->distanceMaxCm) : "null")
+        << ",\"pwl_map\":" << pwlJson(library.working.pwlMap)
+        << ",\"step_frames\":" << uintOrNull(library.working.stepFrames)
         << ",\"iris\":" << (status.iris ? jsonNum(*status.iris) : "null")
         << ",\"aperture_min\":" << (settings.apertureMin > 0.0 ? jsonNum(settings.apertureMin) : "null")
         << ",\"aperture_max\":" << (settings.apertureMax > 0.0 ? jsonNum(settings.apertureMax) : "null")
@@ -348,7 +375,9 @@ inline std::string statusJson(const Status &status, const std::string &afMode)
         << ",\"focus_min\":" << optJson(status.calibration.focusMin)
         << ",\"focus_max\":" << optJson(status.calibration.focusMax)
         << ",\"distance_min_cm\":" << cmJson(status.calibration.distanceMinCm)
-        << ",\"distance_max_cm\":" << cmJson(status.calibration.distanceMaxCm) << "}"
+        << ",\"distance_max_cm\":" << cmJson(status.calibration.distanceMaxCm)
+        << ",\"pwl_map\":" << pwlJson(status.calibration.pwlMap)
+        << ",\"step_frames\":" << uintOrNull(status.calibration.stepFrames) << "}"
         << ",\"error\":" << strOrNull(status.error)
         << ",\"lenses\":[";
     bool first = true;
@@ -360,6 +389,7 @@ inline std::string statusJson(const Status &status, const std::string &afMode)
             << ",\"calibrated\":" << b(e.calibrated())
             << ",\"focus_min\":" << optJson(e.focusMin) << ",\"focus_max\":" << optJson(e.focusMax)
             << ",\"distance_min_cm\":" << cmJson(e.distanceMinCm) << ",\"distance_max_cm\":" << cmJson(e.distanceMaxCm)
+            << ",\"pwl_map\":" << pwlJson(e.pwlMap) << ",\"step_frames\":" << uintOrNull(e.stepFrames)
             << ",\"last_used\":" << strOrNull(e.lastUsed)
             << ",\"capabilities\":{\"iris\":" << boolJson(e.capIris) << ",\"focus\":" << boolJson(e.capFocus)
             << ",\"autofocus\":" << boolJson(e.capAutofocus) << "}"
@@ -397,7 +427,9 @@ public:
     // Each returns "" or what went wrong. The f-number / position are what is sent: callers clamp.
     std::string setFocus(int position);
     std::string setIris(double fNumber);       // remembered in the working lens and the selected entry
-    std::string calibrate();                   // presses the board's Calibrate button; returns at once, read() follows the run
+    // Presses the board's Calibrate button and returns at once; a worker thread (its own fd) polls Data every 0.5 ms like
+    // Pinefeat's calibrate.cpp and stores the result in `calibration` and the working lens. read() reports the run.
+    std::string calibrate();
     // Any writable control, by id ("0x009809aa", "10027434") or name ("focus_absolute", "Focus, Absolute").
     std::string setControl(const std::string &idOrName, long long value);
 

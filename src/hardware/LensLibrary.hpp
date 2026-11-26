@@ -17,12 +17,14 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace apertar::hardware::cef168 {
 
-// The board's focus range when the lens was never calibrated reads 0..0, 0..32767 (the control's default ceiling) or
-// 0..65535 (seen on a Canon EF-S 10-22). Anything else with min < max is a calibration.
+// The board's focus range reads 0..0, 0..32767 (the control's default ceiling) or 0..65535 (seen on a Canon EF-S 10-22)
+// until the lens is calibrated; after a calibration it is the real range (0..1192 on that lens). Anything else with
+// min < max is a calibration.
 inline bool focusRangeValid(int low, int high)
 {
     return low < high && high != 32767 && high != 65535;
@@ -38,6 +40,8 @@ struct Entry {
     double lastIris = 0.0;         // 0 = none
     std::optional<int> focusMin, focusMax;
     std::optional<unsigned> distanceMinCm, distanceMaxCm;   // 65535 = infinity
+    std::vector<double> pwlMap;    // rpi.af "map": inverse focus distance (m^-1), position, ... ascending; empty = none
+    std::optional<unsigned> stepFrames;                      // rpi.af "step_frames" from the lens's moving time
     std::optional<bool> capIris, capFocus, capAutofocus;     // what the lens was shown to do; nothing = untested
 
     bool calibrated() const { return focusMin && focusMax && focusRangeValid(*focusMin, *focusMax); }
@@ -54,7 +58,7 @@ inline bool differs(const Entry &a, const Entry &b)
 {
     return a.name != b.name || a.apertureMin != b.apertureMin || a.apertureMax != b.apertureMax || a.focusMin != b.focusMin ||
         a.focusMax != b.focusMax || a.distanceMinCm != b.distanceMinCm || a.distanceMaxCm != b.distanceMaxCm ||
-        a.capIris != b.capIris || a.capFocus != b.capFocus || a.capAutofocus != b.capAutofocus;
+        a.pwlMap != b.pwlMap || a.stepFrames != b.stepFrames || a.capIris != b.capIris || a.capFocus != b.capFocus || a.capAutofocus != b.capAutofocus;
 }
 
 // "Sigma 18-35 f/1.8" -> "sigma-18-35-f1-8": lowercase ASCII, runs of anything else one '-', the '/' of an f-number dropped.
@@ -153,6 +157,21 @@ inline std::string nowIso()
     char text[32];
     std::strftime(text, sizeof text, "%Y-%m-%dT%H:%M:%SZ", &tm);
     return text;
+}
+
+// The focus range the lens library holds for the working lens (Core's own calibration run), nothing before one.
+inline std::optional<std::pair<int, int>> focusRange(const Entry &entry)
+{
+    if (!entry.calibrated()) return std::nullopt;
+    return std::pair<int, int>{*entry.focusMin, *entry.focusMax};
+}
+
+// The range the controls use: the library's, else the board's own when that is valid, else nothing.
+inline std::optional<std::pair<int, int>> effectiveFocusRange(const Entry &entry, int boardLow, int boardHigh, bool boardPresent)
+{
+    if (const auto own = focusRange(entry)) return own;
+    if (boardPresent && focusRangeValid(boardLow, boardHigh)) return std::pair<int, int>{boardLow, boardHigh};
+    return std::nullopt;
 }
 
 // ---- the operations; each returns "" or what is wrong ------------------------------------------------------------------
@@ -262,6 +281,12 @@ inline void writeEntry(std::ostringstream &out, const Entry &e)
     if (e.focusMax) out << "focus_max=" << *e.focusMax << "\n";
     if (e.distanceMinCm) out << "distance_min_cm=" << *e.distanceMinCm << "\n";
     if (e.distanceMaxCm) out << "distance_max_cm=" << *e.distanceMaxCm << "\n";
+    if (!e.pwlMap.empty()) {
+        out << "pwl_map=";
+        for (size_t i = 0; i < e.pwlMap.size(); ++i) out << (i ? "," : "") << numberText(e.pwlMap[i]);
+        out << "\n";
+    }
+    if (e.stepFrames) out << "step_frames=" << *e.stepFrames << "\n";
     if (e.capIris) out << "cap_iris=" << boolean(e.capIris) << "\n";
     if (e.capFocus) out << "cap_focus=" << boolean(e.capFocus) << "\n";
     if (e.capAutofocus) out << "cap_autofocus=" << boolean(e.capAutofocus) << "\n";
@@ -281,6 +306,20 @@ inline void readKey(Entry &e, const std::string &key, const std::string &value)
     else if (key == "focus_max" && numeric) e.focusMax = static_cast<int>(number);
     else if (key == "distance_min_cm" && numeric && number >= 0) e.distanceMinCm = static_cast<unsigned>(number);
     else if (key == "distance_max_cm" && numeric && number >= 0) e.distanceMaxCm = static_cast<unsigned>(number);
+    else if (key == "pwl_map") {
+        std::vector<double> map;
+        std::istringstream list(value);
+        std::string item;
+        bool ok = true;
+        while (std::getline(list, item, ',')) {
+            char *itemEnd = nullptr;
+            const double n = std::strtod(item.c_str(), &itemEnd);
+            if (item.empty() || *itemEnd != '\0' || !std::isfinite(n)) { ok = false; break; }
+            map.push_back(n);
+        }
+        if (ok && map.size() % 2 == 0) e.pwlMap = std::move(map);
+    }
+    else if (key == "step_frames" && numeric && number >= 0) e.stepFrames = static_cast<unsigned>(number);
     else if (key == "cap_iris") e.capIris = value == "true";
     else if (key == "cap_focus") e.capFocus = value == "true";
     else if (key == "cap_autofocus") e.capAutofocus = value == "true";

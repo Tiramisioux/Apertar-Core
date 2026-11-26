@@ -9,7 +9,10 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <atomic>
+#include <climits>
 #include <fstream>
+#include <map>
 #include <thread>
 
 #include <fcntl.h>
@@ -180,9 +183,73 @@ std::string writeControl(int fd, uint32_t id, long long value)
 using Clock = std::chrono::steady_clock;
 constexpr auto kCalibrationTimeout = std::chrono::seconds(60);   // a full sweep takes a few seconds; this is generous
 constexpr auto kCalibrationNoFlag = std::chrono::seconds(3);     // the board never raised `calibrating`: nothing ran
+constexpr auto kCalibrationMinimum = std::chrono::milliseconds(100);   // calibrate.cpp: never stop sooner than this
+constexpr auto kCalibrationPoll = std::chrono::microseconds(500);
 
-const char *kNoMoveMessage = "The lens did not move. Set the lens switch to AF (not MF) and try again. "
-    "The adapter's switch self-test leaves the switch on the opposite side.";
+const char *kNoStartMessage = "The board did not start a calibration. Set the lens switch to AF and try again.";
+const char *kNoSweepMessage = "The lens did not sweep its focus. Set the lens switch to AF (three AF/MF flips start the "
+    "board's self-test) and try again.";
+
+// What one run of Pinefeat's poll loop found.
+struct CalibrationResult {
+    bool timedOut = false;
+    bool readFailed = false;
+    bool sawFlag = false;           // the board raised `calibrating` at least once
+    std::string readError;
+    std::map<double, int> points;   // inverse distance (m^-1) -> position; the smaller position wins a duplicate distance
+    int positionMin = INT_MAX, positionMax = INT_MIN;   // the positions seen while calibrating == 2
+    unsigned distanceMinCm = UINT_MAX, distanceMaxCm = 0;
+    unsigned movingTimeMs = 0;      // from the last frame, as calibrate.cpp
+    std::optional<Data> last;       // the last frame: its range is the board's own after the run
+};
+
+std::string distanceText(unsigned cm)
+{
+    return cm == kInfiniteCm ? std::string("\xe2\x88\x9e") : jsonNum(cm / 100.0) + " m";
+}
+
+double roundInverse(double value) { return std::round(value * 100000.0) / 100000.0; }
+
+// calibrate.cpp's loop: poll Data every 0.5 ms until `calibrating` is 0 and at least 100 ms went by. `fd` is the worker's own.
+CalibrationResult runPoll(int fd, const std::atomic<bool> &stop)
+{
+    CalibrationResult result;
+    const auto start = Clock::now();
+    int failures = 0;
+    while (!stop) {
+        std::this_thread::sleep_for(kCalibrationPoll);
+        const auto elapsed = Clock::now() - start;
+        std::string error;
+        const auto data = readFrame(fd, &error);
+        if (!data) {
+            if (++failures >= 400) {   // a board that stopped answering (~ a second of nothing but errors)
+                result.readFailed = true;
+                result.readError = error;
+                break;
+            }
+            if (elapsed >= kCalibrationTimeout) { result.timedOut = true; break; }
+            continue;
+        }
+        failures = 0;
+        result.movingTimeMs = data->movingTime;
+        result.last = data;
+        if (data->calibrating != 0) result.sawFlag = true;
+        if (data->calibrating == 2) {
+            result.positionMin = std::min(result.positionMin, data->focusCurrent);
+            result.positionMax = std::max(result.positionMax, data->focusCurrent);
+            if (data->distanceMinCm != 0) {
+                result.distanceMinCm = std::min(result.distanceMinCm, data->distanceMinCm);
+                result.distanceMaxCm = std::max(result.distanceMaxCm, data->distanceMinCm);
+                const double inverse = 100.0 / static_cast<double>(data->distanceMinCm);
+                const auto [it, added] = result.points.try_emplace(inverse, data->focusCurrent);
+                if (!added && data->focusCurrent < it->second) it->second = data->focusCurrent;
+            }
+        }
+        if (data->calibrating == 0 && elapsed >= kCalibrationMinimum && (result.sawFlag || elapsed >= kCalibrationNoFlag)) break;
+        if (elapsed >= kCalibrationTimeout) { result.timedOut = true; break; }
+    }
+    return result;
+}
 } // namespace
 
 struct Cef168Lens::Impl {
@@ -200,15 +267,21 @@ struct Cef168Lens::Impl {
     std::string summary = "{\"present\":false,\"state\":\"absent\",\"lens_name\":\"\",\"iris\":null,\"focus_position\":null}";
 
     Calibration calibration;
-    Clock::time_point calibrationStart;
-    bool calibrationSeen = false;   // the board raised `calibrating` during this run
+    std::mutex *outer = nullptr;    // Cef168Lens::mutex_: the worker takes it only to store its result
+    std::thread worker;             // the calibration poll loop; joined before a new run and in the destructor
+    std::atomic<bool> stopWorker{false};
 
     void close()
     {
         if (fd >= 0) ::close(fd);
         fd = -1;
     }
-    ~Impl() { close(); }
+    ~Impl()
+    {
+        stopWorker = true;
+        if (worker.joinable()) worker.join();
+        close();
+    }
 
     Library &lib()
     {
@@ -233,52 +306,69 @@ struct Cef168Lens::Impl {
         return settings;
     }
 
-    void finishCalibration(const Data &data, bool timedOut)
+    // Worker thread: owns `workerFd` (a second open of the subdev, so the 0.3 s sweep never holds the main fd or mutex_),
+    // polls, then stores the verdict under the lock.
+    void runCalibration(int workerFd)
+    {
+        const CalibrationResult result = runPoll(workerFd, stopWorker);
+        ::close(workerFd);
+        if (stopWorker) return;
+        std::lock_guard<std::mutex> lock(*outer);
+        finishCalibration(result);
+    }
+
+    // Success = at least 2 PWL points and positions that moved. Core's own verdict: the board's min/max (0..65535 on a
+    // Canon EF-S 10-22, always) says nothing about it. Called with the outer mutex held.
+    void finishCalibration(const CalibrationResult &r)
     {
         Calibration &cal = calibration;
         cal.finishedAt = nowIso();
-        cal.focusMin = data.focusMin;
-        cal.focusMax = data.focusMax;
-        cal.distanceMinCm = data.distanceMinCm;
-        cal.distanceMaxCm = data.distanceMaxCm;
+        cal.movingTimeMs = r.movingTimeMs;
         Entry &working = lib().working;
-        const bool evidence = calibrationSeen || cal.movingTimeMs > 0;   // it moved
-        const bool valid = data.rangeValid();
-        if (timedOut) {
+        const bool swept = r.points.size() >= 2 && r.positionMax > r.positionMin;
+        // The board holds the real range after a run (0..1192 on a Canon EF-S 10-22; 0..65535 before it): that counts too.
+        const bool boardRange = r.last && r.last->rangeValid();
+        if (r.timedOut) {
             cal.state = "failed";
             cal.message = "Calibration did not finish in 60 s. Check the lens switch is on AF and try again.";
-        } else if (!evidence) {
+        } else if (r.readFailed) {
             cal.state = "failed";
-            cal.message = kNoMoveMessage;
-            if (!valid) working.capFocus = false, working.capAutofocus = false;
-        } else if (!valid) {
+            cal.message = "The board stopped answering during the calibration" + (r.readError.empty() ? std::string() : ": " + r.readError);
+        } else if (!r.sawFlag) {
             cal.state = "failed";
-            cal.message = "The lens moved, but the board holds no focus range for it (0, 32767 or 65535). Try again; if it stays, this lens does not work with focus control.";
+            cal.message = kNoStartMessage;
+        } else if (!swept && !boardRange) {
+            cal.state = "failed";
+            cal.message = kNoSweepMessage;
             working.capFocus = false;
             working.capAutofocus = false;
         } else {
             cal.state = "done";
-            cal.message = "Calibrated: focus " + std::to_string(data.focusMin) + " to " + std::to_string(data.focusMax) +
-                (data.distanceMinCm == data.distanceMaxCm ? ". The lens reports no focus distance, so autofocus tuning is not possible." : ".");
-            working.focusMin = data.focusMin;
-            working.focusMax = data.focusMax;
-            working.distanceMinCm = data.distanceMinCm;
-            working.distanceMaxCm = data.distanceMaxCm;
+            const int lowest = swept ? r.positionMin : r.last->focusMin;
+            const int highest = swept ? r.positionMax : r.last->focusMax;
+            const unsigned nearest = swept ? r.distanceMinCm : r.last->distanceMinCm;
+            const unsigned farthest = swept ? r.distanceMaxCm : r.last->distanceMaxCm;
+            cal.focusMin = lowest;
+            cal.focusMax = highest;
+            cal.distanceMinCm = nearest;
+            cal.distanceMaxCm = farthest;
+            cal.pwlMap.clear();
+            for (const auto &[inverse, position] : r.points) {
+                cal.pwlMap.push_back(roundInverse(inverse));
+                cal.pwlMap.push_back(position);
+            }
+            cal.stepFrames = r.movingTimeMs < 300 ? 4u : r.movingTimeMs < 350 ? 5u : 6u;
+            cal.message = "Calibrated: focus " + std::to_string(lowest) + " to " + std::to_string(highest) + ", " +
+                distanceText(nearest) + " to " + distanceText(farthest) + ", " + std::to_string(r.points.size()) + " points.";
+            working.focusMin = lowest;
+            working.focusMax = highest;
+            working.distanceMinCm = nearest;
+            working.distanceMaxCm = farthest;
+            working.pwlMap = cal.pwlMap;
+            working.stepFrames = cal.stepFrames;
             working.capFocus = true;
         }
         save();
-    }
-
-    // The sequence of Pinefeat's calibrate.cpp: press Calibrate, poll Data until `calibrating` clears (never before it was
-    // seen, unless it never comes), then read the range the board now holds.
-    void followCalibration(const Data &data)
-    {
-        if (calibration.state != "running") return;
-        const auto elapsed = Clock::now() - calibrationStart;
-        if (data.calibrating != 0) calibrationSeen = true;
-        calibration.movingTimeMs = std::max(calibration.movingTimeMs, data.movingTime);
-        const bool cleared = data.calibrating == 0 && (calibrationSeen || elapsed >= kCalibrationNoFlag);
-        if (cleared || elapsed >= kCalibrationTimeout) finishCalibration(data, !cleared);
     }
 
     Status read(bool controls)
@@ -327,7 +417,6 @@ struct Cef168Lens::Impl {
             irisApplied = false;
             if (adopt(lib(), data.lensId, nowIso())) save();
         }
-        followCalibration(data);
         if (!irisApplied && data.lensId != 0) {   // the lens forgot the iris when it was unplugged or powered
             irisApplied = true;
             const double wanted = lib().working.lastIris;
@@ -342,7 +431,7 @@ struct Cef168Lens::Impl {
     }
 };
 
-Cef168Lens::Cef168Lens() : impl_(std::make_unique<Impl>()) {}
+Cef168Lens::Cef168Lens() : impl_(std::make_unique<Impl>()) { impl_->outer = &mutex_; }
 Cef168Lens::~Cef168Lens() = default;
 
 Status Cef168Lens::read(bool controls)
@@ -391,7 +480,7 @@ std::string Cef168Lens::setFocus(int position)
     std::lock_guard<std::mutex> lock(mutex_);
     const Status status = impl_->read(false);
     if (!status.data) return status.present ? status.error : "No Pinefeat CEF168 lens controller found.";
-    if (status.data->calibrating != 0) return "The lens is calibrating.";
+    if (status.data->calibrating != 0 || impl_->calibration.state == "running") return "The lens is calibrating.";
     return writeControl(impl_->fd, V4L2_CID_FOCUS_ABSOLUTE, position);
 }
 
@@ -402,7 +491,7 @@ std::string Cef168Lens::setIris(double fNumber)
     std::lock_guard<std::mutex> lock(mutex_);
     const Status status = impl_->read(false);
     if (!status.data) return status.present ? status.error : "No Pinefeat CEF168 lens controller found.";
-    if (status.data->calibrating != 0) return "The lens is calibrating.";
+    if (status.data->calibrating != 0 || impl_->calibration.state == "running") return "The lens is calibrating.";
     const std::string error = writeControl(impl_->fd, V4L2_CID_IRIS_ABSOLUTE, value);
     if (error.empty()) {
         impl_->iris = fNumber;
@@ -419,19 +508,23 @@ std::string Cef168Lens::calibrate()
     if (!status.data) return status.present ? status.error : "No Pinefeat CEF168 lens controller found.";
     if (status.data->lensId == 0) return "No lens is mounted.";
     if (impl_->calibration.state == "running" || status.data->calibrating != 0) return "The lens is already calibrating.";
-    if (const std::string error = writeControl(impl_->fd, kCidCalibrate, 1); !error.empty()) return error;
+    if (impl_->worker.joinable()) impl_->worker.join();   // the last run stored its result before it let go of the lock
+    // The worker polls on its own fd, so the sweep never holds the main one. Press Calibrate on it first: the run starts
+    // there and then, and the poll loop begins at once.
+    const int workerFd = ::open(impl_->path.c_str(), O_RDWR | O_CLOEXEC);
+    if (workerFd < 0) return errnoText("Cannot open " + impl_->path, errno);
+    if (const std::string error = writeControl(workerFd, kCidCalibrate, 1); !error.empty()) {
+        ::close(workerFd);
+        return error;
+    }
     Calibration run;
     run.state = "running";
     run.message = "Calibrating: the lens runs through its whole focus range.";
     run.startedAt = nowIso();
     impl_->calibration = run;
-    impl_->calibrationStart = Clock::now();
-    impl_->calibrationSeen = false;
-    // Give the board a moment to raise `calibrating`, so a short run is not missed between two ticks.
-    for (int i = 0; i < 10 && !impl_->calibrationSeen; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        if (const auto data = readFrame(impl_->fd, nullptr); data && data->calibrating != 0) impl_->calibrationSeen = true;
-    }
+    impl_->stopWorker = false;
+    Impl *impl = impl_.get();
+    impl->worker = std::thread([impl, workerFd] { impl->runCalibration(workerFd); });
     return {};
 }
 
