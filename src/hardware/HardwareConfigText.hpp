@@ -56,6 +56,7 @@ inline constexpr SectionInfo kSections[] = {
     {"gpio_switches", "gpio_switches", false, ValueRule::FirstMark, -1, false, false, true},
     {"grove_analog", "grove_analog,grove_adc,analog_controls", true, ValueRule::FirstMark, 1, true, false, true},
     {"camera", "camera", false, ValueRule::Other, -1, false, false, false},
+    {"lens", "lens", false, ValueRule::Other, -1, false, false, false},
     {"imu", "imu", false, ValueRule::FirstMark, -1, true, false, true},
     {"mpu6050", "mpu6050", true, ValueRule::FirstMark, -1, true, false, true},
     {"bmi160", "bmi160", true, ValueRule::FirstMark, -1, true, false, true},
