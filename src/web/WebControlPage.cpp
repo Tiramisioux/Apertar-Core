@@ -5486,7 +5486,7 @@ std::string_view webControlPageHtml()
             <span>Controls</span>
           </button>
           <button class="settings-nav-item lens-nav-dim" data-panel="lens" type="button">
-            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/focuspeaking.png" alt=""></span>
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/lens.png" alt=""></span>
             <span>Lens</span>
           </button>
           <button class="settings-nav-item" data-panel="system" type="button">
