@@ -11928,8 +11928,13 @@ sustained::Context CameraController::limitContextLocked(const CaptureSettings &s
 // The modes Dynamic resolution may use: the enabled list, or every full-frame mode of the sensor while it is empty.
 std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Ladder &list) const
 {
-    if (!list.rungs.empty())
-        return list.rungs;
+    // Saved rungs this sensor lacks belong to another sensor: skipped here (they stay in the saved text); with no
+    // rung of this sensor left, the list stands for the default list, as an empty one does.
+    if (!list.rungs.empty()) {
+        std::vector<ladder::Rung> native = ladder::nativeRungs(list, ladderStatesLocked(list, settings_));
+        if (!native.empty())
+            return native;
+    }
     const std::vector<ladder::Rung> pool = poolModesLocked();
     const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
     double full = 0.0;
@@ -12063,7 +12068,7 @@ void CameraController::fillLadderFieldsLocked(CaptureSettings &out) const
     std::vector<ladder::Candidate> candidates;
     if (covered)
         candidates = candidatesLocked(modeLadder_, out);
-    out.ladderCount = static_cast<uint32_t>(covered ? candidates.size() : modeLadder_.rungs.size());
+    out.ladderCount = static_cast<uint32_t>(covered ? candidates.size() : enabledModesLocked(modeLadder_).size());
     out.ladderActive = modeLadder_.enabled && !ladderOverride_ && covered && ladder::chooseMode(candidates, 0.0) >= 0;
     const std::string base = !covered ? std::string()
         : std::to_string(out.resolution.width) + "\u00d7" + std::to_string(out.resolution.height) + " \u00b7 " +
@@ -12242,6 +12247,8 @@ std::vector<ladder::Rung> CameraController::poolModesLocked() const
         }
         rung.bits = mode.bitDepth;
         rung.clearHdr = mode.clearHdr;
+        if (rung.clearHdr && family != SensorFamily::Imx585)
+            continue;   // Clear HDR is an IMX585 feature
         bool known = false;
         for (const auto &entry : pool)
             known = known || ladder::sameMode(entry, rung);
@@ -12314,7 +12321,7 @@ std::string CameraController::modeLadderJson() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> errors, warnings;
-    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings);
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), errors, warnings, modeLadder_.rungs);
     return modeLadderJsonLocked(modeLadder_, errors, warnings);
 }
 
@@ -12362,7 +12369,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
             persistSettingsLocked();
         }
         std::vector<std::string> shownErrors, shownWarnings;
-        ladder::validateModes(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings);
+        ladder::validateModes(shown, ladderStatesLocked(shown, settings_), shownErrors, shownWarnings, modeLadder_.rungs);
         *json = modeLadderJsonLocked(shown, shownErrors, shownWarnings);
         return true;
     }
@@ -12392,15 +12399,16 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         std::vector<ladder::Rung> edit;
         if (!parseList(enableMode ? *enableMode : *disableMode, edit))
             return false;
-        std::vector<ladder::Rung> list = enabledModesLocked(draft);
-        for (const ladder::Rung &mode : edit) {
-            const auto at = std::find_if(list.begin(), list.end(), [&](const ladder::Rung &r) { return ladder::sameMode(r, mode); });
-            if (enableMode && at == list.end())
-                list.push_back(mode);
-            else if (disableMode && at != list.end())
-                list.erase(at);
-        }
-        if (list.empty()) {
+        // The saved list is edited as saved: rungs of another sensor stay in it. When no saved rung is a mode of
+        // this sensor, the default list becomes explicit beside them.
+        std::vector<ladder::Rung> list = draft.rungs;
+        if (ladder::nativeRungs(draft, ladderStatesLocked(draft, settings_)).empty())
+            for (const ladder::Rung &rung : enabledModesLocked(draft))
+                list.push_back(rung);
+        ladder::applyEdit(list, edit, enableMode.has_value());
+        ladder::Ladder edited = draft;
+        edited.rungs = list;
+        if (disableMode && ladder::nativeRungs(edited, ladderStatesLocked(edited, settings_)).empty()) {
             *error = "Enable at least one resolution.";
             return false;
         }
@@ -12414,7 +12422,10 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
     if (aspects)
         draft.aspects = aspectList;
     std::vector<std::string> errors, warnings;
-    ladder::validateModes(draft, ladderStatesLocked(draft, settings_), errors, warnings);
+    // A list sent as text is all new: a mode this sensor lacks is an error. Otherwise the saved rungs of another
+    // sensor are carried along, and only a newly enabled mode can be an error.
+    ladder::validateModes(draft, ladderStatesLocked(draft, settings_), errors, warnings,
+                          rungs ? std::vector<ladder::Rung>() : modeLadder_.rungs);
     if (dryRun) {
         *json = modeLadderJsonLocked(draft, errors, warnings);
         return true;
@@ -12456,7 +12467,7 @@ bool CameraController::setModeLadder(const std::optional<std::string> &rungs, st
         emitSettingsEventLocked();
     }
     std::vector<std::string> shownErrors, shownWarnings;
-    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings);
+    ladder::validateModes(modeLadder_, ladderStatesLocked(modeLadder_, settings_), shownErrors, shownWarnings, modeLadder_.rungs);
     *json = modeLadderJsonLocked(modeLadder_, shownErrors, shownWarnings);
     return true;
 }

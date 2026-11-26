@@ -225,6 +225,61 @@ int main()
               "take-over: the owner's ladder becomes the enabled list, thresholds and compression dropped");
     }
 
+    // ---- a list saved on another sensor: skipped, kept, never an error unless newly sent ----
+    {
+        const auto mk = [](unsigned w, unsigned h, unsigned bits, bool hdr) { Rung r; r.width = w; r.height = h; r.bits = bits; r.clearHdr = hdr; return r; };
+        // The IMX585 list on an IMX477: only the 2K 12-bit SDR rung is a mode of this sensor.
+        const Ladder saved = fromText(true, "3840x2160:16:hdr,3840x2160:12:hdr,3840x2160:12:sdr,1920x1080:12:sdr,1920x1080:10:sdr", "");
+        const auto states = [](const Ladder &l, const std::vector<Rung> &own) {
+            std::vector<RungState> s;
+            for (const Rung &r : l.rungs) {
+                RungState st;
+                st.valid = std::any_of(own.begin(), own.end(), [&](const Rung &o) { return sameMode(o, r); });
+                st.usable = st.valid;
+                st.modeCeiling = st.valid ? 30 : 0;
+                s.push_back(st);
+            }
+            return s;
+        };
+        const std::vector<Rung> own = { mk(1920, 1080, 12, false), mk(4056, 3040, 12, false) };
+        std::vector<std::string> errors, warnings;
+        validateModes(saved, states(saved, own), errors, warnings, saved.rungs);
+        check(errors.empty() && warnings.size() == 1 && contains(warnings[0], "4 saved modes belong to another sensor"),
+              "foreign rungs: saved ones are skipped with one warning, no error");
+        errors.clear(); warnings.clear();
+        validateModes(saved, states(saved, own), errors, warnings);
+        check(errors.size() == 4 && contains(errors[0], "is not a mode of this sensor."),
+              "foreign rungs: sent as new text, each is still an error");
+        const std::vector<Rung> native = nativeRungs(saved, states(saved, own));
+        check(native.size() == 1 && modesText(native) == "1920x1080:12:sdr", "foreign rungs: nativeRungs keeps only this sensor's");
+        // enable 4056x3040 on the IMX477, then disable it again: the foreign rungs stay in the saved text.
+        std::vector<Rung> list = saved.rungs;
+        applyEdit(list, { mk(4056, 3040, 12, false) }, true);
+        check(modesText(list) == modesText(saved.rungs) + ",4056x3040:12:sdr", "foreign rungs: enable appends, the saved ones stay");
+        applyEdit(list, { mk(1920, 1080, 12, false) }, false);
+        check(modesText(list) == "3840x2160:16:hdr,3840x2160:12:hdr,3840x2160:12:sdr,1920x1080:10:sdr,4056x3040:12:sdr",
+              "foreign rungs: disable removes only that rung");
+        // A newly enabled foreign mode is an error; one already saved is carried silently.
+        Ladder edited = saved;
+        edited.rungs = { mk(3840, 2160, 16, true), mk(2000, 1000, 12, false) };
+        errors.clear(); warnings.clear();
+        validateModes(edited, states(edited, own), errors, warnings, saved.rungs);
+        check(errors.size() == 1 && contains(errors[0], "2000x1000 SDR 12-bit is not a mode"), "foreign rungs: a newly sent foreign mode is an error, a saved one is not");
+        Ladder twice = saved;
+        twice.rungs.push_back(mk(3840, 2160, 16, true));
+        errors.clear(); warnings.clear();
+        validateModes(twice, states(twice, own), errors, warnings, saved.rungs);
+        check(errors.size() == 1 && contains(errors[0], "is listed twice."), "foreign rungs: listed twice stays an error");
+        // All saved rungs foreign: no native rung, the chooser's list is the default (empty native list).
+        Ladder allForeign = fromText(true, "3840x2160:16:hdr,3840x2160:12:hdr", "");
+        check(nativeRungs(allForeign, states(allForeign, own)).empty(), "foreign rungs: all foreign leaves no native rung (default list)");
+        // Record time: a rung whose state is not usable is never chosen, wherever it ranks.
+        std::vector<Candidate> c(2);
+        c[0].mode = mk(3840, 2160, 16, true);  c[0].usable = false; c[0].cap = 25;
+        c[1].mode = mk(1920, 1080, 12, false); c[1].usable = true;  c[1].cap = 30;
+        check(chooseMode(c, 10) == 1 && chooseMode(c, 60) == 1, "chooseMode: a foreign (unusable) rung is never picked, even when it ranks first");
+    }
+
     // ---- the TDN option: off for an unbinned mode, back on for a binned one it turned off for ----
     {
         const auto same = [](TdnChoice c, bool tdn, bool restore) { return c.tdn == tdn && c.restore == restore; };

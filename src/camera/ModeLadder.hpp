@@ -254,19 +254,54 @@ inline std::string toJson(const Ladder &l, const std::vector<RungState> &s, int 
     return out + "],\"errors\":" + list(errors) + ",\"warnings\":" + list(warnings) + "}";
 }
 
-// Errors refuse a save: a repeated mode, a mode this sensor does not have. A warning is shown and saved.
-inline void validateModes(const Ladder &l, const std::vector<RungState> &s,
-                          std::vector<std::string> &errors, std::vector<std::string> &warnings)
+// The saved rungs that are modes of this sensor, in saved order. A saved rung the sensor lacks is a mode of another
+// sensor (the list was saved on it): it stays in the saved text but is never listed or chosen here.
+inline std::vector<Rung> nativeRungs(const Ladder &l, const std::vector<RungState> &s)
 {
+    std::vector<Rung> out;
+    for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i)
+        if (s[i].valid)
+            out.push_back(l.rungs[i]);
+    return out;
+}
+
+// One mode in or out of a saved list (enable_mode / disable_mode): enabling adds a mode the list lacks at the
+// end, disabling removes it. Every other rung, including another sensor's, stays as saved.
+inline void applyEdit(std::vector<Rung> &list, const std::vector<Rung> &edit, bool enable)
+{
+    for (const Rung &mode : edit) {
+        const auto at = std::find_if(list.begin(), list.end(), [&](const Rung &r) { return sameMode(r, mode); });
+        if (enable && at == list.end())
+            list.push_back(mode);
+        else if (!enable && at != list.end())
+            list.erase(at);
+    }
+}
+
+// Errors refuse a save: a repeated mode, a mode this sensor does not have that the operator just sent. A rung
+// in `saved` (the list as saved before this edit) that this sensor does not have is another sensor's: it is
+// kept and skipped, with one warning. A warning is shown and saved.
+inline void validateModes(const Ladder &l, const std::vector<RungState> &s,
+                          std::vector<std::string> &errors, std::vector<std::string> &warnings,
+                          const std::vector<Rung> &saved = {})
+{
+    size_t foreign = 0;
     for (size_t i = 0; i < l.rungs.size() && i < s.size(); ++i) {
         for (size_t j = 0; j < i; ++j)
             if (sameMode(l.rungs[i], l.rungs[j]))
                 errors.push_back(label(l.rungs[i]) + " is listed twice.");
-        if (!s[i].valid)
-            errors.push_back(label(l.rungs[i]) + " is not a mode of this sensor.");
-        else if (!s[i].usable)
+        if (!s[i].valid) {
+            const bool carried = std::any_of(saved.begin(), saved.end(), [&](const Rung &r) { return sameMode(r, l.rungs[i]); });
+            if (carried)
+                ++foreign;
+            else
+                errors.push_back(label(l.rungs[i]) + " is not a mode of this sensor.");
+        } else if (!s[i].usable)
             warnings.push_back(label(l.rungs[i]) + " cannot run in this format; it is skipped.");
     }
+    if (foreign)
+        warnings.push_back(std::to_string(foreign) + (foreign == 1 ? " saved mode belongs" : " saved modes belong") +
+                           " to another sensor; kept, not used on this one.");
 }
 
 // The ladder from the text of its settings (camera_settings.conf keys): the switch, the enabled modes and the
