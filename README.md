@@ -322,6 +322,31 @@ sudo systemctl enable apertar-core-cam1
 
 The start script is the one `apertar-core.service` runs; without `APERTAR_CAMERA` it starts the main Core exactly as before. From the next boot on, the second Core starts with the main one, using the same binary. Before it starts, `apertar-core --camera cam1 --check-dual` looks for a sensor on cam0 and another on cam1; with one sensor or none, systemd skips the unit (`systemctl status apertar-core-cam1` says the condition failed) and no second Core runs. The second Core uses its own socket (`/tmp/apertar-core-cam1.sock`), WebUI port 8001, settings in `/home/pi/.config-cam1` and the hardware file `/home/pi/apertar-hardware-cam1.conf`, which turns every input off; without that file it does not start. The **Dual sensor** switch in the WebUI's Dual Sensor card decides whether the main Core uses it. To remove it: `sudo systemctl disable apertar-core-cam1`.
 
+### Pinefeat CEF168 EF lens adapter (IMX477)
+
+The [Pinefeat CEF168](https://github.com/pinefeat/cef168) drives a Canon EF/EF-S lens (focus and iris) from the camera's I²C bus, at address `0x0d` beside the sensor. Core talks to it through the `cef168` driver's V4L2 subdevice: the WebUI's **Lens** settings panel, `get_lens` / `set_lens` (see [For Developers](#for-developers)), the `lens_*` button and encoder actions and the `lens_focus` / `lens_iris` pot targets. Without the driver Core answers `"present":false` and nothing else changes.
+
+The driver ships in the IMX477 driver package from `Tiramisioux/imx477-v4l2-driver`, branch `apertar` (DKMS 0.0.3). It builds `imx477.ko` and `cef168.ko` together, so a kernel update rebuilds both, and its overlay gains a `cef168` parameter. Do not use Pinefeat's own `configure.sh`: it replaces the IMX477 overlay with the stock one and loses `link-frequency`.
+
+```bash
+git clone -b apertar https://github.com/Tiramisioux/imx477-v4l2-driver.git ~/drivers/imx477-v4l2-driver
+cd ~/drivers/imx477-v4l2-driver && ./setup.sh    # asks for sudo; removes 0.0.1/0.0.2, installs 0.0.3 and the overlay
+```
+
+Then the sensor line in `/boot/firmware/config.txt` gets the parameter (add `,cam0` when the camera is on cam0), and reboot:
+
+```text
+dtoverlay=imx477,cef168
+```
+
+**Only add `cef168` once 0.0.3 is installed.** A lens node without `cef168.ko` keeps the sensor waiting for its lens driver, and the camera never appears. To undo, remove `,cef168` and reboot. The Boot Config card keeps the parameter when it edits the line.
+
+Check after the reboot: `ls /sys/bus/i2c/devices/` lists `0-000d` (cam1; `10-000d` on cam0), and `get_lens` reports `"present":true` with the mounted lens's `lens_id`.
+
+First use of a lens: set the lens switch to **AF**, press **Calibrate** in the Lens panel and wait for "done". The board stores the focus calibration per lens, so this is once per lens. Then enter the lens's aperture range (the lens cannot report it) and **Save as new**. Core picks the saved lens again when it is mounted and sends it its last iris. An uncalibrated lens reads a focus range of 0-65535 and focus stepping is refused.
+
+Autofocus through libcamera also needs an `rpi.af` section in the tuning file (Pinefeat's `calibrate` tool prints one); this is not set up by the above and is untested here.
+
 Before recording, make sure the intended media is actually mounted at the selected path. An existing folder by itself does not prove that an external drive is mounted there.
 
 ### Launch Options
