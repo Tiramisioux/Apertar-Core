@@ -2,6 +2,7 @@
 
 #include "camera/CameraController.hpp"
 #include "audio/AudioRecordingSession.hpp"
+#include "hardware/Cef168Lens.hpp"
 #include "hardware/GpioInput.hpp"
 #include "hardware/StandbyPowerButtonInput.hpp"
 #include "hardware/HardwareScriptRunner.hpp"
@@ -233,6 +234,9 @@ private:
     NeoRotary4Input neoRotary4Input_;
     Pcf8574Input pcf8574Input_;
     HardwareScriptRunner hardwareScriptRunner_;
+    hardware::cef168::Cef168Lens lens_;   // Pinefeat CEF168 lens controller, if its driver is loaded
+    std::string lensBody();
+    std::string handleSetLens(const ControlCommand &command);
     RecordingIndicatorOutput recordingIndicatorOutput_;
     TriggerOutput triggerOutput_;
     AudioRecordingSession soundRecorder_;

@@ -438,6 +438,32 @@ printf '{"cmd":"record_stop"}\n' | socat - UNIX-CONNECT:/tmp/apertar-core.sock
 
 The WebUI also exposes current state at `GET /api/state`.
 
+### Pinefeat CEF168 lens (`get_lens`, `set_lens`)
+
+With the `cef168` driver loaded, the lens adapter is a V4L2 subdevice (`cef168 <bus>-000d`). Without it `get_lens` answers
+`"present":false` and everything else keeps working. The same two commands work on the socket, in `POST /api/command` and
+(through the `lens_*` actions and the `lens_focus` / `lens_iris` pot targets) from buttons, encoders and pots:
+
+```bash
+# the lens: state, focus, iris, calibration, saved lenses and every V4L2 control of the adapter
+printf '{"cmd":"get_lens"}\n' | socat - UNIX-CONNECT:/tmp/apertar-core.sock
+# one step closer to infinity (1 % of the focus range), then iris f/5.6
+printf '{"cmd":"set_lens","focus_step":1}\n' | socat - UNIX-CONNECT:/tmp/apertar-core.sock
+curl -s -X POST http://apertar.local:8000/api/command -d '{"cmd":"set_lens","iris":5.6}'
+# one third stop closed; the lens's range is entered by hand (the lens cannot tell it)
+curl -s -X POST http://apertar.local:8000/api/command -d '{"cmd":"set_lens","aperture_min":1.8,"aperture_max":22,"iris_step":1}'
+# calibrate (lens switch on AF, not recording): returns at once, poll get_lens until calibration.state is done or failed
+curl -s -X POST http://apertar.local:8000/api/command -d '{"cmd":"set_lens","calibrate":true}'
+# save the working lens under a name, later pick it again
+curl -s -X POST http://apertar.local:8000/api/command -d '{"cmd":"set_lens","save_as":"Sigma 18-35"}'
+curl -s -X POST http://apertar.local:8000/api/command -d '{"cmd":"set_lens","select":"sigma-18-35"}'
+```
+
+`set_lens` takes any of `focus`, `focus_step`, `iris`, `iris_step`, `calibrate`, `control` with `value` (any writable control by
+id or name), `select`, `name`, `save_as`, `save_over`, `delete`, `aperture_min`, `aperture_max`, `focus_step_percent` and
+`iris_step_thirds`, and answers like `get_lens`. The saved lenses are in `~/.config/apertar-core/lenses.conf`; the two step
+sizes are `[lens]` in `apertar-hardware.conf`. `get_state` carries a small `lens` summary.
+
 Background recording workers and bounded queues help keep camera requests moving. Recording errors and detected dropped frames are reported rather than hidden. Capture and media-operation guards prevent conflicting actions while data is still being written, but cannot prevent every kernel, driver, storage or power failure.
 
 ## Recording Safely

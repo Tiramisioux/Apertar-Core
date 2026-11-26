@@ -16,6 +16,7 @@
 #include "ipc/TakePlan.hpp"
 #include "util/TakeSlots.hpp"
 #include "hardware/ActionCatalog.hpp"
+#include "hardware/Cef168Lens.hpp"
 #include "hardware/ControlsModel.hpp"
 #include "hardware/GpioChipInfo.hpp"
 #include "hardware/I2cProbe.hpp"
@@ -5208,6 +5209,15 @@ pcie_controller=1000110000.pcie
 # clear_hdr_iso_max_12bit=720
 # clear_hdr_iso_max_16bit=1585
 
+[lens]
+# Pinefeat CEF168 lens controller (Canon EF), when its cef168 driver is loaded. The saved lenses (aperture range,
+# calibration, last iris) are in ~/.config/apertar-core/lenses.conf, written by the WebUI's Lens pane; these two steps
+# are global, and the WebUI writes them too.
+# One focus step (a knob detent, lens_focus_up/down), in percent of the lens's focus range: 0.1 to 100.
+# focus_step_percent=1
+# One iris step (lens_iris_up/down), in third stops: 1 to 9.
+# iris_step_thirds=1
+
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
 # Layouts:
@@ -10232,6 +10242,7 @@ std::string ApertarCoreApp::buildWebStateJson() const
         << ",\"recording_fault\":\"" << escapeJson(camera_.recordingFaultName()) << "\""
         << ",\"network_transport\":\"" << escapeJson(network.transport) << "\""
         << ",\"network_host\":\"" << escapeJson(network.hostLabel) << "\""
+        << ",\"lens\":" << lens_.summaryJson()
         << ",\"system\":{"
         << "\"cpu_usage_percent\":" << jsonNumberOrNull(cpuUsagePercent, 1)
         << ",\"cpu_usage_label\":\"" << std::thread::hardware_concurrency() << " cores active\""
@@ -10796,6 +10807,132 @@ double analogMappedValue(const GroveAnalogInput::AnalogEvent &event,
     return std::clamp(value, low, high);
 }
 
+std::string ApertarCoreApp::lensBody()
+{
+    return "\"lens\":{" + hardware::cef168::statusJson(lens_.read(true), toString(camera_.settings().autofocusMode)) + "}";
+}
+
+// set_lens: the lens library and the settings first, then at most one move of the lens, then the lens as get_lens shows it.
+// Every field works the same over the socket, the WebUI's /api/command and a hardware input (all reach handleCommand).
+std::string ApertarCoreApp::handleSetLens(const ControlCommand &command)
+{
+    namespace lensns = hardware::cef168;
+    std::vector<std::pair<std::string, std::string>> steps;   // [lens] in apertar-hardware.conf: global
+    std::vector<std::function<std::string(lensns::Library &, const std::string &)>> edits;   // lenses.conf, all or nothing
+
+    for (const char *key : {"aperture_min", "aperture_max"}) {
+        const auto value = command.number(key);
+        if (!value) continue;
+        if (*value != 0.0 && (*value < lensns::kApertureLowest || *value > lensns::kApertureHighest))
+            return errorReply(command.id, std::string(key) + " is an f-number from 0.5 to 128 (0 clears it).");
+        const bool minimum = std::string(key) == "aperture_min";
+        const double number = *value;
+        edits.push_back([minimum, number](lensns::Library &library, const std::string &) -> std::string {
+            (minimum ? library.working.apertureMin : library.working.apertureMax) = number;
+            const double low = library.working.apertureMin, high = library.working.apertureMax;
+            if (low > 0.0 && high > 0.0 && low > high)
+                return "aperture_min is the widest f-number, so it cannot be above aperture_max.";
+            return {};
+        });
+    }
+    if (const auto value = command.number("focus_step_percent")) {
+        if (!(*value > 0.0 && *value <= 100.0))
+            return errorReply(command.id, "focus_step_percent is 0.1 to 100.");
+        steps.emplace_back("focus_step_percent", compactNumber(*value));
+    }
+    if (const auto value = command.number("iris_step_thirds")) {
+        if (!(*value >= 1.0 && *value <= 9.0))
+            return errorReply(command.id, "iris_step_thirds is 1 to 9.");
+        steps.emplace_back("iris_step_thirds", std::to_string(std::llround(*value)));
+    }
+
+    // Library: select, delete, name, then the saves, in that order. "select" with an empty value means no lens.
+    if (const auto key = command.string("select"))
+        edits.insert(edits.begin(), [key](lensns::Library &library, const std::string &now) { return lensns::select(library, *key, now); });
+    if (const auto key = command.string("delete"))
+        edits.push_back([key](lensns::Library &library, const std::string &) { return lensns::remove(library, *key); });
+    if (const auto name = command.string("name"))
+        edits.push_back([name](lensns::Library &library, const std::string &) -> std::string {
+            library.working.name = lensns::cleanName(*name);
+            return {};
+        });
+    if (const auto name = command.string("save_as"))
+        edits.push_back([name](lensns::Library &library, const std::string &now) { return lensns::saveAs(library, *name, now); });
+    const std::string saveOver = command.string("save_over").value_or("");
+    if (saveOver == "true" || saveOver == "1" || saveOver == "on")
+        edits.push_back([](lensns::Library &library, const std::string &now) { return lensns::saveOver(library, now); });
+    if (!edits.empty()) {
+        const std::string error = lens_.modify([&](lensns::Library &library, const std::string &now) -> std::string {
+            for (const auto &edit : edits)
+                if (const std::string problem = edit(library, now); !problem.empty())
+                    return problem;
+            return {};
+        });
+        if (!error.empty())
+            return errorReply(command.id, error);
+    }
+    if (!steps.empty())
+        if (const std::string error = lensns::saveStepSettings(steps); !error.empty())
+            return errorReply(command.id, error);
+
+    const std::string calibrate = command.string("calibrate").value_or("");
+    if (calibrate == "true" || calibrate == "1" || calibrate == "on") {
+        if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive())
+            return errorReply(command.id, "Stop recording before calibrating the lens.");
+        if (const std::string error = lens_.calibrate(); !error.empty())   // returns at once; get_lens follows the run
+            return errorReply(command.id, error);
+    }
+
+    const lensns::Settings settings = lens_.settings();
+    const auto focus = command.number("focus");
+    const auto focusStep = command.number("focus_step");
+    if (focus || focusStep) {
+        const lensns::Status status = lens_.read(false);
+        if (!status.data)
+            return errorReply(command.id, status.present ? status.error : "No Pinefeat CEF168 lens controller found.");
+        int position = 0;
+        if (focus) {
+            const int low = status.data->rangeValid() ? status.data->focusMin : 0;
+            const int high = status.data->rangeValid() ? status.data->focusMax : 32767;
+            position = static_cast<int>(std::clamp<long long>(std::llround(*focus), low, high));
+        } else {
+            if (!status.data->rangeValid())
+                return errorReply(command.id, "The lens has no focus range yet: calibrate it first.");
+            position = lensns::stepFocus(*status.data, static_cast<int>(std::clamp(std::llround(*focusStep), -100LL, 100LL)),
+                                         settings.focusStepPercent);
+        }
+        if (const std::string error = lens_.setFocus(position); !error.empty())
+            return errorReply(command.id, error);
+    }
+
+    const auto iris = command.number("iris");
+    const auto irisStep = command.number("iris_step");
+    if (iris || irisStep) {
+        double fNumber = 0.0;
+        if (iris) {
+            if (lensns::irisControlValue(*iris) < 0)
+                return errorReply(command.id, "iris is an f-number from 0.5 to 128.");
+            fNumber = lensns::apertureRange(settings) ? lensns::clampIris(*iris, settings) : lensns::roundF(*iris);
+        } else {
+            const auto current = lens_.iris();
+            fNumber = lensns::stepIris(current ? current : (settings.iris > 0.0 ? std::optional<double>(settings.iris) : std::nullopt),
+                                       static_cast<int>(std::clamp(std::llround(*irisStep), -31LL, 31LL)), settings);
+        }
+        if (const std::string error = lens_.setIris(fNumber); !error.empty())   // also remembers it in the library
+            return errorReply(command.id, error);
+    }
+
+    if (const auto control = command.string("control")) {
+        const auto value = command.number("value");
+        if (!value)
+            return errorReply(command.id, "set_lens control needs value.");
+        if (const std::string error = lens_.setControl(*control, std::llround(*value)); !error.empty())
+            return errorReply(command.id, error);
+    }
+    publishEvent("{\"event\":\"lens\"}");   // a client that shows the lens asks get_lens again
+    return okReply(command.id, lensBody());
+}
+
 std::string ApertarCoreApp::dispatchHardwareInputCommand(ControlCommand command)
 {
     abortSafetyStopFlushForRecord(command.name);   // before hardwareActionMutex_: the safety-stop thread holds it while draining
@@ -10938,6 +11075,25 @@ void ApertarCoreApp::handleHardwareAnalogInput(const GroveAnalogInput::AnalogEve
         return;
     }
 
+    if (target == "lens_focus") {
+        const auto data = lens_.read(false).data;
+        if (!data || !data->rangeValid())
+            return;
+        const int position = static_cast<int>(std::llround(analogMappedValue(event, data->focusMin, data->focusMax, 1.0)));
+        if (position == data->focusCurrent)
+            return;
+        dispatch("set_lens", { { "focus", std::to_string(position) } });
+        return;
+    }
+
+    if (target == "lens_iris") {
+        const double iris = hardware::cef168::irisAtFraction(event.normalized, lens_.settings());
+        if (const auto current = lens_.iris(); current && std::abs(*current - iris) < 0.005)
+            return;
+        dispatch("set_lens", { { "iris", compactNumber(iris) } });
+        return;
+    }
+
     if (target == "headphone_volume") {
         const int volume = static_cast<int>(std::llround(analogMappedValue(event, 0.0, 100.0, 1.0)));
         if (uiSettings.headphoneVolume == volume)
@@ -11053,6 +11209,20 @@ void ApertarCoreApp::handleSingleHardwareInputAction(const std::string &action)
         const int wipe = std::clamp(uiSettings.previewWipe + (action == "preview_wipe_up" ? 5 : -5), 0, 100);
         if (wipe != uiSettings.previewWipe)
             dispatch("set_preview_source", { { "wipe", std::to_string(wipe) } });
+        return;
+    }
+    // Lens (Pinefeat): everything goes through set_lens. The iris step is the configured number of thirds.
+    if (action == "lens_focus_up" || action == "lens_focus_down") {
+        dispatch("set_lens", { { "focus_step", action == "lens_focus_up" ? "1" : "-1" } });
+        return;
+    }
+    if (action == "lens_iris_up" || action == "lens_iris_down") {
+        const int thirds = hardware::cef168::loadStepSettings().irisStepThirds;
+        dispatch("set_lens", { { "iris_step", std::to_string(action == "lens_iris_up" ? thirds : -thirds) } });
+        return;
+    }
+    if (action == "lens_calibrate") {
+        dispatch("set_lens", { { "calibrate", "true" } });
         return;
     }
     if (action == "preview_opacity_up" || action == "preview_opacity_down") {
@@ -13217,6 +13387,8 @@ void ApertarCoreApp::runControlsWorker()
         }
         if (!controlsWorkerRunning_.load())
             break;
+        if (!recordingGateActive())
+            lens_.poll();   // a lens that appears gets its stored iris again
         const std::string text = hardware::configStore().currentText();
         if (text == applied)
             continue;
@@ -14202,7 +14374,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
     }
 
     if (command.name == "help")
-        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_stop_on_dropped_frame\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_dual_sensor_enabled\",\"set_preview_source\",\"set_hdmi1_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
+        return okReply(command.id, "\"commands\":[\"get_state\",\"list_sensor_modes\",\"list_actions\",\"set_controls\",\"set_buffer_mode\",\"set_frames_per_folder\",\"set_clip_merge\",\"set_storage_preroll\",\"storage_preroll\",\"controls_last_input\",\"scan_i2c\",\"test_output\",\"set_iso\",\"set_iso_auto\",\"set_exposure_compensation\",\"set_exposure_metering\",\"set_fps\",\"set_shutter_us\",\"set_shutter_auto\",\"set_wb\",\"set_wb_auto\",\"set_resolution\",\"set_record_format\",\"set_cdng_compression\",\"set_cdng_log\",\"set_lossy_dng_ratio\",\"set_prores_profile\",\"set_prores_color_profile\",\"set_cdng_preview_color_profile\",\"set_tuning_file\",\"set_raw_bit_depth\",\"set_clear_hdr\",\"set_hdr_threshold_high\",\"set_hdr_threshold_low\",\"set_hdr_blend\",\"set_hdr_gain_adder\",\"set_h264_resolution\",\"set_timecode_mode\",\"set_conform_fps\",\"set_clip_name_template\",\"preview_clip_name\",\"set_fps_phase_lock\",\"set_media_trim\",\"set_preview_tdn\",\"set_stop_on_dropped_frame\",\"set_fps_speed_ramp\",\"set_af_mode\",\"set_af_range\",\"set_af_speed\",\"set_af_window\",\"set_photo_mode_enabled\",\"set_photo_long_exposure_enabled\",\"set_photo_bracketing_enabled\",\"set_photo_bracketing_ev\",\"set_photo_timer\",\"set_photo_burst\",\"set_photo_format\",\"set_photo_timelapse\",\"timelapse_start\",\"timelapse_stop\",\"set_focus_peaking_enabled\",\"set_focus_peaking_threshold\",\"set_focus_peaking_color\",\"set_zebra_enabled\",\"set_zebra_threshold\",\"set_false_color_enabled\",\"set_false_color_mode\",\"set_lut_preview_enabled\",\"set_lut_preview_file\",\"set_guides_enabled\",\"set_guides_type\",\"set_guides_thickness\",\"set_center_marker_enabled\",\"set_center_marker_type\",\"set_grayscale_enabled\",\"set_smpte_enabled\",\"set_anamorphic_desqueeze_enabled\",\"set_anamorphic_ratio\",\"set_external_monitor_enabled\",\"set_external_monitor_mode\",\"set_dual_sensor_enabled\",\"set_preview_source\",\"set_hdmi1_source\",\"set_record_cameras\",\"set_cam1_settings\",\"set_cam1_mode\",\"set_external_monitor_info_overlay\",\"set_external_monitor_orientation\",\"set_ui_orientation\",\"set_camera_controls_opacity\",\"set_camera_controls_mode\",\"set_date_time_overlay_enabled\",\"set_recording_frame_enabled\",\"set_frame_buffer_bar_enabled\",\"set_recording_red_timecode_enabled\",\"set_audio_recorded_outline_enabled\",\"set_sound_recorder_enabled\",\"set_record_audio_enabled\",\"set_record_gyro_enabled\",\"set_imu_driver\",\"set_imu_orientation\",\"set_imu_sync_offset\",\"adjust_imu_sync_offset\",\"reset_imu_sync_offset\",\"set_imu_level_reference\",\"clear_imu_level_reference\",\"calibrate_gyro\",\"get_lens\",\"set_lens\",\"set_live_audio_monitoring_enabled\",\"set_audio_meter_enabled\",\"set_audio_input_device\",\"set_audio_output_device\",\"set_input_volume\",\"set_headphone_volume\",\"set_battery_type\",\"set_battery_capacity\",\"set_custom_battery_wh\",\"set_custom_battery_voltage\",\"set_sleep_mode\",\"set_favorites_order\",\"set_value_steps\",\"get_mode_ladder\",\"set_mode_ladder\",\"apply_time_zone\",\"apply_date_time\",\"set_fan_mode\",\"set_boot_config\",\"format_media\",\"eject_media\",\"mount_media\",\"run_media_speed_test\",\"capture_photo\",\"record_start\",\"record_stop\",\"preview_subscribe\",\"restart_system\",\"power_off_system\",\"shutdown\"]");
 
     if (command.name == "get_state") {
         const auto mediaWrite = camera_.mediaWriteStatus();
@@ -14244,6 +14416,7 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
              << ",\"sensor_mono\":" << (camera_.sensorMono() ? "true" : "false")
              << ",\"media_state\":\"" << mediaState.stateName() << "\""
              << ",\"media_alive\":" << (mediaState.mounted() ? "true" : "false")
+             << ",\"lens\":" << lens_.summaryJson()
              << clipMergeStateJson()
              << "," << settingsBody(camera_.settings())
              << cam1StateMembers(cam1Client_, uiState, camera_.isRecording());
@@ -14920,6 +15093,10 @@ std::string ApertarCoreApp::handleCommandLocal(const ControlCommand &command)
             return errorReply(command.id, errorMessage);
         return okReply(command.id, imuStatusBody(false));
     }
+    if (command.name == "get_lens")
+        return okReply(command.id, lensBody());
+    if (command.name == "set_lens")
+        return handleSetLens(command);
     if (command.name == "calibrate_gyro") {
         if (camera_.isRecording() || soundRecordingActive() || camera_.timelapseActive())
             return errorReply(command.id, "Stop recording before calibrating gyro.");
