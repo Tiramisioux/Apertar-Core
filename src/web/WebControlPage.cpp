@@ -5141,6 +5141,7 @@ std::string_view webControlPageHtml()
               <span class="badge" id="resolutionBadge">4K</span>
               <span class="badge" id="fpsBadge">24 FPS</span>
               <span class="badge" id="isoBadge">ISO 400</span>
+              <span class="badge hidden" id="lensBadge" aria-label="Lens"></span>
             </div>
 
             <div class="preview-badges right">
@@ -7025,6 +7026,14 @@ std::string_view webControlPageHtml()
                   <div class="config-meta-label">Lens id</div>
                   <div class="config-meta-value" id="lensIdValue">-</div>
                 </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Focal length</div>
+                  <div class="config-meta-value" id="lensFocalValue">-</div>
+                </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Serial</div>
+                  <div class="config-meta-value" id="lensSerialValue">-</div>
+                </div>
               </div>
               <div class="config-issues info" id="lensAdapterHint" hidden>Install the imx477 driver 0.0.3 and add <code>dtoverlay=imx477,cef168</code> (see README).</div>
             </div>
@@ -7148,6 +7157,19 @@ std::string_view webControlPageHtml()
                 <div class="field-stack">
                   <label class="input-label" for="lensIrisStepInput">Iris step (third stops)</label>
                   <input class="settings-input" id="lensIrisStepInput" type="number" min="1" max="9" step="1" inputmode="numeric" />
+                </div>
+              </div>
+              <div class="settings-field-grid">
+                <div class="field-stack">
+                  <label class="input-label" for="lensSerialDeviceInput">Serial device (focal length, aperture range)</label>
+                  <input class="settings-input" id="lensSerialDeviceInput" type="text" maxlength="128" placeholder="/dev/ttyAMA0, empty = off" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="field-stack">
+                  <label class="input-label" for="lensUiFocusDistanceSelect">Show focus distance on the camera screen</label>
+                  <select class="settings-select" id="lensUiFocusDistanceSelect">
+                    <option value="false">Off</option>
+                    <option value="true">On</option>
+                  </select>
                 </div>
               </div>
               <div class="settings-action-row">
@@ -16946,6 +16968,11 @@ std::string_view webControlPageHtml()
       const isoLabel = snapshot.iso_auto ? (isoInUse > 0 ? String(isoInUse) : "Auto") : String(snapshot.iso);
       setText("isoBadge", "ISO " + isoLabel);
       document.getElementById("isoBadge").classList.toggle("system-value", isoSetByCamera(snapshot));
+      {   // the lens, read only: f-number, focal length, and the focus distance when the camera screen is set to show it
+        const lensText = lensBadgeText(snapshot.lens);
+        setText("lensBadge", lensText);
+        document.getElementById("lensBadge").classList.toggle("hidden", lensText === "");
+      }
       const wbInUse = whiteBalanceAuto && snapshot.wb_measured && Number(snapshot.wb_actual_kelvin) > 0
         ? String(Math.round(Number(snapshot.wb_actual_kelvin))) + "K" : whiteBalanceLabel;
       setText("wbBadge", "WB " + wbInUse);
@@ -23012,6 +23039,47 @@ std::string_view webControlPageHtml()
       return typeof value === "number" && isFinite(value) ? "f/" + (Math.round(value * 10) / 10) : "-";
     }
 
+    // "f/4 · 14 mm · 0.35–0.41 m" from the get_state lens summary; "" without the adapter.
+    function lensBadgeMm(value) {
+      return String(Math.round(value * 10) / 10);
+    }
+
+    function lensBadgeMetres(cm) {
+      const metres = cm / 100;
+      return metres < 1 ? metres.toFixed(2) : metres < 10 ? metres.toFixed(1) : String(Math.round(metres));
+    }
+
+    function lensDistanceBracket(lens) {
+      const near = lens.distance_min_cm;
+      if (typeof near !== "number" || !(near > 0))
+        return "";
+      if (lens.distance_infinity === true)
+        return near >= 65535 ? "\u221e" : lensBadgeMetres(near) + " m\u2013\u221e";
+      const far = lens.distance_max_cm;
+      const low = lensBadgeMetres(near);
+      const high = typeof far === "number" && far > 0 ? lensBadgeMetres(far) : low;
+      return low === high ? low + " m" : low + "\u2013" + high + " m";
+    }
+
+    function lensBadgeText(lens) {
+      if (!lens || lens.present !== true)
+        return "";
+      const parts = [];
+      if (typeof lens.iris === "number" && lens.iris > 0)
+        parts.push(lensFNumber(lens.iris));
+      if (typeof lens.focal_length_mm === "number" && lens.focal_length_mm > 0)
+        parts.push(lensBadgeMm(lens.focal_length_mm) + " mm");
+      else if (typeof lens.focal_min_mm === "number" && typeof lens.focal_max_mm === "number" && lens.focal_min_mm > 0)
+        parts.push(lens.focal_min_mm === lens.focal_max_mm ? lensBadgeMm(lens.focal_min_mm) + " mm"
+          : lensBadgeMm(lens.focal_min_mm) + "\u2013" + lensBadgeMm(lens.focal_max_mm) + " mm");
+      if (lens.show_focus_distance === true) {
+        const distance = lensDistanceBracket(lens);
+        if (distance)
+          parts.push(distance);
+      }
+      return parts.join(" \u00b7 ");
+    }
+
     function lensDistance(cm, nullText) {
       return typeof cm === "number" && isFinite(cm) ? (cm / 100).toFixed(2) + " m" : nullText;
     }
@@ -23108,6 +23176,18 @@ std::string_view webControlPageHtml()
       lensSetText("lensDeviceValue", lens.present ? ((lens.subdev || "-") + (lens.bus !== null && lens.bus !== undefined && lens.bus !== "" ? ", bus " + lens.bus : "")) : "-");
       lensSetText("lensStateValue", stateWord);
       lensSetText("lensIdValue", lens.lens_id !== null && lens.lens_id !== undefined ? String(lens.lens_id) : "-");
+      {
+        const range = typeof lens.focal_min_mm === "number" && typeof lens.focal_max_mm === "number"
+          ? (lens.focal_min_mm === lens.focal_max_mm ? lensBadgeMm(lens.focal_min_mm) : lensBadgeMm(lens.focal_min_mm) + "\u2013" + lensBadgeMm(lens.focal_max_mm)) + " mm" : "";
+        const now = typeof lens.focal_length_mm === "number" ? lensBadgeMm(lens.focal_length_mm) + " mm" : "";
+        lensSetText("lensFocalValue", now && range ? now + " (" + range + ")" : now || range || "-");
+        const serial = lens.serial || {};
+        const serialText = !serial.device ? "Off" : serial.connected
+          ? "Connected" + (serial.firmware ? ", firmware " + serial.firmware : "") + (serial.board_serial ? ", board " + serial.board_serial : "") +
+            (serial.lens_connected ? "" : ", no lens")
+          : (serial.error || "No answer") ;
+        lensSetText("lensSerialValue", serialText);
+      }
       const hint = document.getElementById("lensAdapterHint");
       hint.hidden = lens.present === true;
       if (!lens.present && lens.error) {
@@ -23261,6 +23341,14 @@ std::string_view webControlPageHtml()
         irisStep.value = typeof lens.iris_step_thirds === "number" ? String(lens.iris_step_thirds) : "";
       }
       focusStep.disabled = irisStep.disabled = busy;
+      const serialInput = document.getElementById("lensSerialDeviceInput");
+      if (!lensState.stepsDirty && !lensTypingIn("lensSerialDeviceInput"))
+        serialInput.value = typeof lens.serial_device === "string" ? lens.serial_device : "";
+      serialInput.disabled = busy;
+      const distanceSelect = document.getElementById("lensUiFocusDistanceSelect");
+      if (document.activeElement !== distanceSelect)
+        distanceSelect.value = lens.ui_focus_distance === true ? "true" : "false";
+      distanceSelect.disabled = busy;
       document.getElementById("lensStepsApplyButton").disabled = busy;
 
       renderLensSaved(lens, saved, busy);
@@ -23481,7 +23569,10 @@ std::string_view webControlPageHtml()
 
       bind("lensCalibrateButton", "click", () => lensSet({ calibrate: true }, "Calibration started."));
 
-      ["lensFocusStepInput", "lensIrisStepInput"].forEach((id) => bind(id, "input", () => { lensState.stepsDirty = true; }));
+      ["lensFocusStepInput", "lensIrisStepInput", "lensSerialDeviceInput"].forEach((id) => bind(id, "input", () => { lensState.stepsDirty = true; }));
+      bind("lensUiFocusDistanceSelect", "change", (event) => {
+        void lensSet({ ui_focus_distance: event.target.value === "true" }, "Saved.");
+      });
       bind("lensStepsApplyButton", "click", async () => {
         const focus = Number(document.getElementById("lensFocusStepInput").value);
         const iris = Number(document.getElementById("lensIrisStepInput").value);
@@ -23493,7 +23584,8 @@ std::string_view webControlPageHtml()
           showToast("The iris step is 1 to 9 third stops.", true);
           return;
         }
-        const result = await lensSet({ focus_step_percent: focus, iris_step_thirds: Math.round(iris) }, "Steps saved.");
+        const result = await lensSet({ focus_step_percent: focus, iris_step_thirds: Math.round(iris),
+          serial_device: document.getElementById("lensSerialDeviceInput").value.trim() }, "Steps saved.");
         if (result) {
           lensState.stepsDirty = false;
           renderLens();

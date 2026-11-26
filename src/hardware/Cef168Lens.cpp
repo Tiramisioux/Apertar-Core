@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <atomic>
 #include <climits>
+#include <condition_variable>
 #include <fstream>
 #include <map>
 #include <thread>
@@ -264,7 +265,18 @@ struct Cef168Lens::Impl {
     int lastLensId = -1;
     bool irisApplied = false;   // the working lens's iris went to the lens
     std::optional<double> iris; // the last f-number sent to the lens
-    std::string summary = "{\"present\":false,\"state\":\"absent\",\"lens_name\":\"\",\"iris\":null,\"focus_position\":null}";
+    std::string summary = statusSummaryJson(Status{});
+
+    serial::Cef168Serial serial;    // the board's UART: focal length and aperture range; its own thread
+    Status last;                    // the last look, kept fresh by refresh(); summary and the recording's snapshot come from it
+    LensMetadata published;
+    bool dirty = false;             // the summary changed since the quick tick last told the caller
+    std::function<bool()> gate;     // the camera is idle: the quick tick may touch the I2C bus
+    std::function<void()> notify;
+    std::thread fast;
+    std::mutex fastMutex;
+    std::condition_variable fastWake;
+    bool fastStop = false;
 
     Calibration calibration;
     std::mutex *outer = nullptr;    // Cef168Lens::mutex_: the worker takes it only to store its result
@@ -278,6 +290,12 @@ struct Cef168Lens::Impl {
     }
     ~Impl()
     {
+        {
+            std::lock_guard<std::mutex> lock(fastMutex);
+            fastStop = true;
+        }
+        fastWake.notify_all();
+        if (fast.joinable()) fast.join();
         stopWorker = true;
         if (worker.joinable()) worker.join();
         close();
@@ -303,7 +321,67 @@ struct Cef168Lens::Impl {
         settings.apertureMin = working.apertureMin;
         settings.apertureMax = working.apertureMax;
         settings.iris = working.lastIris;
+        const serial::Values live = serial.values();
+        if (live.connected && live.lensConnected) settings.liveAperture = live.apertureRange;
         return settings;
+    }
+
+    // Called with the outer mutex held: the summary and the recording's lens snapshot follow `last`.
+    void commit()
+    {
+        const std::string text = statusSummaryJson(last);
+        if (text != summary) {
+            summary = text;
+            dirty = true;
+        }
+        const LensMetadata meta = lensMetadata(last);
+        if (!(meta == published)) {
+            published = meta;
+            publishLensMetadata(meta);
+        }
+    }
+
+    // After something changed outside a look (the iris, the library, the serial port's values).
+    void recompute()
+    {
+        last.iris = iris;
+        last.library = lib();
+        last.settings = settings();
+        serial.configure(last.settings.serialDevice);
+        last.serial = serial.values();
+        commit();
+    }
+
+    // The quick tick: with `i2c` the data frame is read again (nothing else touches the bus), then the rest is recomputed.
+    void refresh(bool i2c)
+    {
+        if (!last.present) return;
+        if (i2c && fd >= 0 && last.data && calibration.state != "running" && last.data->calibrating == 0)
+            if (const auto data = readFrame(fd, nullptr)) last.data = data;
+        serial.setPaused(calibration.state == "running" || (last.data && last.data->calibrating != 0));
+        recompute();
+    }
+
+    void fastLoop()
+    {
+        std::unique_lock<std::mutex> wait(fastMutex);
+        while (!fastStop) {
+            fastWake.wait_for(wait, std::chrono::milliseconds(250), [this] { return fastStop; });
+            if (fastStop) break;
+            wait.unlock();
+            const bool idle = gate ? gate() : false;
+            bool fire = false;
+            {
+                std::unique_lock<std::mutex> lock(*outer, std::try_to_lock);   // never queue behind a long call
+                if (lock.owns_lock()) {
+                    refresh(idle);
+                    fire = dirty;
+                    dirty = false;
+                }
+            }
+            if (fire && notify) notify();
+            wait.lock();
+        }
     }
 
     // Worker thread: owns `workerFd` (a second open of the subdev, so the 0.3 s sweep never holds the main fd or mutex_),
@@ -379,7 +457,12 @@ struct Cef168Lens::Impl {
             status.calibration = calibration;
             status.settings = settings();
             status.iris = iris;
-            summary = statusSummaryJson(status);
+            serial.configure(status.settings.serialDevice);
+            status.serial = serial.values();
+            serial.setPaused(calibration.state == "running" || (status.data && status.data->calibrating != 0));
+            if (status.data && status.data->lensId != 0) serial.setLensHint(status.data->lensId);
+            last = status;
+            commit();
             return status;
         };
         const auto found = findSubdev();
@@ -445,6 +528,24 @@ void Cef168Lens::poll()
     read(false);
 }
 
+void Cef168Lens::stop()
+{
+    {
+        std::lock_guard<std::mutex> lock(impl_->fastMutex);
+        impl_->fastStop = true;
+    }
+    impl_->fastWake.notify_all();
+    if (impl_->fast.joinable()) impl_->fast.join();
+}
+
+void Cef168Lens::start(std::function<bool()> gate, std::function<void()> notify)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    impl_->gate = std::move(gate);
+    impl_->notify = std::move(notify);
+    if (!impl_->fast.joinable()) impl_->fast = std::thread([impl = impl_.get()] { impl->fastLoop(); });
+}
+
 std::string Cef168Lens::summaryJson() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -472,7 +573,9 @@ std::string Cef168Lens::modify(const std::function<std::string(Library &, const 
     const bool irisChanged = edited.selected != current.selected || edited.working.lastIris != current.working.lastIris;
     current = std::move(edited);
     if (irisChanged) impl_->irisApplied = false;   // the next look sends the new working lens's iris
-    return impl_->save();
+    const std::string saved = impl_->save();
+    impl_->recompute();
+    return saved;
 }
 
 std::string Cef168Lens::setFocus(int position)
@@ -497,6 +600,7 @@ std::string Cef168Lens::setIris(double fNumber)
         impl_->iris = fNumber;
         rememberIris(impl_->lib(), fNumber);
         impl_->save();
+        impl_->recompute();
     }
     return error;
 }
@@ -553,6 +657,7 @@ std::string Cef168Lens::setControl(const std::string &idOrName, long long value)
         impl_->iris = static_cast<double>(value) / 100.0;
         rememberIris(impl_->lib(), *impl_->iris);
         impl_->save();
+        impl_->recompute();
     }
     return error;
 }
@@ -574,6 +679,11 @@ Settings loadStepSettings()
     Settings settings;
     if (const auto v = number("focus_step_percent"); v && *v > 0.0 && *v <= 100.0) settings.focusStepPercent = *v;
     if (const auto v = number("iris_step_thirds"); v && *v >= 1.0 && *v <= 9.0) settings.irisStepThirds = static_cast<int>(std::lround(*v));
+    if (const auto text = hwconf::effectiveValue(doc, "lens", "serial_device")) settings.serialDevice = hwconf::trim(*text);
+    if (const auto text = hwconf::effectiveValue(doc, "lens", "ui_focus_distance")) {
+        const std::string value = hwconf::trim(*text);
+        settings.uiFocusDistance = value == "true" || value == "1" || value == "on" || value == "yes";
+    }
     return settings;
 }
 

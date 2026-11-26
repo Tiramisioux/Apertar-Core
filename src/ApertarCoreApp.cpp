@@ -5217,6 +5217,13 @@ pcie_controller=1000110000.pcie
 # focus_step_percent=1
 # One iris step (lens_iris_up/down), in third stops: 1 to 9.
 # iris_step_thirds=1
+# The board's serial port, read only: the lens's focal length and aperture range (the iris limits follow it, the recording
+# writes the focal length). Empty = off. On a Pi 5 / CM5 the GPIO14/15 UART0 needs dtoverlay=uart0-pi5 in
+# /boot/firmware/config.txt and then is /dev/ttyAMA0; never /dev/serial0 (the debug console). 115200 8N1.
+# PicoBlade cable: 1 GND, 2 board RXD <- Pi TX (GPIO14), 3 board TXD -> Pi RX (GPIO15), 4 VCC left unconnected.
+# serial_device=/dev/ttyAMA0
+# The touch UI shows the focus distance on the camera screen: true or false.
+# ui_focus_distance=false
 
 [display]
 # Resolutions: 720x720(Default), 640x480, 800x480, 1280x720, 1024x600, 1920x1080
@@ -8747,6 +8754,8 @@ bool ApertarCoreApp::start()
     if (!secondaryRole()) {   // the controls worker restarts the drivers a controls change touches: none on the secondary
         controlsWorkerRunning_ = true;
         controlsThread_ = std::thread(&ApertarCoreApp::runControlsWorker, this);
+        // The lens quick tick (250 ms): the focus distance and the serial values follow the lens, not during a take.
+        lens_.start([this] { return !recordingGateActive(); }, [this] { publishEvent("{\"event\":\"lens\"}"); });
     }
 
     publishEvent("{\"event\":\"camera_state\",\"state\":\"ready\"}");
@@ -8767,6 +8776,7 @@ void ApertarCoreApp::stop()
     wakeControlsWorker();
     if (controlsThread_.joinable())
         controlsThread_.join();
+    lens_.stop();
     pcf8574Input_.stop();
     standbyPowerButton_.stop();
     neoRotary4Input_.stop();
@@ -10844,6 +10854,17 @@ std::string ApertarCoreApp::handleSetLens(const ControlCommand &command)
         if (!(*value >= 1.0 && *value <= 9.0))
             return errorReply(command.id, "iris_step_thirds is 1 to 9.");
         steps.emplace_back("iris_step_thirds", std::to_string(std::llround(*value)));
+    }
+    if (const auto device = command.string("serial_device")) {   // "" turns the serial port off
+        if (device->size() > 128 || device->find_first_of("\r\n=#") != std::string::npos ||
+            (!device->empty() && device->rfind("/dev/", 0) != 0))
+            return errorReply(command.id, "serial_device is a path under /dev (for example /dev/ttyAMA0), or empty for off.");
+        steps.emplace_back("serial_device", *device);
+    }
+    if (const auto flag = command.string("ui_focus_distance")) {
+        if (*flag != "true" && *flag != "false" && *flag != "1" && *flag != "0" && *flag != "on" && *flag != "off")
+            return errorReply(command.id, "ui_focus_distance is true or false.");
+        steps.emplace_back("ui_focus_distance", (*flag == "true" || *flag == "1" || *flag == "on") ? "true" : "false");
     }
 
     // Library: select, delete, name, then the saves, in that order. "select" with an empty value means no lens.

@@ -967,6 +967,9 @@ bool MlvEncoder::open(const std::string &path,
         writeVersionBlock();
         writeClockBlocks(metadata);
         writeIdentityBlock(metadata);
+        lastLens_ = LensMetadata{};
+        if (metadata.lens.any())
+            writeLensBlock(metadata);
         writeRawInfoBlock(firstFrame, metadata);
         writePreviewColorBlock(metadata);
         writeExposureBlock(settings, metadata);
@@ -994,6 +997,8 @@ bool MlvEncoder::writeFrame(const RawFrameView &frame,
     try {
         const uint64_t payloadBytes = rawLayout_.byteCount;
         writePreviewColorBlock(metadata, relativeTimestampUs(frame, metadata));
+        if (metadata.lens.any() && !(metadata.lens == lastLens_))   // zoom, iris or focus moved: one more 96-byte block
+            writeLensBlock(metadata, relativeTimestampUs(frame, metadata));
         if (metadata.whiteBalanceKelvin != lastWbKelvin_ ||
             scaledGain(metadata.colourGains[0]) != lastWbRed_ ||
             scaledGain(metadata.colourGains[1]) != lastWbBlue_)
@@ -1138,6 +1143,32 @@ void MlvEncoder::writeIdentityBlock(const CdngEncoder::Metadata &metadata)
     if (writer.offset() != bytes.size())
         throw std::runtime_error("Internal MLV IDNT size mismatch.");
     writeBytesOrThrow(fd_, bytes, "Failed to write MLV IDNT block");
+}
+
+// mlv_lens_hdr_t: focalLength (mm), focalDist (cm, 0xFFFF = infinity), aperture (f x 100), stabilizer, autofocus, flags, lensID,
+// lensName[32], lensSerial[32]. A block per clip and again whenever a lens value changes.
+void MlvEncoder::writeLensBlock(const CdngEncoder::Metadata &metadata, uint64_t timestampUs)
+{
+    constexpr uint32_t blockSize = 16 + 2 + 2 + 2 + 1 + 1 + 4 + 4 + 32 + 32;
+    const LensMetadata &lens = metadata.lens;
+    std::array<uint8_t, blockSize> bytes{};
+    FixedBufferWriter writer(bytes);
+    writer.fourcc("LENS");
+    writer.le32(blockSize);
+    writer.le64(timestampUs);
+    writer.le16(static_cast<uint16_t>(std::min<uint32_t>((lens.focalLengthX10 + 5) / 10, 0xffffu)));
+    writer.le16(!lens.hasDistance() ? 0u : (lens.flags & LensMetadata::kFlagDistanceInfinite) ? 0xffffu : std::min<uint32_t>(lens.distanceCm, 0xfffeu));
+    writer.le16(static_cast<uint16_t>(std::min<uint32_t>(lens.fNumberX100, 0xffffu)));
+    const uint8_t modes[2] = { 0, 0 };   // stabilizer, autofocus: not known
+    writer.write(modes, sizeof(modes));
+    writer.le32(0);   // flags
+    writer.le32(lens.lensId);
+    writer.fixedAscii(std::string(lens.modelView().substr(0, 31)), 32);
+    writer.fixedAscii(std::string(), 32);   // the lens has no serial the board can read
+    if (writer.offset() != bytes.size())
+        throw std::runtime_error("Internal MLV LENS size mismatch.");
+    writeBytesOrThrow(fd_, bytes, "Failed to write MLV LENS block");
+    lastLens_ = lens;
 }
 
 void MlvEncoder::writeRawInfoBlock(const RawFrameView &frame,

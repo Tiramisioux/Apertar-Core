@@ -4248,6 +4248,7 @@ CdngEncoder::Metadata metadataFromRequest(const CaptureSettings &settings,
     out.colourGains[0] = whiteBalance.red;
     out.colourGains[1] = whiteBalance.blue;
     out.cameraLabel = cachedCameraLabel();
+    out.lens = currentLensMetadata();   // the lens snapshot: a seqlock read, no lock and no I/O on this path
 
     if (auto gain = metadata.get(libcamera::controls::AnalogueGain))
         out.analogueGain = *gain;

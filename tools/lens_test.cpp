@@ -355,6 +355,114 @@ int main()
     CHECK(leftovers == 0);   // no tmp file left behind
     std::filesystem::remove_all(dir);
 
+    // ---- the serial replies (Cef168Serial.hpp): l, a, d, h, v/n; er, nc and garbage give nothing
+    {
+        namespace ser = apertar::hardware::cef168::serial;
+        CHECK(ser::parseFocalLength("12\r\n") == 12.0);
+        CHECK(ser::parseFocalLength(" 135 ") == 135.0);
+        CHECK(ser::parseFocalLength("17.5 mm") == 17.5);
+        CHECK(!ser::parseFocalLength("er") && !ser::parseFocalLength("nc") && !ser::parseFocalLength("") && !ser::parseFocalLength("ok"));
+        CHECK(!ser::parseFocalLength("1x2") && !ser::parseFocalLength("0") && !ser::parseFocalLength("\xff\xfe") && !ser::parseFocalLength("12 13"));
+
+        const auto plain = ser::parseApertureRange("3.5-22.6");
+        CHECK(plain && plain->first == 3.5 && plain->second == 22.6);
+        CHECK(ser::parseApertureRange("f/3.5-22.6") == plain);
+        CHECK(ser::parseApertureRange("f/3.5 - f/22.6\r") == plain);
+        CHECK(ser::parseApertureRange("22.6-3.5") == plain);   // widest first whatever the order
+        CHECK(ser::parseApertureRange("4 22") == (std::pair<double, double>{4.0, 22.0}));
+        CHECK(!ser::parseApertureRange("er") && !ser::parseApertureRange("nc") && !ser::parseApertureRange("3.5") &&
+              !ser::parseApertureRange("") && !ser::parseApertureRange("abc") && !ser::parseApertureRange("0.1-5") && !ser::parseApertureRange("3.5-400"));
+
+        const auto near = ser::parseDistanceRange("0.23-0.23 m");
+        CHECK(near && near->minMetres == 0.23 && near->maxMetres == 0.23 && !near->infinite);
+        CHECK(ser::parseDistanceRange("0.23-0.23") && ser::parseDistanceRange("1.5")->maxMetres == 1.5);
+        const auto inf = ser::parseDistanceRange("0.45 - inf");
+        CHECK(inf && inf->infinite && inf->minMetres == 0.45);
+        CHECK(!ser::parseDistanceRange("er") && !ser::parseDistanceRange("nc") && !ser::parseDistanceRange("xyz") && !ser::parseDistanceRange(""));
+
+        const auto info = ser::parseLensInfo("Lens ID: 0xEB\r\nFocal length: 10-22 mm\r\nZoom: 1x\r\nAperture: f/3.5-22.6\r\nFocus distance: 0.23-0.23 m\r\n");
+        CHECK(info && info->lensId == 0xEB && info->focalMin == 10.0 && info->focalMax == 22.0);
+        CHECK(info && info->aperture && info->aperture->second == 22.6 && info->distance && info->distance->minMetres == 0.23);
+        const auto prime = ser::parseLensInfo("Lens ID: 0x50\nFocal length: 50 mm\n");
+        CHECK(prime && prime->focalMin == 50.0 && prime->focalMax == 50.0 && !prime->aperture);
+        CHECK(!ser::parseLensInfo("er\r\n") && !ser::parseLensInfo("nc") && !ser::parseLensInfo("") && !ser::parseLensInfo("Zoom: 1x\nrandom text\n"));
+        CHECK(ser::parseToken("1.3\r\n") == std::string("1.3") && !ser::parseToken("er") && !ser::parseToken("nc") && !ser::parseToken("\x01\x02"));
+    }
+
+    // ---- the get_state lens summary (a contract with the touch UI), the live aperture range and the recording's lens snapshot
+    {
+        cef::Status status;
+        CHECK(cef::statusSummaryJson(status) == "{\"present\":false,\"state\":\"absent\",\"lens_name\":\"\",\"iris\":null,\"focus_position\":null,"
+                                                "\"aperture_min\":null,\"aperture_max\":null,\"focal_length_mm\":null,\"focal_min_mm\":null,"
+                                                "\"focal_max_mm\":null,\"distance_min_cm\":null,\"distance_max_cm\":null,\"distance_infinity\":false,"
+                                                "\"serial_connected\":false,\"show_focus_distance\":false}");
+        CHECK(!cef::lensMetadata(status).any());
+        uint8_t raw[15];
+        frame(raw, 0xEB, 0, 100, 0, 1192, 600, 35, 41);
+        status.present = true;
+        status.data = cef::decode(raw, 15);
+        status.iris = 5.6;
+        status.library.working.name = "Canon 10-22";
+        status.settings.apertureMin = 4.0;
+        status.settings.apertureMax = 16.0;
+        status.settings.uiFocusDistance = true;
+        std::string json = cef::statusSummaryJson(status);
+        CHECK(json.find("\"iris\":5.6,\"focus_position\":600,\"aperture_min\":4,\"aperture_max\":16,\"focal_length_mm\":null") != std::string::npos);
+        CHECK(json.find("\"distance_min_cm\":35,\"distance_max_cm\":41,\"distance_infinity\":false,\"serial_connected\":false,\"show_focus_distance\":true}") != std::string::npos);
+
+        status.serial.connected = true;
+        status.serial.lensConnected = true;
+        status.serial.focalLengthMm = 14.0;
+        status.serial.focalMinMm = 10.0;
+        status.serial.focalMaxMm = 22.0;
+        status.serial.apertureRange = std::pair<double, double>{3.5, 22.6};
+        status.serial.apertureAtMinFocal = 3.5;
+        status.settings.liveAperture = status.serial.apertureRange;   // what Impl::settings() does
+        json = cef::statusSummaryJson(status);
+        CHECK(json.find("\"aperture_min\":3.5,\"aperture_max\":22.6,\"focal_length_mm\":14,\"focal_min_mm\":10,\"focal_max_mm\":22") != std::string::npos);
+        CHECK(json.find("\"serial_connected\":true") != std::string::npos);
+        // the live range wins over the entered one for clamping and stepping; without it the entry applies
+        CHECK(cef::clampIris(32.0, status.settings) == 22.6 && cef::clampIris(1.4, status.settings) == 3.5);
+        CHECK(cef::stepIris(std::optional<double>(22.6), 3, status.settings) == 22.6);
+        status.settings.liveAperture.reset();
+        CHECK(cef::clampIris(32.0, status.settings) == 16.0);
+        status.settings.liveAperture = status.serial.apertureRange;
+        // get_lens carries the serial object and the live fields, and keeps the entered range
+        const std::string full = cef::statusJson(status, "manual");
+        CHECK(full.find("\"serial\":{\"device\":null,\"connected\":true,") != std::string::npos);
+        CHECK(full.find("\"focal_length_mm\":14,\"focal_min_mm\":10,\"focal_max_mm\":22,\"aperture_range_live\":{\"min\":3.5,\"max\":22.6}") != std::string::npos);
+        CHECK(full.find("\"aperture_min\":4,\"aperture_max\":16") != std::string::npos && full.find("\"ui_focus_distance\":true") != std::string::npos);
+
+        // the board reports 65535 for infinity: max null + distance_infinity, min stays the raw cm
+        frame(raw, 0xEB, 0, 100, 0, 1192, 1192, 450, cef::kInfiniteCm);
+        status.data = cef::decode(raw, 15);
+        json = cef::statusSummaryJson(status);
+        CHECK(json.find("\"distance_min_cm\":450,\"distance_max_cm\":null,\"distance_infinity\":true") != std::string::npos);
+        frame(raw, 0xEB, 0, 100, 0, 1192, 1192, cef::kInfiniteCm, cef::kInfiniteCm);
+        status.data = cef::decode(raw, 15);
+        CHECK(cef::statusSummaryJson(status).find("\"distance_min_cm\":65535,\"distance_max_cm\":null,\"distance_infinity\":true") != std::string::npos);
+
+        // the recording's snapshot
+        const apertar::LensMetadata meta = cef::lensMetadata(status);
+        CHECK(meta.lensId == 0xEB && meta.modelView() == "Canon 10-22" && meta.fNumberX100 == 560 && meta.focalLengthX10 == 140);
+        CHECK(meta.hasDistance() && (meta.flags & apertar::LensMetadata::kFlagDistanceInfinite) && meta.focalMinX10 == 100 && meta.focalMaxX10 == 220);
+        CHECK(meta.apertureMinAtMinX100 == 350 && meta.apertureMinAtMaxX100 == 0 && meta.hasLensInfo());
+        status.library.working.name.clear();
+        CHECK(cef::lensMetadata(status).modelView() == "Canon EF lens id 0xEB");
+        status.serial.connected = false;   // no serial: no focal length, no range, the rest stays
+        const apertar::LensMetadata noSerial = cef::lensMetadata(status);
+        CHECK(!noSerial.hasFocalLength() && !noSerial.hasLensInfo() && noSerial.hasFNumber() && noSerial.hasModel());
+        frame(raw, 0, 0, 0, 0, 0, 0, 0, 0);   // no lens mounted: nothing is written
+        status.data = cef::decode(raw, 15);
+        CHECK(!cef::lensMetadata(status).any());
+
+        // the snapshot: publish and read back
+        apertar::publishLensMetadata(meta);
+        CHECK(apertar::currentLensMetadata() == meta);
+        apertar::publishLensMetadata(apertar::LensMetadata{});
+        CHECK(!apertar::currentLensMetadata().any());
+    }
+
     if (failures == 0) std::puts("lens_test: ok");
     return failures == 0 ? 0 : 1;
 }

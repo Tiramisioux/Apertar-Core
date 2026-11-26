@@ -1,6 +1,7 @@
 #pragma once
 
 #include <apertar/core/Types.hpp>
+#include "LensMetadata.hpp"
 #include "LosslessJpegEncoder.hpp"
 
 #include <cstddef>
@@ -92,6 +93,9 @@ public:
         std::string reelName;
         std::string cameraLabel;
         int rotationDegrees = 0;
+        // The lens, as a snapshot (LensMetadata.hpp): only what is known gets a tag (FNumber, FocalLength, SubjectDistance,
+        // LensModel in the Exif IFD, DNG LensInfo in IFD0). Values may change mid-take; see the dynamic cache below.
+        LensMetadata lens;
     };
 
     struct EncodedRawLayout {
@@ -121,6 +125,9 @@ public:
     static void decodePispRowToMsb16(const uint8_t *src, uint16_t *dst, uint32_t width);
 
 private:
+    // Which lens tags a template has (MainIfdLayoutCache::lensMask).
+    static constexpr uint32_t kLensFNumber = 1, kLensFocalLength = 2, kLensDistance = 4, kLensInfo = 8, kLensModel = 16;
+
     struct MainIfdLayoutCache {
         bool valid = false;
         uint32_t imageWidth = 0;
@@ -145,6 +152,8 @@ private:
         uint32_t reelNameLength = 0;
         uint32_t cameraLabelLength = 0;
         uint32_t softwareLength = 0;
+        uint32_t lensMask = 0;          // which lens tags exist (kLensFNumber ...): a value turning known rebuilds the template once
+        uint32_t lensModelLength = 0;
         size_t mainIfdSize = 0;
     };
 
@@ -161,6 +170,11 @@ private:
         uint32_t exifIsoLong = 800;
         uint32_t exifExposureIndex[2] = { 800u, 1u };
         int32_t neutral[6] = { 1, 1, 1, 1, 1, 1 };
+        LensMetadata lens;               // what the rationals below were made from
+        uint32_t exifFNumber[2] = { 0, 1 };
+        uint32_t exifFocalLength[2] = { 0, 1 };
+        uint32_t exifSubjectDistance[2] = { 0, 1 };
+        uint32_t lensInfo[8] = {};
     };
 
     struct IfdTemplateCache {
@@ -191,6 +205,11 @@ private:
         uint32_t exifIsoLongOffset2 = 0;
         uint32_t exifIsoLongOffset3 = 0;
         uint32_t exposureIndexOffset = 0;
+        char lensModel[LensMetadata::kModelBytes] = {};
+        uint32_t fNumberOffset = 0;
+        uint32_t focalLengthOffset = 0;
+        uint32_t subjectDistanceOffset = 0;
+        uint32_t lensInfoOffset = 0;
     };
 
     std::vector<uint8_t> takePayloadScratch(size_t size) const;

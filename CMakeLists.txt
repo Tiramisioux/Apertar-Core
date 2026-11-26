@@ -95,6 +95,7 @@ add_executable(apertar-core
     src/hardware/GpioChipInfo.cpp
     src/hardware/I2cProbe.cpp
     src/hardware/Cef168Lens.cpp
+    src/hardware/Cef168Serial.cpp
     src/ipc/ControlProtocol.cpp
     src/ipc/ControlClient.cpp
     src/ipc/ControlServer.cpp

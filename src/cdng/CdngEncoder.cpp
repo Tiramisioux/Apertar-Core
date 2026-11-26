@@ -1524,6 +1524,7 @@ void CdngEncoder::writeDngFile(const std::string &path,
                std::fabs(cache.fps - dynamic.fps) < 0.0001 &&
                cache.iso == dynamic.iso &&
                cache.shutterUs == dynamic.shutterUs &&
+               cache.lens == dynamic.lens &&
                std::fabs(cache.colourGain0 - dynamic.colourGains[0]) < 0.0001f &&
                std::fabs(cache.colourGain1 - dynamic.colourGains[1]) < 0.0001f;
     };
@@ -1544,6 +1545,23 @@ void CdngEncoder::writeDngFile(const std::string &path,
         dynamicMetadataCache_.exifIsoLong = std::max<uint32_t>(1u, metadata.iso);
         dynamicMetadataCache_.exifExposureIndex[0] = std::max<uint32_t>(1u, metadata.iso);
         dynamicMetadataCache_.exifExposureIndex[1] = 1u;
+        {   // the lens rationals: made again only when a lens value changed (a zoom, an iris step, a focus move)
+            const LensMetadata &lens = metadata.lens;
+            dynamicMetadataCache_.lens = lens;
+            dynamicMetadataCache_.exifFNumber[0] = lens.fNumberX100;
+            dynamicMetadataCache_.exifFNumber[1] = 100u;
+            dynamicMetadataCache_.exifFocalLength[0] = lens.focalLengthX10;
+            dynamicMetadataCache_.exifFocalLength[1] = 10u;
+            const bool infinite = (lens.flags & LensMetadata::kFlagDistanceInfinite) != 0;
+            dynamicMetadataCache_.exifSubjectDistance[0] = infinite ? 0xFFFFFFFFu : lens.distanceCm;   // EXIF: all ones = infinity
+            dynamicMetadataCache_.exifSubjectDistance[1] = infinite ? 1u : 100u;
+            const uint32_t info[8] = {
+                lens.focalMinX10, 10u, lens.focalMaxX10, 10u,
+                lens.apertureMinAtMinX100, lens.apertureMinAtMinX100 ? 100u : 0u,   // 0/0 = unknown
+                lens.apertureMinAtMaxX100, lens.apertureMinAtMaxX100 ? 100u : 0u,
+            };
+            std::memcpy(dynamicMetadataCache_.lensInfo, info, sizeof(info));
+        }
 
         float neutralValues[3] = {
             1.0f / std::max(metadata.colourGains[0], 0.0001f),
@@ -1591,6 +1609,10 @@ void CdngEncoder::writeDngFile(const std::string &path,
         key.reelNameLength = static_cast<uint32_t>(metadata.reelName.size());
         key.cameraLabelLength = static_cast<uint32_t>(metadata.cameraLabel.size());
         key.softwareLength = static_cast<uint32_t>(metadata.software.size());
+        key.lensMask = (metadata.lens.hasFNumber() ? kLensFNumber : 0u) | (metadata.lens.hasFocalLength() ? kLensFocalLength : 0u) |
+                       (metadata.lens.hasDistance() ? kLensDistance : 0u) | (metadata.lens.hasLensInfo() ? kLensInfo : 0u) |
+                       (metadata.lens.hasModel() ? kLensModel : 0u);
+        key.lensModelLength = static_cast<uint32_t>(metadata.lens.modelView().size());
         return key;
     };
 
@@ -1617,7 +1639,9 @@ void CdngEncoder::writeDngFile(const std::string &path,
                left.serialLength == right.serialLength &&
                left.reelNameLength == right.reelNameLength &&
                left.cameraLabelLength == right.cameraLabelLength &&
-               left.softwareLength == right.softwareLength;
+               left.softwareLength == right.softwareLength &&
+               left.lensMask == right.lensMask &&
+               left.lensModelLength == right.lensModelLength;
     };
 
     const MainIfdLayoutCache layoutKey = makeMainIfdLayoutKey();
@@ -1634,7 +1658,8 @@ void CdngEncoder::writeDngFile(const std::string &path,
                ifdTemplateCache_.serial == metadata.serial &&
                ifdTemplateCache_.reelName == metadata.reelName &&
                ifdTemplateCache_.cameraLabel == metadata.cameraLabel &&
-               ifdTemplateCache_.software == metadata.software;
+               ifdTemplateCache_.software == metadata.software &&
+               std::memcmp(ifdTemplateCache_.lensModel, metadata.lens.model, sizeof(ifdTemplateCache_.lensModel)) == 0;
     };
 
     auto buildMainIfdBuffer = [&](tiff::MemoryBuffer &buffer, uint32_t exifIfdOffset, size_t reserveHint) {
@@ -1739,6 +1764,8 @@ void CdngEncoder::writeDngFile(const std::string &path,
         ifd.add(0xC61F, tiff::Short, 2, defaultCropOrigin);
         ifd.add(0xC620, tiff::Short, 2, defaultCropSize);
         ifd.add(0xC62A, tiff::SRational, 1, baselineExposure);
+        if (layoutKey.lensMask & kLensInfo)
+            ifd.add(0xC630, tiff::Rational, 4, dynamicMetadataCache_.lensInfo);   // LensInfo
 
         appendAscii(ifd, 0x9003, originalDate);
         ifd.add(kCinemaDngTagTimeCodes, tiff::Byte, static_cast<uint32_t>(tc.size()), tc.data());
@@ -1767,6 +1794,14 @@ void CdngEncoder::writeDngFile(const std::string &path,
         exifIfd.add(0x8833, tiff::Long, 1, &dynamicMetadataCache_.exifIsoLong);     // ISOSpeed
         appendAscii(exifIfd, 0x9003, originalDate);           // DateTimeOriginal
         exifIfd.add(0xA215, tiff::Rational, 1, dynamicMetadataCache_.exifExposureIndex); // ExposureIndex
+        if (layoutKey.lensMask & kLensFNumber)
+            exifIfd.add(0x829D, tiff::Rational, 1, dynamicMetadataCache_.exifFNumber);          // FNumber
+        if (layoutKey.lensMask & kLensFocalLength)
+            exifIfd.add(0x920A, tiff::Rational, 1, dynamicMetadataCache_.exifFocalLength);      // FocalLength (mm)
+        if (layoutKey.lensMask & kLensDistance)
+            exifIfd.add(0x9206, tiff::Rational, 1, dynamicMetadataCache_.exifSubjectDistance);  // SubjectDistance (m)
+        if (layoutKey.lensMask & kLensModel)
+            appendAscii(exifIfd, 0xA434, std::string(metadata.lens.modelView()));               // LensModel
         exifIfd.add(0xA002, tiff::Long, 1, &imageWidth);      // PixelXDimension
         exifIfd.add(0xA003, tiff::Long, 1, &imageHeight);     // PixelYDimension
 
@@ -1795,6 +1830,7 @@ void CdngEncoder::writeDngFile(const std::string &path,
         ifdTemplateCache_.reelName = metadata.reelName;
         ifdTemplateCache_.cameraLabel = metadata.cameraLabel;
         ifdTemplateCache_.software = metadata.software;
+        std::memcpy(ifdTemplateCache_.lensModel, metadata.lens.model, sizeof(ifdTemplateCache_.lensModel));
         ifdTemplateCache_.bytes = std::move(mainIfd.bytes);
         ifdTemplateCache_.pageNameFieldSize = metadata.frameFileName.empty()
             ? 0u
@@ -1826,6 +1862,14 @@ void CdngEncoder::writeDngFile(const std::string &path,
             findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, exifRelativeOffset, 0x8833, true);
         ifdTemplateCache_.exposureIndexOffset =
             findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, exifRelativeOffset, 0xA215, false);
+        if (layoutKey.lensMask & kLensFNumber)
+            ifdTemplateCache_.fNumberOffset = findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, exifRelativeOffset, 0x829D, false);
+        if (layoutKey.lensMask & kLensFocalLength)
+            ifdTemplateCache_.focalLengthOffset = findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, exifRelativeOffset, 0x920A, false);
+        if (layoutKey.lensMask & kLensDistance)
+            ifdTemplateCache_.subjectDistanceOffset = findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, exifRelativeOffset, 0x9206, false);
+        if (layoutKey.lensMask & kLensInfo)
+            ifdTemplateCache_.lensInfoOffset = findIfdTagValueOffset(ifdTemplateCache_.bytes, ifdOffset, 0, 0xC630, false);
         recycleReusableBytes(mainIfdScratch_, std::vector<uint8_t>{});
     }
 
@@ -1854,6 +1898,17 @@ void CdngEncoder::writeDngFile(const std::string &path,
     std::memcpy(ifdBytes.data() + ifdTemplateCache_.exposureIndexOffset,
                 dynamicMetadataCache_.exifExposureIndex,
                 sizeof(dynamicMetadataCache_.exifExposureIndex));
+    {   // the lens slots: 8 to 32 bytes each, fixed in size, so a changed value is a memcpy and not a rebuilt template
+        const uint32_t mask = ifdTemplateCache_.layout.lensMask;
+        if (mask & kLensFNumber)
+            std::memcpy(ifdBytes.data() + ifdTemplateCache_.fNumberOffset, dynamicMetadataCache_.exifFNumber, 8);
+        if (mask & kLensFocalLength)
+            std::memcpy(ifdBytes.data() + ifdTemplateCache_.focalLengthOffset, dynamicMetadataCache_.exifFocalLength, 8);
+        if (mask & kLensDistance)
+            std::memcpy(ifdBytes.data() + ifdTemplateCache_.subjectDistanceOffset, dynamicMetadataCache_.exifSubjectDistance, 8);
+        if (mask & kLensInfo)
+            std::memcpy(ifdBytes.data() + ifdTemplateCache_.lensInfoOffset, dynamicMetadataCache_.lensInfo, 32);
+    }
 
     std::array<uint8_t, 8> header{};
     header[0] = 'I';

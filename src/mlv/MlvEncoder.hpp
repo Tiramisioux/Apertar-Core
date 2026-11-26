@@ -44,6 +44,7 @@ private:
     void writeVersionBlock();
     void writeClockBlocks(const CdngEncoder::Metadata &metadata);
     void writeIdentityBlock(const CdngEncoder::Metadata &metadata);
+    void writeLensBlock(const CdngEncoder::Metadata &metadata, uint64_t timestampUs = 0);
     void writeRawInfoBlock(const RawFrameView &frame,
                            const CdngEncoder::Metadata &metadata);
     void writeExposureBlock(const CaptureSettings &settings,
@@ -73,6 +74,7 @@ private:
     uint32_t lastWbBlue_ = 0;
     std::array<int32_t, 9> lastPreviewCcm_{};
     bool previewColorWritten_ = false;
+    LensMetadata lastLens_{};   // the lens the last LENS block described
 };
 
 } // namespace apertar

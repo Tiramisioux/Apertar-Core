@@ -2,6 +2,8 @@
 // Pinefeat CEF168 lens controller (Canon EF), the Linux driver "cef168": a V4L2 subdevice on the camera's I2C bus.
 // This header is the pure part (the 15-byte data frame, its CRC, the third-stop iris table, the stepping and the
 // get_lens JSON): no I/O, host-tested by tools/lens_test.cpp. The device part is Cef168Lens.cpp.
+#include "cdng/LensMetadata.hpp"
+#include "hardware/Cef168Serial.hpp"
 #include "hardware/LensLibrary.hpp"
 
 #include <algorithm>
@@ -108,6 +110,11 @@ struct Settings {
     double focusStepPercent = 1.0;  // one focus step, in percent of the lens's focus range
     int irisStepThirds = 1;         // one iris step, in third stops
     double iris = 0.0;              // the working lens's last commanded f-number; 0 = none
+    std::string serialDevice;       // [lens] serial_device: the board's UART, e.g. /dev/ttyAMA0; empty = off
+    bool uiFocusDistance = false;   // [lens] ui_focus_distance: the touch UI shows the focus distance
+    // The aperture range the lens reports over serial at its current zoom (widest, narrowest). When there is one it is the range
+    // the controls clamp to; the operator-entered apertureMin/apertureMax (the library) stay what get_lens shows to edit.
+    std::optional<std::pair<double, double>> liveAperture;
 };
 
 inline constexpr double kApertureLowest = 0.5;    // what an entered f-number may be
@@ -128,6 +135,7 @@ inline double roundF(double value) { return std::round(value * 100.0) / 100.0; }
 // The configured range, ordered; nothing when neither end is entered. One end entered leaves the other open.
 inline std::optional<std::pair<double, double>> apertureRange(const Settings &settings)
 {
+    if (settings.liveAperture) return settings.liveAperture;
     if (settings.apertureMin <= 0.0 && settings.apertureMax <= 0.0) return std::nullopt;
     const double low = settings.apertureMin > 0.0 ? settings.apertureMin : irisTable().front();
     const double high = settings.apertureMax > 0.0 ? settings.apertureMax : irisTable().back();
@@ -253,6 +261,7 @@ struct Status {
     int bus = -1;
     std::optional<Data> data;         // nothing when the board did not answer
     std::optional<double> iris;       // the last commanded f-number
+    serial::Values serial;            // the board's UART (empty device = off)
     std::vector<Control> controls;
     std::string error;
 };
@@ -317,14 +326,77 @@ inline std::string boolJson(const std::optional<bool> &value) { return value ? (
 inline std::string optJson(const std::optional<int> &value) { return value ? std::to_string(*value) : "null"; }
 inline std::string strOrNull(const std::string &text) { return text.empty() ? "null" : jsonString(text); }
 
-// The small `lens` object of get_state: what a status bar needs.
+inline std::string numOrNull(const std::optional<double> &value, int precision = 1) { return value ? jsonNum(*value, precision) : "null"; }
+
+// The focal length the lens reports, when the serial link has a lens behind it.
+inline std::optional<double> liveFocalLength(const Status &status)
+{
+    return status.serial.connected && status.serial.lensConnected ? status.serial.focalLengthMm : std::nullopt;
+}
+
+// The widest and narrowest f-number the controls clamp to: the live range, else the operator's entry; nothing when neither.
+inline std::optional<std::pair<double, double>> effectiveAperture(const Status &status) { return apertureRange(status.settings); }
+
+// The small `lens` object of get_state (a contract with the touch UI): what a status bar and the camera screen need.
+// distance_min_cm / distance_max_cm are the board's current focus-distance bracket (I2C data frame); the far end 65535 is infinity:
+// distance_infinity is then true and distance_max_cm null.
 inline std::string statusSummaryJson(const Status &status)
 {
     const Data *data = status.data ? &*status.data : nullptr;
+    const auto aperture = effectiveAperture(status);
+    const bool infinity = data && data->distanceMaxCm == kInfiniteCm;
+    const bool live = status.serial.connected;
     return "{\"present\":" + std::string(status.present ? "true" : "false") + ",\"state\":" + jsonString(lensState(status)) +
         ",\"lens_name\":" + jsonString(status.library.working.name) +
         ",\"iris\":" + (status.iris ? jsonNum(*status.iris) : "null") +
-        ",\"focus_position\":" + (data ? std::to_string(data->focusCurrent) : "null") + "}";
+        ",\"focus_position\":" + (data ? std::to_string(data->focusCurrent) : "null") +
+        ",\"aperture_min\":" + (aperture ? jsonNum(aperture->first) : "null") +
+        ",\"aperture_max\":" + (aperture ? jsonNum(aperture->second) : "null") +
+        ",\"focal_length_mm\":" + numOrNull(liveFocalLength(status)) +
+        ",\"focal_min_mm\":" + (live ? numOrNull(status.serial.focalMinMm) : "null") +
+        ",\"focal_max_mm\":" + (live ? numOrNull(status.serial.focalMaxMm) : "null") +
+        ",\"distance_min_cm\":" + (data ? std::to_string(data->distanceMinCm) : "null") +
+        ",\"distance_max_cm\":" + (data && !infinity ? std::to_string(data->distanceMaxCm) : "null") +
+        ",\"distance_infinity\":" + (infinity ? "true" : "false") +
+        ",\"serial_connected\":" + (status.serial.connected ? "true" : "false") +
+        ",\"show_focus_distance\":" + (status.settings.uiFocusDistance ? "true" : "false") + "}";
+}
+
+// What a recording writes about the lens: nothing without a lens on the board, else what is known (the f-number is the one
+// Core commanded, the focal length and range come over serial, the focus distance from the I2C data frame).
+inline LensMetadata lensMetadata(const Status &status)
+{
+    LensMetadata out;
+    const Data *data = status.data ? &*status.data : nullptr;
+    if (!data || data->lensId == 0) return out;
+    const auto tenths = [](double value) { return static_cast<uint32_t>(std::lround(value * 10.0)); };
+    const auto hundredths = [](double value) { return static_cast<uint32_t>(std::lround(value * 100.0)); };
+    out.lensId = data->lensId;
+    if (!status.library.working.name.empty()) out.setModel(status.library.working.name);
+    else {
+        char text[40];
+        std::snprintf(text, sizeof(text), "Canon EF lens id 0x%02X", static_cast<unsigned>(data->lensId));
+        out.setModel(text);
+    }
+    if (status.iris && *status.iris > 0.0) out.fNumberX100 = hundredths(*status.iris);
+    if (const auto focal = liveFocalLength(status)) out.focalLengthX10 = tenths(*focal);
+    if (data->distanceMinCm != 0) {
+        out.flags |= LensMetadata::kFlagHasDistance;
+        out.distanceCm = data->distanceMinCm;
+        if (data->distanceMinCm == kInfiniteCm) out.flags |= LensMetadata::kFlagDistanceInfinite;
+    } else if (status.serial.connected && status.serial.distance && status.serial.distance->minMetres > 0.0) {
+        out.flags |= LensMetadata::kFlagHasDistance;
+        out.distanceCm = static_cast<uint32_t>(std::lround(status.serial.distance->minMetres * 100.0));
+    }
+    if (status.serial.connected && status.serial.lensConnected) {
+        if (status.serial.focalMinMm && status.serial.focalMaxMm) {
+            out.focalMinX10 = tenths(*status.serial.focalMinMm);
+            out.focalMaxX10 = tenths(*status.serial.focalMaxMm);
+        }
+        if (status.serial.apertureAtMinFocal) out.apertureMinAtMinX100 = hundredths(*status.serial.apertureAtMinFocal);
+        if (status.serial.apertureAtMaxFocal) out.apertureMinAtMaxX100 = hundredths(*status.serial.apertureAtMaxFocal);
+    }
+    return out;
 }
 
 // The members of the `lens` object of get_lens and set_lens, without the braces.
@@ -362,6 +434,20 @@ inline std::string statusJson(const Status &status, const std::string &afMode)
         << ",\"focus_step_percent\":" << jsonNum(settings.focusStepPercent)
         << ",\"iris_step_thirds\":" << settings.irisStepThirds
         << ",\"af_mode\":" << jsonString(afMode)
+        << ",\"ui_focus_distance\":" << b(settings.uiFocusDistance)
+        << ",\"serial_device\":" << jsonString(settings.serialDevice)
+        << ",\"serial\":{\"device\":" << strOrNull(settings.serialDevice) << ",\"connected\":" << b(status.serial.connected)
+        << ",\"lens_connected\":" << b(status.serial.lensConnected)
+        << ",\"firmware\":" << strOrNull(status.serial.firmware) << ",\"board_serial\":" << strOrNull(status.serial.boardSerial)
+        << ",\"lens_id\":" << (status.serial.lensId ? std::to_string(*status.serial.lensId) : "null")
+        << ",\"distance_min_m\":" << (status.serial.distance ? jsonNum(status.serial.distance->minMetres) : "null")
+        << ",\"distance_max_m\":" << (status.serial.distance && !status.serial.distance->infinite ? jsonNum(status.serial.distance->maxMetres) : "null")
+        << ",\"distance_infinity\":" << b(status.serial.distance && status.serial.distance->infinite)
+        << ",\"error\":" << strOrNull(status.serial.error) << "}"
+        << ",\"focal_length_mm\":" << numOrNull(liveFocalLength(status))
+        << ",\"focal_min_mm\":" << (status.serial.connected ? numOrNull(status.serial.focalMinMm) : "null")
+        << ",\"focal_max_mm\":" << (status.serial.connected ? numOrNull(status.serial.focalMaxMm) : "null")
+        << ",\"aperture_range_live\":" << (settings.liveAperture ? "{\"min\":" + jsonNum(settings.liveAperture->first) + ",\"max\":" + jsonNum(settings.liveAperture->second) + "}" : std::string("null"))
         << ",\"lens_key\":" << strOrNull(library.selected)
         << ",\"lens_name\":" << jsonString(library.working.name)
         << ",\"unsaved\":" << b(unsaved(library))
@@ -433,7 +519,14 @@ public:
     // Any writable control, by id ("0x009809aa", "10027434") or name ("focus_absolute", "Focus, Absolute").
     std::string setControl(const std::string &idOrName, long long value);
 
-    std::string summaryJson() const;           // the lens object of get_state, from the last look (the 2 s tick keeps it fresh)
+    // Starts the quick tick (every 250 ms): it reads the I2C data frame while `gate` says the camera is idle (not during a take)
+    // so the focus distance follows the ring, folds in what the serial port found, keeps the recording's lens snapshot
+    // (publishLensMetadata) fresh, and calls `notify` when the summary changed (the caller publishes {"event":"lens"}).
+    void start(std::function<bool()> gate, std::function<void()> notify);
+
+    void stop();                               // ends the quick tick (before what its callbacks use goes away)
+
+    std::string summaryJson() const;           // the lens object of get_state, from the last look (the quick tick keeps it fresh)
     Settings settings();                       // [lens] steps + the working lens
     std::optional<double> iris() const;
     // Changes the library under the lock and saves lenses.conf when `change` returns "". Gets the time as ISO text.
@@ -445,7 +538,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// [lens] in apertar-hardware.conf: the two global step sizes (focus_step_percent, iris_step_thirds).
+// [lens] in apertar-hardware.conf: the two global step sizes (focus_step_percent, iris_step_thirds), serial_device, ui_focus_distance.
 Settings loadStepSettings();
 // Writes the given [lens] keys; an empty value removes the key. "" or the error.
 std::string saveStepSettings(const std::vector<std::pair<std::string, std::string>> &values);

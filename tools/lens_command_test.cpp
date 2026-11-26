@@ -23,6 +23,10 @@ int main()
 
     const auto hardware = apertar::parseControlCommand("{\"cmd\":\"set_lens\",\"iris_step\":\"3\"}");   // the dispatch lambda sends text
     CHECK(hardware.ok && hardware.command.number("iris_step") == 3.0);
+    const auto serial = apertar::parseControlCommand("{\"cmd\":\"set_lens\",\"serial_device\":\"/dev/ttyAMA0\",\"ui_focus_distance\":true}");
+    CHECK(serial.ok && serial.command.string("serial_device") == "/dev/ttyAMA0" && serial.command.string("ui_focus_distance") == "true");
+    const auto serialOff = apertar::parseControlCommand("{\"cmd\":\"set_lens\",\"serial_device\":\"\",\"ui_focus_distance\":false}");
+    CHECK(serialOff.ok && serialOff.command.string("serial_device") && serialOff.command.string("serial_device")->empty() && serialOff.command.string("ui_focus_distance") == "false");
     const auto get = apertar::parseControlCommand("{\"cmd\":\"get_lens\",\"id\":4}");
     CHECK(get.ok && get.command.name == "get_lens" && get.command.id == 4);
 
