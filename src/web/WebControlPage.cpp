@@ -4450,6 +4450,10 @@ std::string_view webControlPageHtml()
       color: #fca5a5;
     }
 
+    .settings-nav-item.lens-nav-dim:not(.active) {
+      opacity: 0.45;
+    }
+
     .lens-slider {
       width: 100%;
       accent-color: var(--ok);
@@ -5481,7 +5485,7 @@ std::string_view webControlPageHtml()
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
             <span>Controls</span>
           </button>
-          <button class="settings-nav-item" data-panel="lens" type="button">
+          <button class="settings-nav-item lens-nav-dim" data-panel="lens" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/focuspeaking.png" alt=""></span>
             <span>Lens</span>
           </button>
@@ -16723,6 +16727,8 @@ std::string_view webControlPageHtml()
 
     function renderSnapshot(snapshot, options) {
       const columnPass = !!(options && options.columnPass);
+      if (!columnPass)
+        lensApplyPresence(snapshot);
       if (!columnPass) {
         snapshot = dualShownSnapshot(snapshot);
         const base = dualBaseSnapshot(snapshot);
@@ -22984,6 +22990,14 @@ std::string_view webControlPageHtml()
       if (!result.ok)
         throw new Error(result.error || "The lens command failed.");
       return result;
+    }
+
+    // The Lens nav item is always offered, dimmed until the state snapshot says the adapter is present (no lens field,
+    // as from an older Core, counts as not found).
+    function lensApplyPresence(snapshot) {
+      const nav = document.querySelector('.settings-nav-item[data-panel="lens"]');
+      if (nav)
+        nav.classList.toggle("lens-nav-dim", !(snapshot && snapshot.lens && snapshot.lens.present === true));
     }
 
     function lensPanelOpen() {
