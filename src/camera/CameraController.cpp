@@ -11925,7 +11925,7 @@ sustained::Context CameraController::limitContextLocked(const CaptureSettings &s
     return context;
 }
 
-// The modes Dynamic resolution may use: the enabled list, or every full-frame mode of the sensor while it is empty.
+// The modes Dynamic resolution may use: the enabled list, or while it is empty every full-frame mode of the sensor\n// (the IMX477: its 2K modes).
 std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Ladder &list) const
 {
     // Saved rungs this sensor lacks belong to another sensor: skipped here (they stay in the saved text); with no
@@ -11936,6 +11936,18 @@ std::vector<ladder::Rung> CameraController::enabledModesLocked(const ladder::Lad
             return native;
     }
     const std::vector<ladder::Rung> pool = poolModesLocked();
+    // IMX477: the 2K modes (2x2 binned, 2028 wide, the whole width), 12-bit before 10-bit, in every frame shape. Its
+    // full window is 4:3, so the full-window default below has nothing in the 16:9 or wider shapes it records.
+    const SensorFamily family = (!simulateCamera_ && session_) ? session_->sensorFamily() : SensorFamily::Unknown;
+    if (family == SensorFamily::Imx477) {
+        std::vector<ladder::Rung> twoK;
+        for (const auto &rung : pool)
+            if (rung.width == 2028)
+                twoK.push_back(rung);
+        std::stable_sort(twoK.begin(), twoK.end(), [](const ladder::Rung &a, const ladder::Rung &b) { return a.bits > b.bits; });
+        if (!twoK.empty())
+            return twoK;
+    }
     const auto window = [this](const ladder::Rung &r) { const double b = modeBinningLocked(r); return double(r.width) * r.height * b * b; };
     double full = 0.0;
     for (const auto &rung : pool)
