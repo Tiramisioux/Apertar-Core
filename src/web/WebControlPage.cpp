@@ -4445,6 +4445,55 @@ std::string_view webControlPageHtml()
       letter-spacing: -0.03em;
     }
 
+    .online-pill.bad {
+      background: rgba(239, 68, 68, 0.12);
+      color: #fca5a5;
+    }
+
+    .lens-slider {
+      width: 100%;
+      accent-color: var(--ok);
+    }
+
+    .lens-table-wrap {
+      overflow-x: auto;
+    }
+
+    .lens-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .lens-table th,
+    .lens-table td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid #27272a;
+      vertical-align: middle;
+    }
+
+    .lens-table th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .lens-set-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .lens-set-cell .settings-input {
+      min-height: 36px;
+      width: 96px;
+      border-radius: 12px;
+      padding: 0 10px;
+    }
+
     .preset-list {
       display: flex;
       flex-direction: column;
@@ -5431,6 +5480,10 @@ std::string_view webControlPageHtml()
           <button class="settings-nav-item" data-panel="controls" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/settings.png" alt=""></span>
             <span>Controls</span>
+          </button>
+          <button class="settings-nav-item" data-panel="lens" type="button">
+            <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/focuspeaking.png" alt=""></span>
+            <span>Lens</span>
           </button>
           <button class="settings-nav-item" data-panel="system" type="button">
             <span class="settings-nav-icon"><img class="settings-nav-icon-image" src="/icons/system.png" alt=""></span>
@@ -6941,6 +6994,195 @@ std::string_view webControlPageHtml()
             </div>
           </section>
 
+          <section class="settings-panel" data-panel="lens">
+            <div class="settings-card" data-search="pinefeat cef168 canon ef lens adapter imx477 dtoverlay driver">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Lens adapter</h3>
+                  <p class="settings-card-copy">The Pinefeat CEF168 Canon EF adapter: iris, focus and calibration of the mounted lens. Each action takes effect at once; the lens list is saved only by Save as new and Save over.</p>
+                </div>
+                <div class="online-pill off" id="lensStatePill">Not Loaded</div>
+              </div>
+              <div class="config-issues" id="lensMessage" hidden></div>
+              <div class="config-meta-grid">
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Adapter</div>
+                  <div class="config-meta-value" id="lensAdapterValue">-</div>
+                </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Device</div>
+                  <div class="config-meta-value" id="lensDeviceValue">-</div>
+                </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">State</div>
+                  <div class="config-meta-value" id="lensStateValue">-</div>
+                </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Lens id</div>
+                  <div class="config-meta-value" id="lensIdValue">-</div>
+                </div>
+              </div>
+              <div class="config-issues info" id="lensAdapterHint" hidden>Install the imx477 driver 0.0.3 and add <code>dtoverlay=imx477,cef168</code> (see README).</div>
+            </div>
+
+            <div class="settings-card" data-search="lens in use saved name save as new save over unsaved">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Lens</h3>
+                  <p class="settings-card-copy">The lens in use keeps its own aperture range and focus calibration. Choosing a saved lens drops unsaved changes to the previous one.</p>
+                </div>
+                <div class="online-pill off hidden" id="lensUnsavedPill">Unsaved changes</div>
+              </div>
+              <div class="settings-field-grid">
+                <div class="field-stack">
+                  <label class="input-label" for="lensSelect">Lens in use</label>
+                  <select class="settings-select" id="lensSelect"></select>
+                  <span class="subtle-note" id="lensSelectNote"></span>
+                </div>
+                <div class="field-stack">
+                  <label class="input-label" for="lensNameInput">Name</label>
+                  <input class="settings-input" id="lensNameInput" type="text" maxlength="64" placeholder="Lens name" autocomplete="off" />
+                </div>
+              </div>
+              <div class="settings-action-row">
+                <button class="secondary-button" id="lensSaveNewButton" type="button">Save as new</button>
+                <button class="secondary-button" id="lensSaveOverButton" type="button">Save over</button>
+                <span class="subtle-note" id="lensSaveNote"></span>
+              </div>
+            </div>
+
+            <div class="settings-card" data-search="iris aperture f-number stop third aperture range">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Iris</h3>
+                  <p class="settings-card-copy">The lens cannot report its iris, so the value is the f-number last sent from the camera.</p>
+                </div>
+                <div class="online-pill off" id="lensIrisValue">-</div>
+              </div>
+              <div class="settings-action-row">
+                <button class="secondary-button" id="lensIrisDownButton" type="button" aria-label="Iris opens one third stop (lower f-number)">&minus;</button>
+                <button class="secondary-button" id="lensIrisUpButton" type="button" aria-label="Iris closes one third stop (higher f-number)">+</button>
+                <span class="subtle-note" id="lensIrisNote">+ closes the iris (higher f-number), &minus; opens it.</span>
+              </div>
+              <div class="field-stack">
+                <label class="input-label" for="lensIrisSelect">Third stops</label>
+                <select class="settings-select" id="lensIrisSelect"></select>
+              </div>
+              <div class="settings-field-grid">
+                <div class="field-stack">
+                  <label class="input-label" for="lensApertureMinInput">Widest f-number</label>
+                  <input class="settings-input" id="lensApertureMinInput" type="number" min="0.5" max="128" step="0.1" inputmode="decimal" placeholder="e.g. 1.8" />
+                </div>
+                <div class="field-stack">
+                  <label class="input-label" for="lensApertureMaxInput">Narrowest f-number</label>
+                  <input class="settings-input" id="lensApertureMaxInput" type="number" min="0.5" max="128" step="0.1" inputmode="decimal" placeholder="e.g. 22" />
+                </div>
+              </div>
+              <div class="settings-action-row">
+                <button class="secondary-button" id="lensApertureApplyButton" type="button">Apply</button>
+                <button class="secondary-button" id="lensApertureClearButton" type="button">Clear</button>
+                <span class="subtle-note">The lens cannot report its aperture range, so enter it here. The lens ignores an f-number outside its range.</span>
+              </div>
+            </div>
+
+            <div class="settings-card" data-search="focus position distance slider nearer farther autofocus af">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Focus</h3>
+                  <p class="settings-card-copy">Focus position of the lens motor.</p>
+                </div>
+                <div class="online-pill off" id="lensFocusValue">-</div>
+              </div>
+              <div class="settings-field-grid">
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Position range</div>
+                  <div class="config-meta-value" id="lensFocusRangeValue">-</div>
+                </div>
+                <div class="config-meta-tile">
+                  <div class="config-meta-label">Distance range</div>
+                  <div class="config-meta-value" id="lensDistanceValue">-</div>
+                </div>
+              </div>
+              <div class="field-stack">
+                <input class="lens-slider" id="lensFocusRange" type="range" min="0" max="1" step="1" value="0" aria-label="Focus position" />
+              </div>
+              <div class="settings-action-row">
+                <button class="secondary-button" id="lensFocusNearButton" type="button">Nearer</button>
+                <button class="secondary-button" id="lensFocusFarButton" type="button">Farther</button>
+                <span class="subtle-note" id="lensFocusNote"></span>
+              </div>
+              <div class="subtle-note" id="lensAfNote"></div>
+            </div>
+
+            <div class="settings-card" data-search="calibrate calibration focus range moving time">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Calibration</h3>
+                  <p class="settings-card-copy">Moves the focus motor through its whole range to learn the focus range and the distance scale. Set the lens switch to AF first.</p>
+                </div>
+                <div class="online-pill off" id="lensCalibrationPill">Idle</div>
+              </div>
+              <div class="config-issues info" id="lensCalibrationStatus" hidden></div>
+              <div class="settings-action-row">
+                <button class="primary-button" id="lensCalibrateButton" type="button">Calibrate</button>
+                <span class="subtle-note" id="lensCalibrateNote"></span>
+              </div>
+            </div>
+
+            <div class="settings-card" data-search="encoder knob pot potentiometer action lens_focus_up lens_focus_down lens_iris_up lens_iris_down lens_calibrate lens_focus lens_iris step">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Encoders and pots</h3>
+                  <p class="settings-card-copy">Assign these in Controls. Buttons and encoder turns: <code>lens_focus_up</code>, <code>lens_focus_down</code>, <code>lens_iris_up</code>, <code>lens_iris_down</code>, <code>lens_calibrate</code> (group Lens (Pinefeat)). Potentiometer targets, set in the hardware config file: <code>lens_focus</code>, <code>lens_iris</code>.</p>
+                </div>
+              </div>
+              <div class="settings-field-grid">
+                <div class="field-stack">
+                  <label class="input-label" for="lensFocusStepInput">Focus step (% of range)</label>
+                  <input class="settings-input" id="lensFocusStepInput" type="number" min="0.1" max="100" step="0.1" inputmode="decimal" />
+                </div>
+                <div class="field-stack">
+                  <label class="input-label" for="lensIrisStepInput">Iris step (third stops)</label>
+                  <input class="settings-input" id="lensIrisStepInput" type="number" min="1" max="9" step="1" inputmode="numeric" />
+                </div>
+              </div>
+              <div class="settings-action-row">
+                <button class="secondary-button" id="lensStepsApplyButton" type="button">Apply</button>
+                <span class="subtle-note">One detent of a knob moves this much. Kept after a restart.</span>
+              </div>
+            </div>
+
+            <div class="settings-card" data-search="saved lenses delete library">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Saved lenses</h3>
+                </div>
+              </div>
+              <div class="preset-list" id="lensSavedList">
+                <div class="preset-empty">No lenses saved yet.</div>
+              </div>
+            </div>
+
+            <div class="settings-card" data-search="advanced v4l2 controls">
+              <div class="settings-card-head">
+                <div>
+                  <h3 class="settings-card-title">Advanced</h3>
+                  <p class="settings-card-copy">The V4L2 controls of the adapter's sub-device.</p>
+                </div>
+                <button class="secondary-button" id="lensControlsToggle" type="button" aria-expanded="false">V4L2 controls</button>
+              </div>
+              <div class="hidden" id="lensControlsBody">
+                <div class="lens-table-wrap">
+                  <table class="lens-table">
+                    <thead><tr><th>Name</th><th>Type</th><th>Range</th><th>Value</th><th>Flags</th><th>Set</th></tr></thead>
+                    <tbody id="lensControlsRows"></tbody>
+                  </table>
+                </div>
+                <p class="subtle-note">Read-only and array controls cannot be set here; a write-only integer control shows no value. The Calibrate button control is on the Calibration card.</p>
+              </div>
+            </div>
+          </section>
+
           <section class="settings-panel" data-panel="config">
             <div class="settings-card">
               <div class="settings-card-head">
@@ -7430,6 +7672,10 @@ std::string_view webControlPageHtml()
       controls: {
         title: "Controls",
         copy: "What each button, knob and pin does.",
+      },
+      lens: {
+        title: "Lens",
+        copy: "Pinefeat CEF168 lens adapter: iris, focus, calibration and saved lenses.",
       },
       config: {
         title: "Config",
@@ -10815,6 +11061,7 @@ std::string_view webControlPageHtml()
       document.getElementById("settingsOverlay").classList.toggle("hidden", !state.settingsOpen);
       if (state.settingsOpen && state.activeSettingsPanel === "audio") void refreshAudioCaptureCapabilities();
       if (state.settingsOpen && state.activeSettingsPanel === "modes") void fetchModeLadder(false);
+      if (state.settingsOpen && state.activeSettingsPanel === "lens") void lensRefresh();
       if (state.settingsOpen && state.activeSettingsPanel === "system" && !bootConfig.payload && !bootConfigBusy()) void loadBootConfig(true);
     }
 
@@ -10871,6 +11118,8 @@ std::string_view webControlPageHtml()
         void loadBootConfig(true);
       if (normalized === "controls" && !controlsDirty())
         void loadControls(true);
+      if (normalized === "lens" && state.settingsOpen)
+        void lensRefresh();
       if (normalized === "config" && !state.configDirty)
         fetchConfigFile(true);
       if (normalized === "config" && !controlsDirty() && !hardwareDirty())
@@ -22707,6 +22956,549 @@ std::string_view webControlPageHtml()
       renderBootConfig();
     }
 
+    // ---- Lens (Pinefeat CEF168 adapter), Settings > Lens ------------------------------------------------------
+    // get_lens / set_lens go straight to /api/command (not sendCommand: no camera snapshot patch is involved). The
+    // panel polls get_lens once a second while it is open (calibration progress, focus position); Core's "lens" event
+    // is not delivered to the WebUI, the poll covers it. Fields the user is typing in are never overwritten: they
+    // follow the lens until touched, and again after a save or a selection.
+    const lensState = {
+      data: null, error: "", loading: false, busy: false,
+      nameDirty: false, apertureDirty: false, stepsDirty: false,
+      focusSentAt: 0, focusTimer: 0, focusDragging: false,
+      controlsOpen: false, controlsDraft: new Map(), lensSelectSignature: "", irisSignature: "", savedSignature: "",
+    };
+    const lensStateWords = {
+      absent: "No adapter", error: "Adapter error", calibrating: "Calibrating", no_lens: "No lens mounted",
+      unknown_lens: "Unknown lens", uncalibrated: "Not calibrated", ready: "Ready",
+    };
+    const lensIrisStops = [1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.2, 3.5, 4.0, 4.5, 5.0, 5.6, 6.3, 7.1, 8.0,
+      9.0, 10, 11, 13, 14, 16, 18, 20, 22, 25, 29, 32, 36, 40, 45];
+
+    async function lensCall(payload) {
+      const response = await fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!result.ok)
+        throw new Error(result.error || "The lens command failed.");
+      return result;
+    }
+
+    function lensPanelOpen() {
+      return state.settingsOpen && state.activeSettingsPanel === "lens";
+    }
+
+    function lensUsable(lens) {
+      return !!lens && lens.present === true && lens.state !== "absent" && lens.state !== "error" && lens.state !== "no_lens";
+    }
+
+    function lensFNumber(value) {
+      return typeof value === "number" && isFinite(value) ? "f/" + (Math.round(value * 10) / 10) : "-";
+    }
+
+    function lensDistance(cm, nullText) {
+      return typeof cm === "number" && isFinite(cm) ? (cm / 100).toFixed(2) + " m" : nullText;
+    }
+
+    async function lensRefresh() {
+      if (lensState.loading)
+        return;
+      lensState.loading = true;
+      try {
+        const result = await lensCall({ cmd: "get_lens" });
+        lensState.data = result.lens || null;
+        lensState.error = "";
+      } catch (error) {
+        lensState.error = error.message || "Could not read the lens.";
+      } finally {
+        lensState.loading = false;
+      }
+      renderLens();
+    }
+
+    // One set_lens call. Every error goes to the toast; the lens in the reply replaces the panel's copy.
+    async function lensSet(fields, okMessage) {
+      if (lensState.busy)
+        return null;
+      lensState.busy = true;
+      renderLens();
+      try {
+        const result = await lensCall(Object.assign({ cmd: "set_lens" }, fields));
+        if (result.lens)
+          lensState.data = result.lens;
+        lensState.error = "";
+        if (okMessage)
+          showToast(okMessage, false);
+        return result;
+      } catch (error) {
+        showToast(error.message, true);
+        return null;
+      } finally {
+        lensState.busy = false;
+        renderLens();
+      }
+    }
+
+    function lensSetText(id, text) {
+      const element = document.getElementById(id);
+      if (element && element.textContent !== text)
+        element.textContent = text;
+    }
+
+    function lensSetPill(id, text, kind) {
+      const element = document.getElementById(id);
+      if (!element)
+        return;
+      element.textContent = text;
+      element.classList.toggle("off", kind === "off");
+      element.classList.toggle("bad", kind === "bad");
+    }
+
+    function lensTypingIn(id) {
+      return document.activeElement === document.getElementById(id);
+    }
+
+    function renderLens() {
+      const message = document.getElementById("lensMessage");
+      if (!message)
+        return;
+      const lens = lensState.data;
+      if (!lens) {
+        message.hidden = !lensState.error;
+        message.textContent = lensState.error;
+        lensSetPill("lensStatePill", lensState.error ? "Unavailable" : "Not Loaded", lensState.error ? "bad" : "off");
+        ["lensSaveNewButton", "lensSaveOverButton", "lensIrisDownButton", "lensIrisUpButton", "lensCalibrateButton",
+          "lensFocusNearButton", "lensFocusFarButton", "lensApertureApplyButton", "lensApertureClearButton",
+          "lensStepsApplyButton"].forEach((id) => { document.getElementById(id).disabled = true; });
+        ["lensSelect", "lensIrisSelect", "lensFocusRange"].forEach((id) => { document.getElementById(id).disabled = true; });
+        return;
+      }
+      message.hidden = !lensState.error;
+      message.textContent = lensState.error;
+      message.classList.add("info");
+
+      const usable = lensUsable(lens);
+      const busy = lensState.busy;
+      const calibrating = lens.calibrating === true || lens.state === "calibrating";
+      const recording = !!(state.snapshot && state.snapshot.recording);
+      const caps = lens.capabilities || {};
+      const stateWord = lensStateWords[lens.state] || String(lens.state || "-");
+      const absentReason = !lens.present ? "No adapter found." : lens.state === "error" ? (lens.error || "The adapter reported an error.") :
+        lens.state === "no_lens" ? "No lens is mounted." : "";
+
+      // Adapter card
+      lensSetPill("lensStatePill", stateWord, lens.state === "ready" ? "ok" : (lens.state === "absent" || lens.state === "error") ? "bad" : "off");
+      lensSetText("lensAdapterValue", lens.present ? "Found" : "Not found");
+      lensSetText("lensDeviceValue", lens.present ? ((lens.subdev || "-") + (lens.bus !== null && lens.bus !== undefined && lens.bus !== "" ? ", bus " + lens.bus : "")) : "-");
+      lensSetText("lensStateValue", stateWord);
+      lensSetText("lensIdValue", lens.lens_id !== null && lens.lens_id !== undefined ? String(lens.lens_id) : "-");
+      const hint = document.getElementById("lensAdapterHint");
+      hint.hidden = lens.present === true;
+      if (!lens.present && lens.error) {
+        message.hidden = false;
+        message.textContent = lens.error;
+      } else if (lens.present && lens.state === "error" && lens.error) {
+        message.hidden = false;
+        message.textContent = lens.error;
+      }
+
+      // Lens card
+      const saved = Array.isArray(lens.lenses) ? lens.lenses : [];
+      const select = document.getElementById("lensSelect");
+      const signature = JSON.stringify([lens.lens_id, saved.map((entry) => [entry.key, entry.name, entry.lens_id])]);
+      if (signature !== lensState.lensSelectSignature && document.activeElement !== select) {
+        lensState.lensSelectSignature = signature;
+        select.textContent = "";
+        const none = document.createElement("option");
+        none.value = "";
+        none.textContent = "Unknown lens (not saved)";
+        select.appendChild(none);
+        saved.forEach((entry) => {
+          const option = document.createElement("option");
+          option.value = entry.key;
+          const other = lens.lens_id !== null && lens.lens_id !== undefined && entry.lens_id !== lens.lens_id;
+          option.textContent = (entry.name || entry.key) + (other ? " (other lens, id " + entry.lens_id + ")" : "");
+          select.appendChild(option);
+        });
+      }
+      if (document.activeElement !== select)
+        select.value = lens.lens_key || "";
+      select.disabled = busy || !lens.present;
+      const selected = saved.find((entry) => entry.key === lens.lens_key);
+      const mismatch = selected && lens.lens_id !== null && lens.lens_id !== undefined && selected.lens_id !== lens.lens_id;
+      lensSetText("lensSelectNote", mismatch ? "This entry is for a different lens than the mounted one (id " + lens.lens_id + ")." : "");
+      document.getElementById("lensUnsavedPill").classList.toggle("hidden", lens.unsaved !== true);
+
+      const nameInput = document.getElementById("lensNameInput");
+      if (!lensState.nameDirty && !lensTypingIn("lensNameInput"))
+        nameInput.value = lens.lens_name || "";
+      nameInput.disabled = busy || !lens.present;
+      document.getElementById("lensSaveNewButton").disabled = busy || !lens.present;
+      document.getElementById("lensSaveOverButton").disabled = busy || !lens.present || !lens.lens_key;
+      lensSetText("lensSaveNote", !lens.present ? "No adapter found." : !lens.lens_key ? "Save over needs a selected lens." : "");
+
+      // Iris card
+      lensSetPill("lensIrisValue", lensFNumber(lens.iris), "off");
+      const irisOff = busy || !usable || calibrating || caps.iris === false;
+      document.getElementById("lensIrisDownButton").disabled = irisOff;
+      document.getElementById("lensIrisUpButton").disabled = irisOff;
+      const irisReason = !usable ? absentReason : calibrating ? "Calibrating." : caps.iris === false ? "This lens has no iris control." : "";
+      lensSetText("lensIrisNote", irisReason || "+ closes the iris (higher f-number), − opens it.");
+
+      const irisSelect = document.getElementById("lensIrisSelect");
+      const low = typeof lens.aperture_min === "number" && lens.aperture_min > 0 ? lens.aperture_min : 0;
+      const high = typeof lens.aperture_max === "number" && lens.aperture_max > 0 ? lens.aperture_max : 0;
+      const irisSig = JSON.stringify([low, high, lens.iris]);
+      if (irisSig !== lensState.irisSignature && document.activeElement !== irisSelect) {
+        lensState.irisSignature = irisSig;
+        irisSelect.textContent = "";
+        const stops = low && high ? lensIrisStops.filter((stop) => stop >= low - 0.05 && stop <= high + 0.05) : [];
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = stops.length ? "Choose an f-number" : "Enter the aperture range first";
+        irisSelect.appendChild(blank);
+        stops.forEach((stop) => {
+          const option = document.createElement("option");
+          option.value = String(stop);
+          option.textContent = "f/" + stop;
+          irisSelect.appendChild(option);
+        });
+        if (typeof lens.iris === "number") {
+          const near = stops.find((stop) => Math.abs(stop - lens.iris) < 0.06);
+          irisSelect.value = near !== undefined ? String(near) : "";
+        }
+      }
+      irisSelect.disabled = irisOff || irisSelect.options.length < 2;
+
+      const minInput = document.getElementById("lensApertureMinInput");
+      const maxInput = document.getElementById("lensApertureMaxInput");
+      if (!lensState.apertureDirty && !lensTypingIn("lensApertureMinInput") && !lensTypingIn("lensApertureMaxInput")) {
+        minInput.value = low ? String(low) : "";
+        maxInput.value = high ? String(high) : "";
+      }
+      minInput.disabled = maxInput.disabled = busy || !lens.present;
+      document.getElementById("lensApertureApplyButton").disabled = busy || !lens.present;
+      document.getElementById("lensApertureClearButton").disabled = busy || !lens.present || (!low && !high);
+
+      // Focus card
+      const calibrated = lens.focus_calibrated === true && typeof lens.focus_min === "number" && typeof lens.focus_max === "number" && lens.focus_max > lens.focus_min;
+      lensSetPill("lensFocusValue", (calibrated || typeof lens.focus_position === "number") && typeof lens.focus_position === "number" ?
+        String(lens.focus_position) + (lens.moving ? " (moving)" : "") : "-", "off");
+      lensSetText("lensFocusRangeValue", calibrated ? lens.focus_min + " to " + lens.focus_max : "-");
+      lensSetText("lensDistanceValue", calibrated ? lensDistance(lens.distance_min_cm, "-") + " to " + lensDistance(lens.distance_max_cm, "∞") : "-");
+      const range = document.getElementById("lensFocusRange");
+      if (calibrated) {
+        range.min = String(lens.focus_min);
+        range.max = String(lens.focus_max);
+        if (!lensState.focusDragging && typeof lens.focus_position === "number")
+          range.value = String(lens.focus_position);
+      }
+      const focusReason = !usable ? absentReason : calibrating ? "Calibrating." : caps.focus === false ? "Iris only: this lens never reported a focus position." :
+        !calibrated ? "Calibrate the lens first (Calibration card)." : "";
+      const focusOff = busy || !!focusReason;
+      range.disabled = focusOff && !lensState.focusDragging;
+      document.getElementById("lensFocusNearButton").disabled = focusOff;
+      document.getElementById("lensFocusFarButton").disabled = focusOff;
+      lensSetText("lensFocusNote", focusReason);
+      lensSetText("lensAfNote", "Autofocus mode: " + (lens.af_mode || "manual") + ". Read-only here; change it in Record, Autofocus. It only works once the tuning file has an rpi.af section.");
+
+      // Calibration card
+      const cal = lens.calibration || {};
+      const calStatus = document.getElementById("lensCalibrationStatus");
+      let calText = "";
+      let calBad = false;
+      if (cal.state === "running" || calibrating) {
+        calText = "Calibrating. The focus ring moves through its whole range" + (cal.message ? ": " + cal.message : ".");
+        lensSetPill("lensCalibrationPill", "Running", "ok");
+      } else if (cal.state === "done") {
+        const parts = [];
+        if (typeof cal.focus_min === "number" && typeof cal.focus_max === "number")
+          parts.push("focus " + cal.focus_min + " to " + cal.focus_max);
+        if (typeof cal.distance_min_cm === "number" || typeof cal.distance_max_cm === "number")
+          parts.push("distance " + lensDistance(cal.distance_min_cm, "-") + " to " + lensDistance(cal.distance_max_cm, "∞"));
+        if (typeof cal.moving_time_ms === "number")
+          parts.push("moving time " + (cal.moving_time_ms / 1000).toFixed(1) + " s");
+        calText = "Done" + (parts.length ? ": " + parts.join(", ") : "") + "." + (cal.message ? " " + cal.message : "") +
+          (lens.unsaved === true ? " Save the lens (Save as new or Save over) to keep the calibration." : "");
+        lensSetPill("lensCalibrationPill", "Done", "ok");
+      } else if (cal.state === "failed") {
+        calText = "Failed: " + (cal.message || "the calibration did not finish.");
+        calBad = true;
+        lensSetPill("lensCalibrationPill", "Failed", "bad");
+      } else {
+        lensSetPill("lensCalibrationPill", "Idle", "off");
+      }
+      calStatus.hidden = !calText;
+      calStatus.textContent = calText;
+      calStatus.classList.toggle("info", !calBad);
+      const calReason = !usable ? absentReason : calibrating ? "Calibrating." : recording ? "Stop recording first." : "";
+      document.getElementById("lensCalibrateButton").disabled = busy || !!calReason;
+      lensSetText("lensCalibrateNote", calReason || "Set the lens switch to AF first.");
+
+      // Encoders and pots
+      const focusStep = document.getElementById("lensFocusStepInput");
+      const irisStep = document.getElementById("lensIrisStepInput");
+      if (!lensState.stepsDirty && !lensTypingIn("lensFocusStepInput") && !lensTypingIn("lensIrisStepInput")) {
+        focusStep.value = typeof lens.focus_step_percent === "number" ? String(lens.focus_step_percent) : "";
+        irisStep.value = typeof lens.iris_step_thirds === "number" ? String(lens.iris_step_thirds) : "";
+      }
+      focusStep.disabled = irisStep.disabled = busy;
+      document.getElementById("lensStepsApplyButton").disabled = busy;
+
+      renderLensSaved(lens, saved, busy);
+      renderLensControls(lens, busy);
+    }
+
+    function renderLensSaved(lens, saved, busy) {
+      const list = document.getElementById("lensSavedList");
+      const signature = JSON.stringify([busy, lens.lens_key, saved]);
+      if (signature === lensState.savedSignature)
+        return;
+      lensState.savedSignature = signature;
+      list.textContent = "";
+      if (saved.length === 0) {
+        list.appendChild(createDomElement("div", "preset-empty", "No lenses saved yet."));
+        return;
+      }
+      saved.forEach((entry) => {
+        const row = createDomElement("div", "preset-row", "");
+        const meta = createDomElement("div", "preset-meta", "");
+        meta.appendChild(createDomElement("div", "preset-name", entry.name || entry.key));
+        const aperture = entry.aperture_min > 0 && entry.aperture_max > 0 ?
+          lensFNumber(entry.aperture_min) + " to " + lensFNumber(entry.aperture_max) : "no aperture range";
+        const used = entry.last_used ? "last used " + String(entry.last_used).replace("T", " ") : "never used";
+        meta.appendChild(createDomElement("div", "subtle-note",
+          "id " + entry.lens_id + ", " + aperture + ", " + (entry.calibrated ? "calibrated" : "not calibrated") + ", " + used));
+        row.appendChild(meta);
+        const actions = createDomElement("div", "settings-action-row", "");
+        if (entry.in_use || entry.key === lens.lens_key)
+          actions.appendChild(createDomElement("div", "online-pill", "In use"));
+        const remove = createDomElement("button", "danger-button", "Delete");
+        remove.type = "button";
+        remove.disabled = busy;
+        remove.addEventListener("click", async () => {
+          if (!window.confirm("Delete the saved lens “" + (entry.name || entry.key) + "”? This cannot be undone."))
+            return;
+          await lensSet({ delete: entry.key }, "Deleted " + (entry.name || entry.key) + ".");
+        });
+        actions.appendChild(remove);
+        row.appendChild(actions);
+        list.appendChild(row);
+      });
+    }
+
+    function lensControlRangeText(control) {
+      if (typeof control.min !== "number" && typeof control.max !== "number")
+        return "-";
+      return control.min + " to " + control.max + (control.step > 1 ? ", step " + control.step : "");
+    }
+
+    function renderLensControls(lens, busy) {
+      if (!lensState.controlsOpen)
+        return;
+      const body = document.getElementById("lensControlsRows");
+      if (body.contains(document.activeElement) && document.activeElement.tagName === "INPUT")
+        return;   // never rebuild under a field being typed in
+      const controls = Array.isArray(lens.controls) ? lens.controls : [];
+      body.textContent = "";
+      if (controls.length === 0) {
+        const row = document.createElement("tr");
+        const cell = createDomElement("td", "", lens.present ? "The adapter reports no controls." : "No adapter found.");
+        cell.colSpan = 6;
+        row.appendChild(cell);
+        body.appendChild(row);
+        return;
+      }
+      controls.forEach((control) => {
+        const flags = control.flags || {};
+        const flagNames = ["read_only", "write_only", "volatile", "execute_on_write"].filter((name) => flags[name]).map((name) => name.replace(/_/g, " "));
+        const row = document.createElement("tr");
+        row.appendChild(createDomElement("td", "", control.name || control.id));
+        row.appendChild(createDomElement("td", "", String(control.type || "-")));
+        row.appendChild(createDomElement("td", "", lensControlRangeText(control)));
+        row.appendChild(createDomElement("td", "", control.value === null || control.value === undefined ? (flags.write_only ? "write only" : "-") : String(control.value)));
+        row.appendChild(createDomElement("td", "", flagNames.length ? flagNames.join(", ") : "-"));
+        const setCell = document.createElement("td");
+        const isInteger = /^int/i.test(String(control.type || "")) && !Array.isArray(control.value);
+        const isCalibrate = /calibrat/i.test(String(control.name || "") + " " + String(control.id || ""));
+        if (isCalibrate) {
+          setCell.textContent = "Use the Calibration card";
+        } else if (!isInteger) {
+          setCell.textContent = /array|compound/i.test(String(control.type || "")) || Array.isArray(control.value) ? "array" : "-";
+        } else if (flags.read_only) {
+          setCell.textContent = "read only";
+        } else {
+          const wrap = createDomElement("div", "lens-set-cell", "");
+          const input = createDomElement("input", "settings-input", "");
+          input.type = "number";
+          input.step = "1";
+          if (typeof control.min === "number") input.min = String(control.min);
+          if (typeof control.max === "number") input.max = String(control.max);
+          input.setAttribute("aria-label", "New value for " + (control.name || control.id));
+          input.value = lensState.controlsDraft.has(control.id) ? lensState.controlsDraft.get(control.id) : "";
+          input.addEventListener("input", () => lensState.controlsDraft.set(control.id, input.value));
+          const apply = createDomElement("button", "secondary-button", "Set");
+          apply.type = "button";
+          apply.disabled = busy || !lensUsable(lens);
+          apply.addEventListener("click", async () => {
+            if (input.value.trim() === "" || !isFinite(Number(input.value))) {
+              showToast("Enter a number first.", true);
+              return;
+            }
+            const result = await lensSet({ control: control.id, value: Number(input.value) }, "Set " + (control.name || control.id) + ".");
+            if (result)
+              lensState.controlsDraft.delete(control.id);
+          });
+          wrap.appendChild(input);
+          wrap.appendChild(apply);
+          setCell.appendChild(wrap);
+        }
+        row.appendChild(setCell);
+        body.appendChild(row);
+      });
+    }
+
+    function lensFocusSend(value) {
+      lensState.focusSentAt = performance.now();
+      void lensCall({ cmd: "set_lens", focus: value }).then((result) => {
+        if (result.lens && !lensState.focusDragging)
+          lensState.data = result.lens;
+      }).catch((error) => showToast(error.message, true));
+    }
+
+    function installLensPanel() {
+      const bind = (id, type, handler) => document.getElementById(id).addEventListener(type, handler);
+
+      bind("lensSelect", "change", async (event) => {
+        const result = await lensSet({ select: event.target.value }, event.target.value ? "Lens selected." : "No saved lens selected.");
+        if (result) {
+          lensState.nameDirty = false;
+          lensState.apertureDirty = false;
+        }
+        renderLens();
+      });
+      bind("lensNameInput", "input", () => { lensState.nameDirty = true; });
+      bind("lensSaveNewButton", "click", async () => {
+        const name = document.getElementById("lensNameInput").value.trim();
+        if (!name) {
+          showToast("Enter a name for the lens first.", true);
+          return;
+        }
+        const result = await lensSet({ save_as: name }, "Saved " + name + ".");
+        if (result) {
+          lensState.nameDirty = false;
+          lensState.apertureDirty = false;
+          renderLens();
+        }
+      });
+      bind("lensSaveOverButton", "click", async () => {
+        const lens = lensState.data;
+        if (!lens || !lens.lens_key)
+          return;
+        const entry = (lens.lenses || []).find((item) => item.key === lens.lens_key);
+        const name = document.getElementById("lensNameInput").value.trim();
+        if (!window.confirm("Replace the saved lens “" + ((entry && entry.name) || lens.lens_key) + "” with the lens as it is now?"))
+          return;
+        const fields = { save_over: true };
+        if (name)
+          fields.name = name;
+        const result = await lensSet(fields, "Saved over " + (name || (entry && entry.name) || lens.lens_key) + ".");
+        if (result) {
+          lensState.nameDirty = false;
+          lensState.apertureDirty = false;
+          renderLens();
+        }
+      });
+
+      bind("lensIrisDownButton", "click", () => lensSet({ iris_step: -1 }));
+      bind("lensIrisUpButton", "click", () => lensSet({ iris_step: 1 }));
+      bind("lensIrisSelect", "change", (event) => {
+        if (event.target.value)
+          void lensSet({ iris: Number(event.target.value) });
+      });
+      ["lensApertureMinInput", "lensApertureMaxInput"].forEach((id) => bind(id, "input", () => { lensState.apertureDirty = true; }));
+      bind("lensApertureApplyButton", "click", async () => {
+        const low = Number(document.getElementById("lensApertureMinInput").value || 0);
+        const high = Number(document.getElementById("lensApertureMaxInput").value || 0);
+        if (!isFinite(low) || !isFinite(high) || low < 0 || high < 0) {
+          showToast("Enter f-numbers such as 1.8 and 22.", true);
+          return;
+        }
+        if (low > 0 && high > 0 && low > high) {
+          showToast("The widest f-number cannot be above the narrowest.", true);
+          return;
+        }
+        const result = await lensSet({ aperture_min: low, aperture_max: high }, "Aperture range set.");
+        if (result) {
+          lensState.apertureDirty = false;
+          renderLens();
+        }
+      });
+      bind("lensApertureClearButton", "click", async () => {
+        const result = await lensSet({ aperture_min: 0, aperture_max: 0 }, "Aperture range cleared.");
+        if (result) {
+          lensState.apertureDirty = false;
+          renderLens();
+        }
+      });
+
+      const range = document.getElementById("lensFocusRange");
+      range.addEventListener("pointerdown", () => { lensState.focusDragging = true; });
+      range.addEventListener("input", () => {
+        lensState.focusDragging = true;
+        const wait = 100 - (performance.now() - lensState.focusSentAt);
+        clearTimeout(lensState.focusTimer);
+        if (wait <= 0)
+          lensFocusSend(Number(range.value));
+        else
+          lensState.focusTimer = window.setTimeout(() => lensFocusSend(Number(range.value)), wait);
+      });
+      range.addEventListener("change", () => {
+        clearTimeout(lensState.focusTimer);
+        lensFocusSend(Number(range.value));
+        lensState.focusDragging = false;
+      });
+      bind("lensFocusNearButton", "click", () => lensSet({ focus_step: -1 }));
+      bind("lensFocusFarButton", "click", () => lensSet({ focus_step: 1 }));
+
+      bind("lensCalibrateButton", "click", () => lensSet({ calibrate: true }, "Calibration started."));
+
+      ["lensFocusStepInput", "lensIrisStepInput"].forEach((id) => bind(id, "input", () => { lensState.stepsDirty = true; }));
+      bind("lensStepsApplyButton", "click", async () => {
+        const focus = Number(document.getElementById("lensFocusStepInput").value);
+        const iris = Number(document.getElementById("lensIrisStepInput").value);
+        if (!(focus >= 0.1 && focus <= 100)) {
+          showToast("The focus step is 0.1 to 100 percent.", true);
+          return;
+        }
+        if (!(iris >= 1 && iris <= 9)) {
+          showToast("The iris step is 1 to 9 third stops.", true);
+          return;
+        }
+        const result = await lensSet({ focus_step_percent: focus, iris_step_thirds: Math.round(iris) }, "Steps saved.");
+        if (result) {
+          lensState.stepsDirty = false;
+          renderLens();
+        }
+      });
+
+      bind("lensControlsToggle", "click", () => {
+        lensState.controlsOpen = !lensState.controlsOpen;
+        document.getElementById("lensControlsBody").classList.toggle("hidden", !lensState.controlsOpen);
+        document.getElementById("lensControlsToggle").setAttribute("aria-expanded", String(lensState.controlsOpen));
+        renderLens();
+      });
+
+      // One read a second while the panel is open; nothing while it is closed.
+      window.setInterval(() => {
+        if (lensPanelOpen() && !document.hidden && !lensState.busy && !lensState.focusDragging)
+          void lensRefresh();
+      }, 1000);
+      renderLens();
+    }
+
     function installInteractions() {
       arrangeSettingsPanels();
 
@@ -23063,6 +23855,7 @@ std::string_view webControlPageHtml()
     }
 
     installInteractions();
+    installLensPanel();
     installPreviewStream();
     startLiveReadoutLoop();
     window.setInterval(() => fetchState(true), 1000);
